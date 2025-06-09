@@ -1,0 +1,58 @@
+from fastapi import FastAPI, Request
+from app.config import VERIFY_TOKEN, CALENDAR_ID
+from app.whatsapp import send_whatsapp_message
+from app.calendar import get_available_slots, create_event
+
+app = FastAPI()
+
+# Guardar selección temporal (esto puede ir en base de datos en producción)
+user_selection = {}
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.get("/webhook")
+def verify_token(hub_mode: str, hub_verify_token: str, hub_challenge: str):
+    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+        return int(hub_challenge)
+    return {"error": "Invalid token"}, 403
+
+@app.post("/webhook")
+async def receive_message(request: Request):
+    data = await request.json()
+    try:
+        entry = data['entry'][0]['changes'][0]['value']['messages'][0]
+        user_msg = entry['text']['body']
+        from_number = entry['from']
+
+        if from_number in user_selection and user_msg.isdigit():
+            index = int(user_msg) - 1
+            slots = user_selection[from_number]
+            if 0 <= index < len(slots):
+                selected_slot = slots[index]
+                create_event(CALENDAR_ID, selected_slot, from_number)
+                await send_whatsapp_message(from_number, f"✅ Turno reservado para: {selected_slot}")
+                del user_selection[from_number]
+            else:
+                await send_whatsapp_message(from_number, "Número inválido. Por favor, elige una opción válida.")
+            return {"status": "handled"}
+
+        if "turno" in user_msg.lower():
+            slots = get_available_slots(CALENDAR_ID)
+            user_selection[from_number] = slots
+            if slots:
+                msg = "Estos son los próximos turnos disponibles:\n"
+                for idx, slot in enumerate(slots):
+                    msg += f"{idx+1}. {slot}\n"
+                msg += "\nRespondé con el número del turno que querés reservar."
+            else:
+                msg = "No hay turnos disponibles por el momento."
+            await send_whatsapp_message(from_number, msg)
+        else:
+            await send_whatsapp_message(from_number, "Hola 👋 ¿Querés reservar un turno? Escribí 'turno'.")
+
+    except Exception as e:
+        print("Error al procesar:", e)
+    return {"status": "received"}
+
