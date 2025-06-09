@@ -1,0 +1,5 @@
+Flask==2.3.2
+google-api-python-client==2.125.0
+google-auth==2.29.0
+requests==2.31.0
+gunicorn==21.2.0
