@@ -31,15 +31,16 @@ class WorkingHoursWidget:
 class WorkingHoursField(Field):
     widget = WorkingHoursWidget()
 
-    def process_formdata(self, valuelist):
-        pass  # no usado
+    def process(self, formdata, data=None):
+        self.formdata = formdata
+        self.data = data
 
     def populate_obj(self, obj, name):
         result = {}
         for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
-            active = self._form.data.get(f'{self.name}_{day}_active')
-            start = self._form.data.get(f'{self.name}_{day}_start')
-            end = self._form.data.get(f'{self.name}_{day}_end')
+            active = self.formdata.get(f'{self.name}_{day}_active')
+            start = self.formdata.get(f'{self.name}_{day}_start')
+            end = self.formdata.get(f'{self.name}_{day}_end')
             if active and start and end:
                 result[day] = [f"{start}-{end}"]
         setattr(obj, name, json.dumps(result))
