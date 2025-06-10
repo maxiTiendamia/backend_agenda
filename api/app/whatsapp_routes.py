@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Request, Query
-from admin.models import Tenant, TenantConfig, TenantCredentials
-from admin.calendar_utils import get_available_slots, create_event
-from admin.whatsapp import send_whatsapp_message
+from app.models import Tenant, TenantConfig, TenantCredentials
+from app.calendar_utils import get_available_slots, create_event
+from app.whatsapp import send_whatsapp_message
 from flask import current_app
-import json
 from datetime import datetime
+import json
 
 router = APIRouter()
 
@@ -36,17 +36,18 @@ async def receive_message(request: Request):
         user_msg = entry['text']['body']
         from_number = entry['from']
 
-        with current_app.app_context():
-            tenant = Tenant.query.filter_by(telefono=from_number).first()
-            if not tenant:
-                return {"status": "cliente no encontrado"}
+        # Buscar tenant por número de teléfono
+        tenant = Tenant.query.filter_by(telefono=from_number).first()
+        if not tenant:
+            return {"status": "cliente no encontrado"}
 
-            config = TenantConfig.query.filter_by(tenant_id=tenant.id).first()
-            creds = TenantCredentials.query.filter_by(tenant_id=tenant.id).first()
+        config = TenantConfig.query.filter_by(tenant_id=tenant.id).first()
+        creds = TenantCredentials.query.filter_by(tenant_id=tenant.id).first()
 
         if not config or not creds:
             return {"status": "datos incompletos"}
 
+        # Primera vez que se contacta el cliente
         if from_number not in user_greeted:
             bienvenida = (
                 "Hola 👋 Bienvenido/a a nuestra agenda automatizada.\n"
@@ -58,18 +59,20 @@ async def receive_message(request: Request):
             user_greeted.add(from_number)
             return {"status": "greeted"}
 
+        # Si ya seleccionó un turno anteriormente
         if from_number in user_selection and user_msg.isdigit():
             index = int(user_msg) - 1
             slots = user_selection[from_number]
             if 0 <= index < len(slots):
                 selected_slot = slots[index]
-                event_id = create_event(config.calendar_id, selected_slot, from_number, creds.google_service_account_info)
+                create_event(config.calendar_id, selected_slot, from_number, creds.google_service_account_info)
                 await send_whatsapp_message(from_number, f"✅ Turno reservado para: {selected_slot}")
                 del user_selection[from_number]
             else:
                 await send_whatsapp_message(from_number, "Número inválido. Elegí una opción válida.")
             return {"status": "handled"}
 
+        # Pedido de turnos
         if user_msg == "1" or "turno" in user_msg.lower():
             slots = get_available_slots(config.calendar_id, creds.google_service_account_info)
 
@@ -90,6 +93,7 @@ async def receive_message(request: Request):
                 msg += "\nRespondé con el número del turno que querés reservar."
             else:
                 msg = "No hay turnos disponibles por el momento."
+
             await send_whatsapp_message(from_number, msg)
 
         elif user_msg == "2" or "contacto" in user_msg.lower():
@@ -99,5 +103,5 @@ async def receive_message(request: Request):
             await send_whatsapp_message(from_number, "¿Querés reservar un turno? Respondé con '1'. Si preferís que te contactemos, respondé con '2'.")
 
     except Exception as e:
-        print("Error al procesar:", e)
+        print("❌ Error al procesar:", e)
     return {"status": "received"}
