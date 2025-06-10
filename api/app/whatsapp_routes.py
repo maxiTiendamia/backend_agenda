@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from app.models import Tenant
 from app.whatsapp import send_whatsapp_message
-from app.calendar import get_available_slots, create_event
+from app.calendar_utils import get_available_slots, create_event
 from datetime import datetime
 
 router = APIRouter()
