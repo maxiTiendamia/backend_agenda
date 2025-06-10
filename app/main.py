@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, Query
 from app.config import VERIFY_TOKEN, CALENDAR_ID
 from app.whatsapp import send_whatsapp_message
 from app.calendar import get_available_slots, create_event
+from datetime import datetime
 
 app = FastAPI()
 
@@ -40,7 +41,9 @@ async def receive_message(request: Request):
         if from_number not in user_greeted:
             bienvenida = (
                 "Hola 👋 Bienvenido/a a nuestra agenda automatizada.\n"
-                "Podés escribir 'turno' para reservar uno o 'contacto' para que te respondamos personalmente."
+                "Respondé con el número correspondiente:\n"
+                "1️⃣ para reservar un turno\n"
+                "2️⃣ para que te contactemos personalmente."
             )
             await send_whatsapp_message(from_number, bienvenida)
             user_greeted.add(from_number)
@@ -58,21 +61,31 @@ async def receive_message(request: Request):
                 await send_whatsapp_message(from_number, "Número inválido. Por favor, elige una opción válida.")
             return {"status": "handled"}
 
-        if "turno" in user_msg.lower():
+        if user_msg == "1" or "turno" in user_msg.lower():
             slots = get_available_slots(CALENDAR_ID)
-            user_selection[from_number] = slots
-            if slots:
+            # Filtrar duplicados por fecha y hora
+            unique_slots = []
+            seen = set()
+            for slot in slots:
+                key = datetime.strptime(slot, "%d/%m %H:%M")
+                if key not in seen:
+                    seen.add(key)
+                    unique_slots.append(slot)
+
+            user_selection[from_number] = unique_slots
+
+            if unique_slots:
                 msg = "Estos son los próximos turnos disponibles:\n"
-                for idx, slot in enumerate(slots):
+                for idx, slot in enumerate(unique_slots):
                     msg += f"{idx+1}. {slot}\n"
                 msg += "\nRespondé con el número del turno que querés reservar."
             else:
                 msg = "No hay turnos disponibles por el momento."
             await send_whatsapp_message(from_number, msg)
-        elif "contacto" in user_msg.lower():
+        elif user_msg == "2" or "contacto" in user_msg.lower():
             await send_whatsapp_message(from_number, "Perfecto, en breve nos pondremos en contacto contigo personalmente. 🙌")
         else:
-            await send_whatsapp_message(from_number, "¿Querés reservar un turno? Escribí 'turno'. Si preferís que te contactemos, escribí 'contacto'.")
+            await send_whatsapp_message(from_number, "¿Querés reservar un turno? Respondé con '1'. Si preferís que te contactemos, respondé con '2'.")
 
     except Exception as e:
         print("Error al procesar:", e)
