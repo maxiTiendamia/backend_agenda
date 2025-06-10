@@ -1,5 +1,5 @@
 from app.database import db
-from sqlalchemy.orm import relationship
+from datetime import datetime
 
 class Tenant(db.Model):
     __tablename__ = 'tenants'
@@ -9,19 +9,27 @@ class Tenant(db.Model):
     apellido = db.Column(db.String(100))
     comercio = db.Column(db.String(150))
     telefono = db.Column(db.String(20))
-    fecha_creada = db.Column(db.DateTime)
+    fecha_creada = db.Column(db.DateTime, default=datetime.utcnow)
 
-    config = relationship("TenantConfig", back_populates="tenant", uselist=False, cascade="all, delete-orphan")
+    # Relación uno a uno con TenantConfig
+    config = db.relationship(
+        'TenantConfig',
+        back_populates='tenant',
+        uselist=False,
+        cascade="all, delete-orphan"
+    )
 
 class TenantConfig(db.Model):
     __tablename__ = 'tenant_configs'
 
     id = db.Column(db.Integer, primary_key=True)
     tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False, unique=True)
-    business_hours = db.Column(db.Text)
+
     calendar_id = db.Column(db.String(200))
     phone_number_id = db.Column(db.String(100))
     verify_token = db.Column(db.String(255))
     access_token = db.Column(db.String(255))
+    business_hours = db.Column(db.Text)
 
-    tenant = relationship("Tenant", back_populates="config")
+    # Relación inversa
+    tenant = db.relationship('Tenant', back_populates='config')
