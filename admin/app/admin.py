@@ -58,7 +58,10 @@ class SecureModelView(ModelView):
 
 # Vista principal de cliente con configuración embebida
 class TenantModelView(SecureModelView):
-    inline_models = [(TenantConfig, dict(form_overrides={'business_hours': BusinessHoursField}))]
+    inline_models = [(TenantConfig, dict(
+        form_overrides={'business_hours': BusinessHoursField},
+        form_inline_rel_name='config'
+    ))]
     column_list = ('id', 'nombre', 'apellido', 'comercio', 'telefono', 'fecha_creada')
 
 # Dashboard personalizado
