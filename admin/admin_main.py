@@ -1,5 +1,6 @@
 from flask import Flask
 from app.database import init_db, db
+from app.admin import init_admin  
 import os
 
 app = Flask(__name__)
@@ -15,4 +16,4 @@ def index():
     return "✅ Panel admin funcionando"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000))
