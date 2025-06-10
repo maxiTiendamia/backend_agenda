@@ -31,12 +31,13 @@ class SecureModelViewWithTenant(SecureModelView):
         )
     )
     column_list = (
-        'id', 'tenant_id', 'business_hours', 'calendar_id',
-        'phone_number_id', 'verify_token', 'access_token'
+        'id', 'tenant_id', 'business_hours',
+        'calendar_id', 'phone_number_id',
+        'verify_token', 'access_token'
     )
 
 
-# Vista personalizada del Home con resumen
+# Vista personalizada del Home con contexto correcto
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
     def index(self):
@@ -44,7 +45,7 @@ class SecureAdminIndexView(AdminIndexView):
         total_configuraciones = TenantConfig.query.count()
         ultimos_clientes = Tenant.query.order_by(Tenant.fecha_creada.desc()).limit(5).all()
 
-        return render_template(
+        return self.render(
             'admin/custom_index.html',
             total_clientes=total_clientes,
             total_configuraciones=total_configuraciones,
@@ -61,12 +62,15 @@ class SecureAdminIndexView(AdminIndexView):
 # Inicialización del panel
 def init_admin(app, db):
     basic_auth.init_app(app)
+
     admin = Admin(
         app,
         name="Dashboard Clientes",
         index_view=SecureAdminIndexView(),
-        template_mode="bootstrap4"  # importante para cargar admin/master.html
+        template_mode="bootstrap4"
     )
+
     admin.add_view(SecureModelView(Tenant, db.session, name="Clientes"))
     admin.add_view(SecureModelViewWithTenant(TenantConfig, db.session, name="Configuraciones"))
+
     print("✅ Panel de administración inicializado")
