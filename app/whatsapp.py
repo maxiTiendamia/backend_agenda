@@ -17,3 +17,4 @@ async def send_whatsapp_message(to: str, text: str):
         response = await client.post(url, headers=headers, json=data)
     return response.json()
 
+

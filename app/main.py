@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from app.config import VERIFY_TOKEN, CALENDAR_ID
 from app.whatsapp import send_whatsapp_message
 from app.calendar import get_available_slots, create_event
@@ -13,7 +13,11 @@ def root():
     return {"status": "ok"}
 
 @app.get("/webhook")
-def verify_token(hub_mode: str, hub_verify_token: str, hub_challenge: str):
+def verify_token(
+    hub_mode: str = Query(..., alias="hub.mode"),
+    hub_verify_token: str = Query(..., alias="hub.verify_token"),
+    hub_challenge: str = Query(..., alias="hub.challenge")
+):
     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
         return int(hub_challenge)
     return {"error": "Invalid token"}, 403
