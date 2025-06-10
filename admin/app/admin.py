@@ -3,7 +3,7 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template, Markup
 from wtforms import Field
-from wtforms.widgets import HTMLString
+from markupsafe import Markup
 from app.models import Tenant, TenantConfig
 from app.database import db
 import json
@@ -27,7 +27,7 @@ class BusinessHoursWidget:
             html += f" From: <input type='time' name='{field.name}_{day}_start' value='{start}'>"
             html += f" To: <input type='time' name='{field.name}_{day}_end' value='{end}'></div>"
         html += "</div>"
-        return HTMLString(html)
+        return Markup(html)
 
 class BusinessHoursField(Field):
     widget = BusinessHoursWidget()
