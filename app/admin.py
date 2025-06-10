@@ -3,6 +3,7 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from wtforms import TextAreaField
 from wtforms_sqlalchemy.fields import QuerySelectField
+from app.models import Tenant
 
 basic_auth = BasicAuth()
 
