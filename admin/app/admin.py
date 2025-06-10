@@ -31,9 +31,10 @@ class WorkingHoursWidget:
 class WorkingHoursField(Field):
     widget = WorkingHoursWidget()
 
-    def process(self, formdata, data=None):
+    def process(self, formdata, data=None, extra_filters=None):
+        super().process(formdata, data, extra_filters=extra_filters)
         self.formdata = formdata
-        self.data = data
+        self.data = data or "{}"
 
     def populate_obj(self, obj, name):
         result = {}
@@ -48,14 +49,12 @@ class WorkingHoursField(Field):
     def process_data(self, value):
         self.data = value
 
-
 class SecureModelView(ModelView):
     def is_accessible(self):
         return basic_auth.authenticate()
 
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
-
 
 class TenantModelView(SecureModelView):
     form_overrides = {'working_hours': WorkingHoursField}
@@ -65,7 +64,6 @@ class TenantModelView(SecureModelView):
         'calendar_id', 'phone_number_id', 'verify_token',
         'access_token', 'working_hours'
     )
-
 
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
@@ -81,7 +79,6 @@ class SecureAdminIndexView(AdminIndexView):
 
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
-
 
 def init_admin(app, db):
     basic_auth.init_app(app)
