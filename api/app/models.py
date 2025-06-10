@@ -1,32 +1,23 @@
-from flask_sqlalchemy import SQLAlchemy
+from app.database import db
 from datetime import datetime
 
-db = SQLAlchemy()
-
 class Tenant(db.Model):
+    __tablename__ = 'tenants'
     id = db.Column(db.Integer, primary_key=True)
-    config = db.relationship('TenantConfig', backref='tenant', uselist=False)
-    credentials = db.relationship('TenantCredentials', backref='tenant', uselist=False)
-    nombre = db.Column(db.String(128), nullable=False)
-    apellido = db.Column(db.String(128), nullable=False)
-    telefono = db.Column(db.String(32), nullable=False)
-    correo = db.Column(db.String(128), nullable=False)
-    comercio = db.Column(db.String(128))  # Opcional
-    tipo_comercio = db.Column(db.String(128))
-    direccion = db.Column(db.String(256))
+    nombre = db.Column(db.String(100))
+    apellido = db.Column(db.String(100))
+    comercio = db.Column(db.String(150))
+    telefono = db.Column(db.String(50), unique=True)
     fecha_creada = db.Column(db.DateTime, default=datetime.utcnow)
-    fecha_update = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    config = db.relationship("TenantConfig", backref="tenant", uselist=False, cascade="all, delete-orphan")
 
 class TenantConfig(db.Model):
+    __tablename__ = 'tenant_config'
     id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.Integer, db.ForeignKey('tenant.id'))
-    business_hours = db.Column(db.Text)
-    calendar_id = db.Column(db.String(256))
-    phone_number_id = db.Column(db.String(64))
-    verify_token = db.Column(db.String(128))
-    access_token = db.Column(db.String(512))  
-
-class TenantCredentials(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.Integer, db.ForeignKey('tenant.id'))
-    google_service_account_info = db.Column(db.Text)
+    tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False, unique=True)
+    business_hours = db.Column(db.Text)  # JSON string con horarios por día
+    calendar_id = db.Column(db.String(255))
+    phone_number_id = db.Column(db.String(100))
+    verify_token = db.Column(db.String(255))
+    access_token = db.Column(db.Text)

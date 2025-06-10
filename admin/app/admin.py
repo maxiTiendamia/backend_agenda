@@ -1,15 +1,55 @@
 from flask_admin import Admin, AdminIndexView, expose
-from flask_admin.contrib.sqla import ModelView
+from flask_admin.contrib.sqla import ModelView, InlineModelAdmin
 from flask_basicauth import BasicAuth
-from wtforms_sqlalchemy.fields import QuerySelectField
-from flask import render_template
+from flask import render_template, Markup
+from wtforms import Field
+from wtforms.widgets import HTMLString
 from app.models import Tenant, TenantConfig
 from app.database import db
+import json
 
 basic_auth = BasicAuth()
 
+# Custom field for business hours with time pickers
+class BusinessHoursWidget:
+    def __call__(self, field, **kwargs):
+        days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        existing = json.loads(field.data or '{}')
+        html = "<div style='padding: 1rem 0;'>"
+        for day in days:
+            checked = 'checked' if day in existing else ''
+            start = end = ''
+            if day in existing and existing[day]:
+                interval = existing[day][0].split('-')
+                if len(interval) == 2:
+                    start, end = interval
+            html += f"<div><label><input type='checkbox' name='{field.name}_{day}_active' {checked}> {day.title()}</label>"
+            html += f" From: <input type='time' name='{field.name}_{day}_start' value='{start}'>"
+            html += f" To: <input type='time' name='{field.name}_{day}_end' value='{end}'></div>"
+        html += "</div>"
+        return HTMLString(html)
 
-# Vista base con autenticación
+class BusinessHoursField(Field):
+    widget = BusinessHoursWidget()
+
+    def process_formdata(self, valuelist):
+        # this field relies on raw form values instead
+        pass
+
+    def populate_obj(self, obj, name):
+        result = {}
+        for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
+            active = self._form.data.get(f'{self.name}_{day}_active')
+            start = self._form.data.get(f'{self.name}_{day}_start')
+            end = self._form.data.get(f'{self.name}_{day}_end')
+            if active and start and end:
+                result[day] = [f"{start}-{end}"]
+        setattr(obj, name, json.dumps(result))
+
+    def process_data(self, value):
+        self.data = value
+
+# Vista protegida base
 class SecureModelView(ModelView):
     def is_accessible(self):
         return basic_auth.authenticate()
@@ -17,27 +57,18 @@ class SecureModelView(ModelView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
+# Inline para editar configuración desde el cliente
+class TenantConfigInlineModel(InlineModelAdmin):
+    form_overrides = {
+        'business_hours': BusinessHoursField
+    }
 
-# Vista con relación a Tenant
-class SecureModelViewWithTenant(SecureModelView):
-    form_overrides = dict(
-        tenant_id=QuerySelectField
-    )
-    form_args = dict(
-        tenant_id=dict(
-            label="Cliente",
-            query_factory=lambda: Tenant.query.all(),
-            get_label="nombre"
-        )
-    )
-    column_list = (
-        'id', 'tenant_id', 'business_hours',
-        'calendar_id', 'phone_number_id',
-        'verify_token', 'access_token'
-    )
+# Vista principal de cliente con configuración embebida
+class TenantModelView(SecureModelView):
+    inline_models = [TenantConfigInlineModel(TenantConfig)]
+    column_list = ('id', 'nombre', 'apellido', 'comercio', 'telefono', 'fecha_creada')
 
-
-# Vista personalizada del Home con contexto correcto
+# Dashboard personalizado
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
     def index(self):
@@ -58,19 +89,13 @@ class SecureAdminIndexView(AdminIndexView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
-
-# Inicialización del panel
 def init_admin(app, db):
     basic_auth.init_app(app)
-
     admin = Admin(
         app,
         name="Dashboard Clientes",
         index_view=SecureAdminIndexView(),
         template_mode="bootstrap4"
     )
-
-    admin.add_view(SecureModelView(Tenant, db.session, name="Clientes"))
-    admin.add_view(SecureModelViewWithTenant(TenantConfig, db.session, name="Configuraciones"))
-
+    admin.add_view(TenantModelView(Tenant, db.session, name="Clientes"))
     print("✅ Panel de administración inicializado")

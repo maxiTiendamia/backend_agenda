@@ -34,7 +34,8 @@
               <tr>
                 <th>Nombre</th>
                 <th>Comercio</th>
-                <th>Creado en</th>
+                <th>Teléfono</th>
+                <th>Creado</th>
               </tr>
             </thead>
             <tbody>
@@ -42,11 +43,12 @@
               <tr>
                 <td>{{ cliente.nombre }} {{ cliente.apellido }}</td>
                 <td>{{ cliente.comercio or "—" }}</td>
+                <td>{{ cliente.telefono }}</td>
                 <td>{{ cliente.fecha_creada.strftime('%d/%m/%Y') }}</td>
               </tr>
               {% else %}
               <tr>
-                <td colspan="3">Sin clientes aún.</td>
+                <td colspan="4">Sin clientes aún.</td>
               </tr>
               {% endfor %}
             </tbody>
