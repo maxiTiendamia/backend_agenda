@@ -1,33 +1,65 @@
-from fastapi import FastAPI
-from flask import Flask
-from starlette.middleware.wsgi import WSGIMiddleware
-from app.database import init_db, db
-from app.admin import init_admin
-from app.whatsapp_routes import router as whatsapp_router
-import os
+from flask_admin import Admin, AdminIndexView
+from flask_admin.contrib.sqla import ModelView
+from flask_basicauth import BasicAuth
+from wtforms import TextAreaField
+from wtforms_sqlalchemy.fields import QuerySelectField
+from app.models import Tenant, TenantConfig, TenantCredentials
 
-# Crear instancia Flask (para admin)
-flask_app = Flask(__name__)
-flask_app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'admin-secret')
-flask_app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
-flask_app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Inicializar BasicAuth
+basic_auth = BasicAuth()
 
-# Inicializar base de datos y panel admin
-init_db(flask_app)
-init_admin(flask_app, db)
+# Vista protegida base
+class SecureModelView(ModelView):
+    def is_accessible(self):
+        return basic_auth.authenticate()
+    def inaccessible_callback(self, name, **kwargs):
+        return basic_auth.challenge()
 
-# Ruta de prueba para confirmar que Flask está montado
-@flask_app.route("/test")
-def test_route():
-    return "✅ Flask funciona correctamente"
+# Vista con campo de relación a Tenant
+class SecureModelViewWithTenant(SecureModelView):
+    form_overrides = dict(
+        tenant_id=QuerySelectField
+    )
+    form_args = dict(
+        tenant_id=dict(
+            label="Tenant",
+            query_factory=lambda: Tenant.query.all(),
+            get_label="nombre"
+        )
+    )
+    column_list = ('id', 'tenant_id', 'business_hours', 'calendar_id', 'phone_number_id', 'verify_token', 'access_token')
 
-# Crear instancia FastAPI
-app = FastAPI()
-app.include_router(whatsapp_router)
+# Vista con campos grandes
+class SecureModelViewWithTextArea(SecureModelView):
+    form_overrides = {
+        'business_hours': TextAreaField,
+        'google_service_account_info': TextAreaField
+    }
+    form_widget_args = {
+        'business_hours': {'rows': 5, 'style': 'width: 500px;'},
+        'google_service_account_info': {'rows': 10, 'style': 'width: 500px;'}
+    }
+    column_exclude_list = ['google_service_account_info']
 
-# Montar Flask sobre FastAPI
-app.mount("/admin", WSGIMiddleware(flask_app))
+# Índice protegido
+class SecureAdminIndexView(AdminIndexView):
+    def is_accessible(self):
+        return basic_auth.authenticate()
+    def inaccessible_callback(self, name, **kwargs):
+        return basic_auth.challenge()
 
-@app.get("/")
-def root():
-    return {"status": "ok"}
+# Función para inicializar el panel admin
+def init_admin(app, db):
+    basic_auth.init_app(app)
+    admin = Admin(
+        app,
+        name="Dashboard Clientes",
+        index_view=SecureAdminIndexView(),
+        template_mode="bootstrap4"
+    )
+
+    admin.add_view(SecureModelView(Tenant, db.session))
+    admin.add_view(SecureModelViewWithTenant(TenantConfig, db.session))
+    admin.add_view(SecureModelViewWithTextArea(TenantCredentials, db.session))
+
+    print("✅ Panel de administración inicializado")
