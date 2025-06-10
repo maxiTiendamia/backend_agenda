@@ -11,3 +11,4 @@ gunicorn==21.2.0
 python-dotenv==1.0.1
 wtforms==3.1.2
 wtforms-sqlalchemy==0.3
+uvicorn[standard]==0.29.0
