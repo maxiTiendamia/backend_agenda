@@ -1,22 +1,19 @@
 import datetime
 import json
-import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-credentials_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
-if not credentials_json:
-    raise RuntimeError("GOOGLE_CREDENTIALS_JSON environment variable is not set.")
+def build_service(service_account_info):
+    creds = service_account.Credentials.from_service_account_info(
+        json.loads(service_account_info),
+        scopes=SCOPES
+    )
+    return build('calendar', 'v3', credentials=creds)
 
-credentials_info = json.loads(credentials_json)
-credentials = service_account.Credentials.from_service_account_info(
-    credentials_info, scopes=SCOPES)
-
-service = build('calendar', 'v3', credentials=credentials)
-
-def get_available_slots(calendar_id):
+def get_available_slots(calendar_id, service_account_info):
+    service = build_service(service_account_info)
     now = datetime.datetime.utcnow().isoformat() + 'Z'
     events_result = service.events().list(
         calendarId=calendar_id, timeMin=now,
@@ -32,7 +29,8 @@ def get_available_slots(calendar_id):
             slots.append(dt.strftime('%d/%m %H:%M'))
     return slots
 
-def create_event(calendar_id, slot_str, user_phone, summary="Turno reservado", description="Reservado automáticamente por WhatsApp Bot"):
+def create_event(calendar_id, slot_str, user_phone, service_account_info, summary="Turno reservado", description="Reservado automáticamente por WhatsApp Bot"):
+    service = build_service(service_account_info)
     dt = datetime.datetime.strptime(slot_str, '%d/%m %H:%M')
     start_time = dt.isoformat()
     end_time = (dt + datetime.timedelta(minutes=30)).isoformat()
