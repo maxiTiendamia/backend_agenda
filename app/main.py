@@ -1,8 +1,10 @@
+from datetime import datetime
+
 from fastapi import FastAPI, Request, Query
+
+from app.calendar import get_available_slots, create_event
 from app.config import VERIFY_TOKEN, CALENDAR_ID
 from app.whatsapp import send_whatsapp_message
-from app.calendar import get_available_slots, create_event
-from datetime import datetime
 
 app = FastAPI()
 
@@ -13,7 +15,6 @@ user_greeted = set()
 from flask import Flask, request, jsonify
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import os
 import datetime
 import requests
 from dotenv import load_dotenv
@@ -22,10 +23,13 @@ from flask import Flask
 from flask_basicauth import BasicAuth
 from app.models import db  # Importa db desde models.py
 from flask_migrate import Migrate
-import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from app.models import Tenant, TenantCredentials, TenantConfig
+import os
+import json
+from google.oauth2 import service_account
+
 
 
 
@@ -70,7 +74,7 @@ def get_calendar_service_for_tenant(telefono):
     if not creds or not config or not config.calendar_id:
         raise Exception("Missing credentials or calendar_id")
 
-    service_account_info = json.loads(creds.google_service_account_info)
+    service_account_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
     credentials = service_account.Credentials.from_service_account_info(
         service_account_info,
         scopes=["https://www.googleapis.com/auth/calendar"]
