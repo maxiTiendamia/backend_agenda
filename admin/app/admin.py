@@ -1,19 +1,58 @@
-from flask import Flask
-from app.database import init_db, db
-from app.admin import init_admin
-import os
+from flask_admin import Admin, AdminIndexView
+from flask_admin.contrib.sqla import ModelView
+from flask_basicauth import BasicAuth
+from wtforms import TextAreaField
+from wtforms_sqlalchemy.fields import QuerySelectField
+from app.models import Tenant, TenantConfig, TenantCredentials
+from app.database import db
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'admin-secret')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+basic_auth = BasicAuth()
 
-init_db(app)
-init_admin(app, db)
+class SecureModelView(ModelView):
+    def is_accessible(self):
+        return basic_auth.authenticate()
+    def inaccessible_callback(self, name, **kwargs):
+        return basic_auth.challenge()
 
-@app.route("/")
-def index():
-    return "✅ Panel admin funcionando"
+class SecureModelViewWithTenant(SecureModelView):
+    form_overrides = dict(
+        tenant_id=QuerySelectField
+    )
+    form_args = dict(
+        tenant_id=dict(
+            label="Tenant",
+            query_factory=lambda: Tenant.query.all(),
+            get_label="nombre"
+        )
+    )
+    column_list = ('id', 'tenant_id', 'business_hours', 'calendar_id', 'phone_number_id', 'verify_token', 'access_token')
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+class SecureModelViewWithTextArea(SecureModelView):
+    form_overrides = {
+        'business_hours': TextAreaField,
+        'google_service_account_info': TextAreaField
+    }
+    form_widget_args = {
+        'business_hours': {'rows': 5, 'style': 'width: 500px;'},
+        'google_service_account_info': {'rows': 10, 'style': 'width: 500px;'}
+    }
+    column_exclude_list = ['google_service_account_info']
+
+class SecureAdminIndexView(AdminIndexView):
+    def is_accessible(self):
+        return basic_auth.authenticate()
+    def inaccessible_callback(self, name, **kwargs):
+        return basic_auth.challenge()
+
+def init_admin(app, db):
+    basic_auth.init_app(app)
+    admin = Admin(
+        app,
+        name="Dashboard Clientes",
+        index_view=SecureAdminIndexView(),
+        template_mode="bootstrap4"
+    )
+    admin.add_view(SecureModelView(Tenant, db.session))
+    admin.add_view(SecureModelViewWithTenant(TenantConfig, db.session))
+    admin.add_view(SecureModelViewWithTextArea(TenantCredentials, db.session))
+    print("✅ Panel de administración inicializado")
