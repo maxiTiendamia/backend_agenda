@@ -14,8 +14,6 @@ class SecureModelView(ModelView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
-# Vista segura con selector de Tenant
-from models import Tenant  # Importa Tenant aquí para usarlo en el query_factory
 
 class SecureModelViewWithTenant(SecureModelView):
     form_overrides = dict(
@@ -56,7 +54,6 @@ def init_admin(app, db):
         index_view=SecureAdminIndexView(),
         template_mode="bootstrap4"
     )
-    from models import Tenant, TenantConfig, TenantCredentials
     admin.add_view(ModelView(Tenant, db.session))  # o SecureModelView si quieres seguridad
     admin.add_view(SecureModelViewWithTenant(TenantConfig, db.session))
     admin.add_view(SecureModelViewWithTenant(TenantCredentials, db.session))
