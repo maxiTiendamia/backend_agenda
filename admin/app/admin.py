@@ -3,13 +3,13 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template
 from wtforms import Field
-from app.models import Tenant, TenantConfig
+from app.models import Tenant
 from app.database import db
 import json
 
 basic_auth = BasicAuth()
 
-# Widget personalizado para horarios laborales
+# Widget para business hours
 class BusinessHoursWidget:
     def __call__(self, field, **kwargs):
         days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -47,7 +47,7 @@ class BusinessHoursField(Field):
     def process_data(self, value):
         self.data = value
 
-# Vista segura con autenticación
+# Vista protegida
 class SecureModelView(ModelView):
     def is_accessible(self):
         return basic_auth.authenticate()
@@ -55,28 +55,21 @@ class SecureModelView(ModelView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
-# Vista principal para gestionar clientes
+# Vista cliente con todos los campos
 class TenantModelView(SecureModelView):
-    inline_models = [(TenantConfig, dict(
-        form_overrides={'business_hours': BusinessHoursField},
-        form_inline_rel_name='config'
-    ))]
-    column_list = ('id', 'nombre', 'apellido', 'comercio', 'telefono', 'fecha_creada')
+    form_overrides = {'business_hours': BusinessHoursField}
+    column_list = ('id', 'nombre', 'comercio', 'telefono', 'fecha_creada')
+    form_columns = ('nombre', 'apellido', 'comercio', 'telefono', 'calendar_id', 'phone_number_id', 'verify_token', 'access_token', 'business_hours')
 
-# Dashboard principal
+# Dashboard de inicio
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
     def index(self):
         total_clientes = Tenant.query.count()
-        total_configuraciones = TenantConfig.query.count()
         ultimos_clientes = Tenant.query.order_by(Tenant.fecha_creada.desc()).limit(5).all()
-
-        return self.render(
-            'admin/custom_index.html',
-            total_clientes=total_clientes,
-            total_configuraciones=total_configuraciones,
-            ultimos_clientes=ultimos_clientes
-        )
+        return self.render('admin/custom_index.html',
+                           total_clientes=total_clientes,
+                           ultimos_clientes=ultimos_clientes)
 
     def is_accessible(self):
         return basic_auth.authenticate()
@@ -84,7 +77,7 @@ class SecureAdminIndexView(AdminIndexView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
-# Inicializador del panel admin
+# Inicialización
 def init_admin(app, db):
     basic_auth.init_app(app)
     admin = Admin(
