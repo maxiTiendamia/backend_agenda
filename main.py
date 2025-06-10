@@ -18,7 +18,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'SECRET_KEY')
 
 # Configuración de la base de datos
-db_url = os.getenv('DATABASE_URL', 'postgresql://reservas_user:reservas_pass@localhost:5432/reservas_db')
+db_url = os.getenv('DATABASE_URL', 'postgresql://admin:UH2dSSGwgbuKeIK7mmHrvCD3u0VT5tvx@dpg-d144b7u3jp1c73d8p3e0-a.oregon-postgres.render.com/reservasdb_7eb4')
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
