@@ -6,8 +6,11 @@ from googleapiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-credentials_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
+credentials_json = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
+if not credentials_json:
+    raise RuntimeError("GOOGLE_CREDENTIALS_JSON environment variable is not set.")
 
+credentials_info = json.loads(credentials_json)
 credentials = service_account.Credentials.from_service_account_info(
     credentials_info, scopes=SCOPES)
 
