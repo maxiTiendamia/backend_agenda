@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, Query
-from app.models import Tenant, TenantConfig, TenantCredentials
-from app.calendar_utils import get_available_slots, create_event
-from app.whatsapp import send_whatsapp_message
+from .models import Tenant, TenantConfig, TenantCredentials
+from .calendar_utils import get_available_slots, create_event
+from .whatsapp import send_whatsapp_message
 from flask import current_app
 from datetime import datetime
 import json

@@ -1,5 +1,5 @@
 from flask_admin import Admin, AdminIndexView, expose
-from flask_admin.contrib.sqla import ModelView, InlineModelAdmin
+from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template, Markup
 from wtforms import Field
@@ -57,15 +57,13 @@ class SecureModelView(ModelView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
-# Inline para editar configuración desde el cliente
-class TenantConfigInlineModel(InlineModelAdmin):
-    form_overrides = {
-        'business_hours': BusinessHoursField
-    }
-
-# Vista principal de cliente con configuración embebida
 class TenantModelView(SecureModelView):
-    inline_models = [TenantConfigInlineModel(TenantConfig)]
+    inline_models = [{
+        'model': TenantConfig,
+        'form_overrides': {
+            'business_hours': BusinessHoursField
+        }
+    }]
     column_list = ('id', 'nombre', 'apellido', 'comercio', 'telefono', 'fecha_creada')
 
 # Dashboard personalizado

@@ -4,7 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="c8a97e4a-b972-4330-9b3d-9ba29967687f" name="Changes" comment="" />
+    <list default="true" id="c8a97e4a-b972-4330-9b3d-9ba29967687f" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/api/app/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/app/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/app/whatsapp.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/app/whatsapp.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/app/whatsapp_routes.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/app/whatsapp_routes.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />

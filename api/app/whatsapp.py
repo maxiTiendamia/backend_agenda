@@ -1,5 +1,5 @@
 import httpx
-from app.config import ACCESS_TOKEN, PHONE_NUMBER_ID
+from .config import ACCESS_TOKEN, PHONE_NUMBER_ID
 
 async def send_whatsapp_message(to: str, text: str):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
