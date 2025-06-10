@@ -4,15 +4,14 @@ from flask_basicauth import BasicAuth
 from wtforms import TextAreaField
 from wtforms_sqlalchemy.fields import QuerySelectField
 from app.models import Tenant, TenantConfig, TenantCredentials
+
 basic_auth = BasicAuth()
 
-# Vista segura para modelos normales
 class SecureModelView(ModelView):
     def is_accessible(self):
         return basic_auth.authenticate()
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
-
 
 class SecureModelViewWithTenant(SecureModelView):
     form_overrides = dict(
@@ -27,7 +26,6 @@ class SecureModelViewWithTenant(SecureModelView):
     )
     column_list = ('id', 'tenant_id', 'business_hours', 'calendar_id', 'phone_number_id', 'verify_token', 'access_token')
 
-# Vista segura con TextArea para campos grandes
 class SecureModelViewWithTextArea(SecureModelView):
     form_overrides = {
         'business_hours': TextAreaField,
@@ -53,6 +51,6 @@ def init_admin(app, db):
         index_view=SecureAdminIndexView(),
         template_mode="bootstrap4"
     )
-    admin.add_view(ModelView(Tenant, db.session))  # o SecureModelView si quieres seguridad
+    admin.add_view(SecureModelView(Tenant, db.session))
     admin.add_view(SecureModelViewWithTenant(TenantConfig, db.session))
-    admin.add_view(SecureModelViewWithTenant(TenantCredentials, db.session))
+    admin.add_view(SecureModelViewWithTextArea(TenantCredentials, db.session))
