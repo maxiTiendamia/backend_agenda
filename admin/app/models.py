@@ -31,5 +31,5 @@ class TenantConfig(db.Model):
     access_token = db.Column(db.String(255))
     business_hours = db.Column(db.Text)
 
-    # Relación inversa
+    # Relación inversa hacia Tenant
     tenant = db.relationship('Tenant', back_populates='config')
