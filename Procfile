@@ -1,1 +1,1 @@
-gunicorn app.main:app --bind 0.0.0.0:10000
+web: gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:10000
