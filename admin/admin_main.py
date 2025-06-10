@@ -3,13 +3,18 @@ from app.database import init_db, db
 from app.admin import init_admin
 import os
 
-app = Flask(__name__)
+# Especificar carpeta de templates
+template_dir = os.path.join(os.path.dirname(__file__), 'app', 'templates')
+app = Flask(__name__, template_folder=template_dir)
+
+# Configuración base
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'admin-secret')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['BASIC_AUTH_USERNAME'] = os.getenv("ADMIN_USER")
 app.config['BASIC_AUTH_PASSWORD'] = os.getenv("ADMIN_PASSWORD")
 
+# Inicializar DB y Admin
 init_db(app)
 init_admin(app, db)
 

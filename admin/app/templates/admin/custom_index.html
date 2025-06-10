@@ -1,0 +1,59 @@
+{% extends 'admin/master.html' %}
+
+{% block body %}
+<div class="container mt-4">
+  <h2>📊 Panel de control</h2>
+
+  <div class="row mt-4">
+    <div class="col-md-4">
+      <div class="card text-bg-light mb-3 shadow-sm">
+        <div class="card-header">Total de clientes</div>
+        <div class="card-body">
+          <h3 class="card-title">{{ total_clientes }}</h3>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card text-bg-light mb-3 shadow-sm">
+        <div class="card-header">Configuraciones activas</div>
+        <div class="card-body">
+          <h3 class="card-title">{{ total_configuraciones }}</h3>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row mt-4">
+    <div class="col-md-12">
+      <div class="card shadow-sm">
+        <div class="card-header">🧾 Últimos clientes registrados</div>
+        <div class="card-body">
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th>Nombre</th>
+                <th>Comercio</th>
+                <th>Creado en</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for cliente in ultimos_clientes %}
+              <tr>
+                <td>{{ cliente.nombre }} {{ cliente.apellido }}</td>
+                <td>{{ cliente.comercio or "—" }}</td>
+                <td>{{ cliente.fecha_creada.strftime('%d/%m/%Y') }}</td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="3">Sin clientes aún.</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
