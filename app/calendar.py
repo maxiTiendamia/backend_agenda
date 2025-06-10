@@ -2,14 +2,14 @@ import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import os
+import json
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 credentials_info = os.environ["GOOGLE_CREDENTIALS_JSON"]
-SERVICE_ACCOUNT_FILE = "/etc/secrets/calendario-zichi-d98b415d5008.json"
-
-credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+credentials_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
+credentials = service_account.Credentials.from_service_account_info(
+    credentials_info, scopes=SCOPES)
 
 service = build('calendar', 'v3', credentials=credentials)
 
