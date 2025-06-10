@@ -27,3 +27,19 @@ def get_available_slots(calendar_id):
         if start:
             slots.append(start)
     return slots
+
+def create_event(calendar_id, start_time, end_time, summary="Turno reservado", description="Reservado automáticamente por WhatsApp Bot"):
+    event = {
+        'summary': summary,
+        'description': description,
+        'start': {
+            'dateTime': start_time,
+            'timeZone': 'America/Montevideo',
+        },
+        'end': {
+            'dateTime': end_time,
+            'timeZone': 'America/Montevideo',
+        },
+    }
+    event = service.events().insert(calendarId=calendar_id, body=event).execute()
+    return event.get('htmlLink')
