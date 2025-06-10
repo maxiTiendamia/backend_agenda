@@ -7,6 +7,7 @@ from googleapiclient.discovery import build
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 credentials_info = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
+
 credentials = service_account.Credentials.from_service_account_info(
     credentials_info, scopes=SCOPES)
 
