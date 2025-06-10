@@ -1,16 +1,17 @@
 from flask_admin import Admin, AdminIndexView, expose
 from flask_admin.contrib.sqla import ModelView
+from flask_admin.model import InlineFormAdmin
 from flask_basicauth import BasicAuth
-from flask import render_template, Markup
+from flask import render_template
 from wtforms import Field
-from markupsafe import Markup
+from wtforms.widgets import html_params
 from app.models import Tenant, TenantConfig
 from app.database import db
 import json
 
 basic_auth = BasicAuth()
 
-# Custom field for business hours with time pickers
+# Custom widget for business hours
 class BusinessHoursWidget:
     def __call__(self, field, **kwargs):
         days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -27,13 +28,12 @@ class BusinessHoursWidget:
             html += f" From: <input type='time' name='{field.name}_{day}_start' value='{start}'>"
             html += f" To: <input type='time' name='{field.name}_{day}_end' value='{end}'></div>"
         html += "</div>"
-        return Markup(html)
+        return html
 
 class BusinessHoursField(Field):
     widget = BusinessHoursWidget()
 
     def process_formdata(self, valuelist):
-        # this field relies on raw form values instead
         pass
 
     def populate_obj(self, obj, name):
@@ -57,13 +57,18 @@ class SecureModelView(ModelView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
+# Inline para configuración desde cliente
+class TenantConfigInline(InlineFormAdmin):
+    form_overrides = {
+        'business_hours': BusinessHoursField
+    }
+
+    def __init__(self):
+        super().__init__(TenantConfig)
+
+# Vista principal de cliente con configuración embebida
 class TenantModelView(SecureModelView):
-    inline_models = [{
-        'model': TenantConfig,
-        'form_overrides': {
-            'business_hours': BusinessHoursField
-        }
-    }]
+    inline_models = [TenantConfigInline()]
     column_list = ('id', 'nombre', 'apellido', 'comercio', 'telefono', 'fecha_creada')
 
 # Dashboard personalizado

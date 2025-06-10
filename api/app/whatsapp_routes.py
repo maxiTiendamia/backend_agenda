@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Query
-from .models import Tenant, TenantConfig, TenantCredentials
+from .models import Tenant, TenantConfig
 from .calendar_utils import get_available_slots, create_event
 from .whatsapp import send_whatsapp_message
 from flask import current_app

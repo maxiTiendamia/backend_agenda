@@ -5,8 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c8a97e4a-b972-4330-9b3d-9ba29967687f" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/admin/app/admin.py" beforeDir="false" afterPath="$PROJECT_DIR$/admin/app/admin.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/app/whatsapp_routes.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/app/whatsapp_routes.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -53,11 +52,12 @@
     "RunOnceActivity.git.unshallow": "true",
     "git-widget-placeholder": "main",
     "ignore.virus.scanning.warn.message": "true",
-    "last_opened_file_path": "C:/Users/maxi1/Documents/GitHub/backend_agenda/admin"
+    "last_opened_file_path": "C:/Users/maxi1/Documents/GitHub/backend_agenda/api/app"
   }
 }]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\maxi1\Documents\GitHub\backend_agenda\api\app" />
       <recent name="C:\Users\maxi1\Documents\GitHub\backend_agenda\admin" />
       <recent name="C:\Users\maxi1\Documents\GitHub\backend_agenda\admin\app" />
       <recent name="C:\Users\maxi1\Documents\GitHub\backend_agenda" />
