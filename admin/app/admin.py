@@ -3,14 +3,13 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template
 from wtforms import Field
-from wtforms.widgets import html_params
 from app.models import Tenant, TenantConfig
 from app.database import db
 import json
 
 basic_auth = BasicAuth()
 
-# Custom widget for business hours
+# Widget personalizado para horarios laborales
 class BusinessHoursWidget:
     def __call__(self, field, **kwargs):
         days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -48,7 +47,7 @@ class BusinessHoursField(Field):
     def process_data(self, value):
         self.data = value
 
-# Vista protegida base
+# Vista segura con autenticación
 class SecureModelView(ModelView):
     def is_accessible(self):
         return basic_auth.authenticate()
@@ -56,7 +55,7 @@ class SecureModelView(ModelView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
-# Vista principal de cliente con configuración embebida
+# Vista principal para gestionar clientes
 class TenantModelView(SecureModelView):
     inline_models = [(TenantConfig, dict(
         form_overrides={'business_hours': BusinessHoursField},
@@ -64,7 +63,7 @@ class TenantModelView(SecureModelView):
     ))]
     column_list = ('id', 'nombre', 'apellido', 'comercio', 'telefono', 'fecha_creada')
 
-# Dashboard personalizado
+# Dashboard principal
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
     def index(self):
@@ -85,6 +84,7 @@ class SecureAdminIndexView(AdminIndexView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
+# Inicializador del panel admin
 def init_admin(app, db):
     basic_auth.init_app(app)
     admin = Admin(
