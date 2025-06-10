@@ -1,12 +1,16 @@
+import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from app.config import GOOGLE_CREDENTIALS_DICT
-import datetime
+import os
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-credentials = service_account.Credentials.from_service_account_info(
-    GOOGLE_CREDENTIALS_DICT, scopes=SCOPES)
+credentials_info = os.environ["GOOGLE_CREDENTIALS_JSON"]
+SERVICE_ACCOUNT_FILE = "/etc/secrets/calendario-zichi-d98b415d5008.json"
+
+credentials = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+
 service = build('calendar', 'v3', credentials=credentials)
 
 def get_available_slots(calendar_id):
@@ -16,14 +20,10 @@ def get_available_slots(calendar_id):
         maxResults=5, singleEvents=True,
         orderBy='startTime').execute()
     events = events_result.get('items', [])
-    return [e['start']['dateTime'] for e in events]
 
-def create_event(calendar_id, start_datetime, user_phone):
-    end_datetime = (datetime.datetime.fromisoformat(start_datetime[:-1]) + datetime.timedelta(minutes=30)).isoformat() + 'Z'
-    event = {
-        'summary': f'Turno reservado por {user_phone}',
-        'start': {'dateTime': start_datetime, 'timeZone': 'UTC'},
-        'end': {'dateTime': end_datetime, 'timeZone': 'UTC'},
-    }
-    event = service.events().insert(calendarId=calendar_id, body=event).execute()
-    return event
+    slots = []
+    for e in events:
+        start = e['start'].get('dateTime') or e['start'].get('date')
+        if start:
+            slots.append(start)
+    return slots
