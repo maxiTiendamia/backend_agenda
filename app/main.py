@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, Query
 from app.config import VERIFY_TOKEN, CALENDAR_ID
 from app.whatsapp import send_whatsapp_message
 from app.calendar import get_available_slots, create_event
+from datetime import datetime, timedelta
 
 app = FastAPI()
 
@@ -34,9 +35,11 @@ async def receive_message(request: Request):
             index = int(user_msg) - 1
             slots = user_selection[from_number]
             if 0 <= index < len(slots):
-                selected_slot = slots[index]
-                create_event(CALENDAR_ID, selected_slot, from_number)
-                await send_whatsapp_message(from_number, f"✅ Turno reservado para: {selected_slot}")
+                selected_start = slots[index]
+                start_dt = datetime.fromisoformat(selected_start)
+                end_dt = start_dt + timedelta(minutes=30)
+                event_link = create_event(CALENDAR_ID, start_dt.isoformat(), end_dt.isoformat())
+                await send_whatsapp_message(from_number, f"✅ Turno reservado para: {selected_start}\nℹ️ Evento: {event_link}")
                 del user_selection[from_number]
             else:
                 await send_whatsapp_message(from_number, "Número inválido. Por favor, elige una opción válida.")
@@ -48,7 +51,8 @@ async def receive_message(request: Request):
             if slots:
                 msg = "Estos son los próximos turnos disponibles:\n"
                 for idx, slot in enumerate(slots):
-                    msg += f"{idx+1}. {slot}\n"
+                    formatted = datetime.fromisoformat(slot).strftime("%d/%m %H:%M")
+                    msg += f"{idx+1}. {formatted}\n"
                 msg += "\nRespondé con el número del turno que querés reservar."
             else:
                 msg = "No hay turnos disponibles por el momento."
@@ -59,4 +63,3 @@ async def receive_message(request: Request):
     except Exception as e:
         print("Error al procesar:", e)
     return {"status": "received"}
-
