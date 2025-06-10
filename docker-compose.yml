@@ -1,0 +1,12 @@
+services:
+  web:
+    build: .
+    command: python app.py
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - ADMIN_USER=${ADMIN_USER}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
