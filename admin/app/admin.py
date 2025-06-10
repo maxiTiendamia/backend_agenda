@@ -17,9 +17,9 @@ class SecureModelView(ModelView):
 
 # Vista cliente con todos los campos
 class TenantModelView(SecureModelView):
-    column_list = ('id', 'nombre', 'comercio', 'telefono', 'fecha_creada')
-    form_columns = ('nombre', 'apellido', 'comercio', 'telefono',
-                    'calendar_id', 'phone_number_id', 'verify_token', 'access_token')
+    column_list = ('id', 'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'fecha_creada')
+    form_columns = ('nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'calendar_id', 'phone_number_id',
+                    'verify_token', 'access_token', 'business_hours')
 
 # Dashboard de inicio
 class SecureAdminIndexView(AdminIndexView):

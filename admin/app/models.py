@@ -10,8 +10,8 @@ class Tenant(db.Model):
     comercio = db.Column(db.String(100), nullable=True)
     telefono = db.Column(db.String(20), nullable=True)
     fecha_creada = db.Column(db.DateTime, default=datetime.utcnow)
+    direccion = db.Column(db.String(200), nullable=True)  # ✅ NUEVO CAMPO
 
-    # Campos que antes estaban en TenantConfig
     calendar_id = db.Column(db.String(100), nullable=True)
     phone_number_id = db.Column(db.String(100), nullable=True)
     verify_token = db.Column(db.String(100), nullable=True)
