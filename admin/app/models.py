@@ -12,7 +12,6 @@ class Tenant(db.Model):
     fecha_creada = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Campos que antes estaban en TenantConfig
-    business_hours = db.Column(db.Text, nullable=True)
     calendar_id = db.Column(db.String(100), nullable=True)
     phone_number_id = db.Column(db.String(100), nullable=True)
     verify_token = db.Column(db.String(100), nullable=True)
