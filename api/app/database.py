@@ -1,7 +1,8 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-DATABASE_URL = "sqlite:///./test.db"  # Cambiá esto a tu conexión PostgreSQL si es necesario
+import os
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./test.db")
 
 engine = create_engine(
     DATABASE_URL, connect_args={"check_same_thread": False}  # ← solo si usás SQLite
