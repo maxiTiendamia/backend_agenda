@@ -13,8 +13,12 @@ async def send_whatsapp_message(to: str, text: str):
         "type": "text",
         "text": {"body": text}
     }
+
+    print("🛰️ Enviando mensaje a WhatsApp:", data)
+
     async with httpx.AsyncClient() as client:
         response = await client.post(url, headers=headers, json=data)
-    return response.json()
+        print("📬 Respuesta de WhatsApp:", response.status_code, response.text)
+        return response.json()
 
 
