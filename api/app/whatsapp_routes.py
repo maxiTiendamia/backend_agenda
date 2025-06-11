@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from app.database import db
-from app.models import Tenant
-from app.utils.calendar_utils import get_available_slots, create_event
-from app.utils.message_templates import build_message
-from app.utils.whatsapp_api import send_whatsapp_message
+from .database import db
+from .models import Tenant
+from .utils.calendar_utils import get_available_slots, create_event
+from .utils.message_templates import build_message
+from .utils.whatsapp_api import send_whatsapp_message
 from sqlalchemy.orm import Session
 import traceback
 
@@ -60,7 +60,7 @@ async def whatsapp_webhook(request: Request):
                     send_whatsapp_message(
                         phone_number_id=tenant.phone_number_id,
                         to=from_number,
-                        message="⚠️ No pude reservar el turno. Verifica el formato (ej: 10/06 15:30)",
+                        message="⚠️ No pude reservar el turno",
                         token=tenant.access_token
                     )
                     return JSONResponse(content={"error": "Error reservando turno"}, status_code=500)
