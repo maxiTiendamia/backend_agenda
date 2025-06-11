@@ -16,6 +16,9 @@ WELCOME_MESSAGE = (
     "2. Para solicitar atención personalizada"
 )
 
+# Cache temporal en memoria (reinicio borra)
+USER_SLOTS_CACHE = {}
+
 router = APIRouter()
 
 @router.get("/webhook")
@@ -72,7 +75,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         # 2 - Ver disponibilidad
         if message_text == "1":
             slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
-            response = build_message(slots)
+            USER_SLOTS_CACHE[from_number] = slots  # guardamos por contacto
+            response = "📅 Estos son los próximos turnos disponibles:\n"
+            for i, slot in enumerate(slots):
+                response += f"{i+1}. {slot}\n"
+            response += "\nResponde con el número del turno que prefieras."
             await send_whatsapp_message(
                 to=from_number,
                 text=response,
@@ -91,44 +98,45 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "mensaje de atención enviado"}
 
-        # 4 - Intento de reserva (formato libre tipo 10/06 15:30)
-        if "/" in message_text:
-            try:
-                event_id = create_event(
-                    calendar_id=tenant.calendar_id,
-                    slot_str=message_text,
-                    user_phone=from_number,
-                    service_account_info=GOOGLE_CREDENTIALS_JSON
-                )
-                await send_whatsapp_message(
-                    to=from_number,
-                    text="✅ Tu turno fue reservado con éxito.",
-                    token=tenant.access_token,
-                    phone_number_id=tenant.phone_number_id
-                )
-                return {"status": "turno reservado", "event_id": event_id}
-            except Exception as e:
-                print("❌ Error creando evento:", e)
-                traceback.print_exc()
-
-                # reenviar slots actualizados
-                slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
-                fallback_message = (
-                    "⚠️ No pude reservar el turno porque ya está ocupado.\n"
-                    + build_message(slots)
-                )
-                await send_whatsapp_message(
-                    to=from_number,
-                    text=fallback_message,
-                    token=tenant.access_token,
-                    phone_number_id=tenant.phone_number_id
-                )
-                return JSONResponse(content={"error": "Turno ocupado"}, status_code=409)
+        # 4 - Reserva por número
+        if message_text.isdigit():
+            index = int(message_text) - 1
+            slots = USER_SLOTS_CACHE.get(from_number)
+            if slots and 0 <= index < len(slots):
+                try:
+                    event_id = create_event(
+                        calendar_id=tenant.calendar_id,
+                        slot_str=slots[index],
+                        user_phone=from_number,
+                        service_account_info=GOOGLE_CREDENTIALS_JSON
+                    )
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text=f"✅ Tu turno fue reservado con éxito para el {slots[index]}",
+                        token=tenant.access_token,
+                        phone_number_id=tenant.phone_number_id
+                    )
+                    return {"status": "turno reservado", "event_id": event_id}
+                except Exception as e:
+                    print("❌ Error creando evento:", e)
+                    traceback.print_exc()
+                    slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
+                    USER_SLOTS_CACHE[from_number] = slots
+                    retry_msg = "⚠️ El turno seleccionado ya no está disponible. Elige otra opción:\n"
+                    for i, slot in enumerate(slots):
+                        retry_msg += f"{i+1}. {slot}\n"
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text=retry_msg,
+                        token=tenant.access_token,
+                        phone_number_id=tenant.phone_number_id
+                    )
+                    return JSONResponse(content={"error": "Turno ocupado"}, status_code=409)
 
         # 5 - Mensaje genérico por default
         await send_whatsapp_message(
             to=from_number,
-            text="👋 Hola! Puedes escribir '1' para ver turnos o '2' para atención personalizada.",
+            text="👋 Puedes escribir '1' para ver turnos o '2' para atención personalizada.",
             token=tenant.access_token,
             phone_number_id=tenant.phone_number_id
         )
