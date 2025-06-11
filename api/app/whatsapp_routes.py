@@ -39,7 +39,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         from_number = messages[0]['from']
         message_text = messages[0]['text']['body'].strip().lower()
 
-        tenant: Tenant = db.query(Tenant).filter_by(telefono=from_number).first()
+        phone_number_id = value.get("metadata", {}).get("phone_number_id")
+        print("🔍 Buscando tenant con phone_number_id:", phone_number_id)
+
+        if not phone_number_id:
+            return JSONResponse(content={"error": "phone_number_id no encontrado en metadata"}, status_code=400)
+
+        tenant = db.query(Tenant).filter_by(phone_number_id=phone_number_id).first()
 
         if not tenant:
             return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
