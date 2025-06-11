@@ -38,8 +38,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
         from_number = messages[0]['from']
         message_text = messages[0]['text']['body'].strip().lower()
-
         phone_number_id = value.get("metadata", {}).get("phone_number_id")
+
         print("🔍 phone_number_id recibido:", phone_number_id)
 
         if not phone_number_id:
@@ -51,6 +51,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             print("❌ Tenant no encontrado para phone_number_id:", phone_number_id)
             return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
 
+        if not tenant.access_token:
+            return JSONResponse(content={"error": "Token de WhatsApp no configurado para este cliente"}, status_code=500)
+
         if not GOOGLE_CREDENTIALS_JSON:
             print("❌ GOOGLE_CREDENTIALS_JSON no configurado")
             return JSONResponse(content={"error": "Credenciales de Google faltantes"}, status_code=500)
@@ -61,7 +64,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             print("📅 Slots disponibles:", slots)
 
             response = build_message(slots)
-            await send_whatsapp_message(to=from_number, text=response)
+            await send_whatsapp_message(
+                to=from_number,
+                text=response,
+                token=tenant.access_token,
+                phone_number_id=tenant.phone_number_id
+            )
             print("✅ Mensaje enviado a", from_number)
             return {"status": "mensaje enviado"}
 
@@ -76,19 +84,31 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 )
                 print("📆 Evento creado con ID:", event_id)
 
-                await send_whatsapp_message(to=from_number, text="✅ Tu turno fue reservado con éxito.")
+                await send_whatsapp_message(
+                    to=from_number,
+                    text="✅ Tu turno fue reservado con éxito.",
+                    token=tenant.access_token,
+                    phone_number_id=tenant.phone_number_id
+                )
                 return {"status": "turno reservado", "event_id": event_id}
             except Exception as e:
                 print("❌ Error creando evento:", e)
                 traceback.print_exc()
-                await send_whatsapp_message(to=from_number, text="⚠️ No pude reservar el turno")
+                await send_whatsapp_message(
+                    to=from_number,
+                    text="⚠️ No pude reservar el turno",
+                    token=tenant.access_token,
+                    phone_number_id=tenant.phone_number_id
+                )
                 return JSONResponse(content={"error": "Error reservando turno"}, status_code=500)
 
         # 🟡 Mensaje desconocido
         else:
             await send_whatsapp_message(
                 to=from_number,
-                text="👋 Hola! Puedes escribirme 'turno' para ver disponibilidad o enviar una fecha como '10/06 15:30' para reservar."
+                text="👋 Hola! Puedes escribirme 'turno' para ver disponibilidad o enviar una fecha como '10/06 15:30' para reservar.",
+                token=tenant.access_token,
+                phone_number_id=tenant.phone_number_id
             )
             print("🗨️ Mensaje de ayuda enviado a", from_number)
             return {"status": "respuesta enviada"}
