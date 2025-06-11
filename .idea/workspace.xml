@@ -4,7 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="c8a97e4a-b972-4330-9b3d-9ba29967687f" name="Changes" comment="" />
+    <list default="true" id="c8a97e4a-b972-4330-9b3d-9ba29967687f" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/api/app/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -34,6 +37,7 @@
 }</component>
   <component name="HighlightingSettingsPerFile">
     <setting file="file://$PROJECT_DIR$/admin/app/admin.py" root0="SKIP_INSPECTION" />
+    <setting file="file://$PROJECT_DIR$/api/app/whatsapp_routes.py" root0="SKIP_INSPECTION" />
   </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 7
