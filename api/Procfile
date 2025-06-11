@@ -1,1 +1,1 @@
-web: PYTHONPATH="." gunicorn app.api_main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:10000
+web: PYTHONPATH="." gunicorn api_main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:10000
