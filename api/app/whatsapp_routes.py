@@ -4,7 +4,7 @@ from app.database import db
 from app.models import Tenant
 from utils.calendar_utils import get_available_slots, create_event
 from utils.message_templates import build_message
-from utils.whatsapp_api import send_whatsapp_message
+from utils.whatsapp import send_whatsapp_message
 import traceback
 
 router = APIRouter()
