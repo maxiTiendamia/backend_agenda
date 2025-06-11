@@ -1,5 +1,5 @@
 from datetime import datetime
-from app.database import db
+from database import db
 from sqlalchemy.dialects.postgresql import JSON
 
 class Tenant(db.Model):
