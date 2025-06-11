@@ -13,10 +13,10 @@ class Tenant(db.Model):
     fecha_creada = db.Column(db.DateTime, default=datetime.utcnow)
     direccion = db.Column(db.String(200), nullable=True)
 
-    calendar_id = db.Column(db.String(100), nullable=True)
-    phone_number_id = db.Column(db.String(100), nullable=True)
-    verify_token = db.Column(db.String(100), nullable=True)
-    access_token = db.Column(db.String(200), nullable=True)
+    calendar_id = db.Column(db.String(400), nullable=True)
+    phone_number_id = db.Column(db.String(400), nullable=True)
+    verify_token = db.Column(db.String(400), nullable=True)
+    access_token = db.Column(db.String(400), nullable=True)
     working_hours = db.Column(JSON)
 
     def __repr__(self):
