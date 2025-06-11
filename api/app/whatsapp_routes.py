@@ -5,11 +5,21 @@ from app.deps import get_db
 from utils.calendar_utils import get_available_slots, create_event
 from utils.message_templates import build_message
 from utils.whatsapp import send_whatsapp_message
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
+from utils.config import VERIFY_TOKEN
 import traceback
-from app.db_core import SessionLocal
 
 router = APIRouter()
+
+@router.get("/webhook")
+async def verify_webhook(request: Request):
+    params = request.query_params
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return PlainTextResponse(content=challenge)
+    return PlainTextResponse(content="Verification failed", status_code=403)
 
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
@@ -26,11 +36,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if message_text in ["hola", "turno", "turnos", "quiero un turno"]:
             slots = get_available_slots(tenant.calendar_id, tenant.access_token)
             response = build_message(slots)
-            send_whatsapp_message(
-                phone_number_id=tenant.phone_number_id,
+            await send_whatsapp_message(
                 to=from_number,
-                message=response,
-                token=tenant.access_token
+                text=response
             )
             return {"status": "mensaje enviado"}
 
@@ -42,30 +50,24 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     user_phone=from_number,
                     service_account_info=tenant.access_token
                 )
-                send_whatsapp_message(
-                    phone_number_id=tenant.phone_number_id,
+                await send_whatsapp_message(
                     to=from_number,
-                    message="✅ Tu turno fue reservado con éxito.",
-                    token=tenant.access_token
+                    text="✅ Tu turno fue reservado con éxito."
                 )
                 return {"status": "turno reservado", "event_id": event_id}
             except Exception as e:
                 print("❌ Error creando evento:", e)
                 traceback.print_exc()
-                send_whatsapp_message(
-                    phone_number_id=tenant.phone_number_id,
+                await send_whatsapp_message(
                     to=from_number,
-                    message="⚠️ No pude reservar el turno",
-                    token=tenant.access_token
+                    text="⚠️ No pude reservar el turno"
                 )
                 return JSONResponse(content={"error": "Error reservando turno"}, status_code=500)
 
         else:
-            send_whatsapp_message(
-                phone_number_id=tenant.phone_number_id,
+            await send_whatsapp_message(
                 to=from_number,
-                message="👋 Hola! Puedes escribirme 'turno' para ver disponibilidad o enviar una fecha como '10/06 15:30' para reservar.",
-                token=tenant.access_token
+                text="👋 Hola! Puedes escribirme 'turno' para ver disponibilidad o enviar una fecha como '10/06 15:30' para reservar."
             )
             return {"status": "respuesta enviada"}
 
