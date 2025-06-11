@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from database import db
+from app.database import db
 from models import Tenant
 from utils.calendar_utils import get_available_slots, create_event
 from utils.message_templates import build_message
