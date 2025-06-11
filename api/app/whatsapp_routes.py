@@ -7,6 +7,7 @@ from utils.message_templates import build_message
 from utils.whatsapp_api import send_whatsapp_message
 from sqlalchemy.orm import Session
 import traceback
+from app.db_core import SessionLocal
 
 router = APIRouter()
 
