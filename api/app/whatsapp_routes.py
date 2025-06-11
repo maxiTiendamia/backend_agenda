@@ -7,6 +7,7 @@ from utils.message_templates import build_message
 from utils.whatsapp import send_whatsapp_message
 from fastapi.responses import JSONResponse
 import traceback
+from app.db_core import SessionLocal
 
 router = APIRouter()
 
