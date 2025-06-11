@@ -1,9 +1,8 @@
 from fastapi import FastAPI
-from utils import init_db, db
-from utils import Tenant
-from utils import router as whatsapp_router
+from app.database import init_db, db
+from app.models import Tenant
+from app.whatsapp_routes import router as whatsapp_router
 from starlette.middleware.cors import CORSMiddleware
-from flask import Flask
 
 app = FastAPI()
 
