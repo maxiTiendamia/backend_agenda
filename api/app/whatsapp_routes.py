@@ -5,6 +5,7 @@ from app.deps import get_db
 from utils.calendar_utils import get_available_slots, create_event
 from utils.message_templates import build_message
 from utils.whatsapp import send_whatsapp_message
+from utils.config import GOOGLE_CREDENTIALS_JSON
 from fastapi.responses import JSONResponse, PlainTextResponse
 from utils.config import VERIFY_TOKEN
 import traceback
@@ -51,7 +52,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
 
         if message_text in ["hola", "turno", "turnos", "quiero un turno"]:
-            slots = get_available_slots(tenant.calendar_id, tenant.access_token)
+            slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
             response = build_message(slots)
             await send_whatsapp_message(
                 to=from_number,
@@ -65,7 +66,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     calendar_id=tenant.calendar_id,
                     slot_str=message_text,
                     user_phone=from_number,
-                    service_account_info=tenant.access_token
+                    service_account_info=GOOGLE_CREDENTIALS_JSON
                 )
                 await send_whatsapp_message(
                     to=from_number,
