@@ -1,99 +1,80 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from app.database import db
 from app.models import Tenant
-from app.whatsapp import send_whatsapp_message
-from app.calendar_utils import get_available_slots, create_event
-from datetime import datetime
+from app.utils.calendar_utils import get_available_slots, create_event
+from app.utils.message_templates import build_message
+from app.utils.whatsapp_api import send_whatsapp_message
+from sqlalchemy.orm import Session
+import traceback
 
 router = APIRouter()
 
-# Estado conversacional simple
-user_greeted = set()
-user_selection = {}
-
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request):
-    data = await request.json()
-
     try:
-        changes = data.get('entry', [])[0].get('changes', [])[0].get('value', {})
-        messages = changes.get('messages')
+        data = await request.json()
 
-        if not messages:
-            return {"status": "ignored"}
+        # Extraer número de teléfono del mensaje entrante
+        from_number = data['entry'][0]['changes'][0]['value']['messages'][0]['from']
+        message_text = data['entry'][0]['changes'][0]['value']['messages'][0]['text']['body'].strip().lower()
 
-        entry = messages[0]
-        user_msg = entry['text']['body']
-        from_number = entry['from']
+        with db.session() as session:
+            tenant: Tenant = session.query(Tenant).filter_by(telefono=from_number).first()
 
-        # Buscar tenant por número de teléfono
-        tenant = Tenant.query.filter_by(telefono=from_number).first()
-        if not tenant:
-            return {"status": "cliente no encontrado"}
+            if not tenant:
+                return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
 
-        calendar_id = tenant.calendar_id
-        service_account_info = tenant.google_service_account_info
+            # Comandos posibles
+            if message_text in ["hola", "turno", "turnos", "quiero un turno"]:
+                slots = get_available_slots(tenant.calendar_id, tenant.access_token)
+                response = build_message(slots)
+                send_whatsapp_message(
+                    phone_number_id=tenant.phone_number_id,
+                    to=from_number,
+                    message=response,
+                    token=tenant.access_token
+                )
+                return {"status": "mensaje enviado"}
 
-        if not calendar_id or not service_account_info:
-            return {"status": "datos incompletos"}
+            elif "/" in message_text:  # ejemplo de turno "10/06 15:30"
+                try:
+                    event_id = create_event(
+                        calendar_id=tenant.calendar_id,
+                        slot_str=message_text,
+                        user_phone=from_number,
+                        service_account_info=tenant.access_token,
+                        summary="Turno reservado",
+                        description="Reservado automáticamente por WhatsApp Bot"
+                    )
+                    send_whatsapp_message(
+                        phone_number_id=tenant.phone_number_id,
+                        to=from_number,
+                        message="✅ Tu turno fue reservado con éxito.",
+                        token=tenant.access_token
+                    )
+                    return {"status": "turno reservado", "event_id": event_id}
+                except Exception as e:
+                    print("❌ Error creando evento:", e)
+                    traceback.print_exc()
+                    send_whatsapp_message(
+                        phone_number_id=tenant.phone_number_id,
+                        to=from_number,
+                        message="⚠️ No pude reservar el turno. Verifica el formato (ej: 10/06 15:30)",
+                        token=tenant.access_token
+                    )
+                    return JSONResponse(content={"error": "Error reservando turno"}, status_code=500)
 
-        # Primera vez que se contacta el cliente
-        if from_number not in user_greeted:
-            bienvenida = (
-                "Hola 👋 Bienvenido/a a nuestra agenda automatizada.\n"
-                "Respondé con el número correspondiente:\n"
-                "1️⃣ para reservar un turno\n"
-                "2️⃣ para que te contactemos personalmente."
-            )
-            await send_whatsapp_message(from_number, bienvenida)
-            user_greeted.add(from_number)
-            return {"status": "greeted"}
-
-        # Si ya seleccionó un turno anteriormente
-        if from_number in user_selection and user_msg.isdigit():
-            index = int(user_msg) - 1
-            slots = user_selection[from_number]
-            if 0 <= index < len(slots):
-                selected_slot = slots[index]
-                create_event(calendar_id, selected_slot, from_number, service_account_info)
-                await send_whatsapp_message(from_number, f"✅ Turno reservado para: {selected_slot}")
-                del user_selection[from_number]
             else:
-                await send_whatsapp_message(from_number, "Número inválido. Elegí una opción válida.")
-            return {"status": "handled"}
-
-        # Pedido de turnos
-        if user_msg == "1" or "turno" in user_msg.lower():
-            slots = get_available_slots(calendar_id, service_account_info)
-
-            unique_slots = []
-            seen = set()
-            for slot in slots:
-                key = datetime.strptime(slot, "%d/%m %H:%M")
-                if key not in seen:
-                    seen.add(key)
-                    unique_slots.append(slot)
-
-            user_selection[from_number] = unique_slots
-
-            if unique_slots:
-                msg = "Estos son los próximos turnos disponibles:\n"
-                for idx, slot in enumerate(unique_slots):
-                    msg += f"{idx+1}. {slot}\n"
-                msg += "\nRespondé con el número del turno que querés reservar."
-            else:
-                msg = "No hay turnos disponibles por el momento."
-
-            await send_whatsapp_message(from_number, msg)
-
-        elif user_msg == "2" or "contacto" in user_msg.lower():
-            await send_whatsapp_message(from_number, "Perfecto, en breve nos pondremos en contacto contigo personalmente. 🙌")
-
-        else:
-            await send_whatsapp_message(from_number, "¿Querés reservar un turno? Respondé con '1'. Si preferís que te contactemos, respondé con '2'.")
+                send_whatsapp_message(
+                    phone_number_id=tenant.phone_number_id,
+                    to=from_number,
+                    message="👋 Hola! Puedes escribirme 'turno' para ver disponibilidad o enviar una fecha como '10/06 15:30' para reservar.",
+                    token=tenant.access_token
+                )
+                return {"status": "respuesta enviada"}
 
     except Exception as e:
-        print(f"❌ Error procesando mensaje: {e}")
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-    return {"status": "ok"}
+        print("❌ Error procesando mensaje:", e)
+        traceback.print_exc()
+        return JSONResponse(content={"error": "Error interno"}, status_code=500)
