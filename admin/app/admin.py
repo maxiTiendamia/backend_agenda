@@ -58,9 +58,9 @@ class SecureModelView(ModelView):
 
 class TenantModelView(SecureModelView):
     form_overrides = {'working_hours': WorkingHoursField}
-    column_list = ('id', 'nombre', 'comercio', 'telefono', 'fecha_creada')
+    column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada')
     form_columns = (
-        'nombre', 'apellido', 'comercio', 'telefono',
+        'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
         'calendar_id', 'phone_number_id', 'verify_token',
         'access_token', 'working_hours'
     )
