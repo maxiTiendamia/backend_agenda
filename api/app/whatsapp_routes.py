@@ -12,6 +12,7 @@ import time
 
 USER_STATE_CACHE = {}
 SESSION_TTL = 300  # segundos
+SLOT_DURATION_MINUTES = 40
 
 router = APIRouter()
 
@@ -48,7 +49,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
 
         WELCOME_MESSAGE = (
-            f"✋ Hola! Soy tu asistente virtual para *{tenant.business_name}*\n"
+            f"✋ Hola! Soy tu asistente virtual para *{tenant.comercio}*\n"
             "Escribe \"Turno\" para agendar\n"
             "o \"Ayuda\" para hablar con un asesor."
         )
@@ -75,8 +76,21 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return {"status": "modo humano activado"}
 
         if "turno" in message_text:
-            slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
+            slots = get_available_slots(
+                calendar_id=tenant.calendar_id,
+                credentials_json=GOOGLE_CREDENTIALS_JSON,
+                working_hours_json=tenant.working_hours,
+                duration_minutes=SLOT_DURATION_MINUTES
+            )
             state["slots"] = slots
+            if not slots:
+                await send_whatsapp_message(
+                    to=from_number,
+                    text="⚠️ No hay turnos disponibles en este momento. Intenta más tarde.",
+                    token=tenant.access_token,
+                    phone_number_id=tenant.phone_number_id
+                )
+                return {"status": "sin turnos"}
             response = "📅 Estos son los próximos turnos disponibles:\n"
             for i, slot in enumerate(slots):
                 response += f"🔹 *{i+1}*. {slot}\n"
@@ -102,13 +116,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                     await send_whatsapp_message(
                         to=from_number,
-                        text=f"✅ Tu turno fue reservado con éxito para el {slots[index]}.\nDirección: {tenant.address or '📍 a confirmar con el asesor'}",
+                        text=f"✅ Tu turno fue reservado con éxito para el {slots[index]}.\nDirección: {tenant.direccion or '📍 a confirmar con el asesor'}",
                         token=tenant.access_token,
                         phone_number_id=tenant.phone_number_id
                     )
                     return {"status": "turno reservado", "event_id": event_id}
                 except Exception:
-                    slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
+                    slots = get_available_slots(
+                        calendar_id=tenant.calendar_id,
+                        credentials_json=GOOGLE_CREDENTIALS_JSON,
+                        working_hours_json=tenant.working_hours,
+                        duration_minutes=SLOT_DURATION_MINUTES
+                    )
                     state["slots"] = slots
                     retry_msg = "⚠️ El turno ya no está disponible. Elige otra opción:\n"
                     for i, slot in enumerate(slots):

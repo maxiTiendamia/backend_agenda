@@ -14,8 +14,8 @@ class Tenant(Base):
     fecha_creada = Column(DateTime, default=datetime.utcnow)
     direccion = Column(String(200), nullable=True)
 
-    calendar_id = Column(String(100), nullable=True)
-    phone_number_id = Column(String(100), nullable=True)
-    verify_token = Column(String(100), nullable=True)
-    access_token = Column(String(200), nullable=True)
+    calendar_id = Column(String(400), nullable=True)
+    phone_number_id = Column(String(400), nullable=True)
+    verify_token = Column(String(400), nullable=True)
+    access_token = Column(String(400), nullable=True)
     working_hours = Column(JSON)
