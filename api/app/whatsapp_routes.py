@@ -137,7 +137,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "mensaje bienvenida enviado"}
 
-        return JSONResponse(content={"status": "sin respuesta"})
+        await send_whatsapp_message(
+            to=from_number,
+            text="❓ No entendí tu mensaje. Escribe 'Turno' para agendar o 'Ayuda' para hablar con un asesor.",
+            token=tenant.access_token,
+            phone_number_id=tenant.phone_number_id
+        )
+        return JSONResponse(content={"status": "mensaje no reconocido"})
 
     except Exception as e:
         print("❌ Error general procesando mensaje:", e)
