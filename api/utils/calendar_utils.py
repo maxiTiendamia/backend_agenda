@@ -4,6 +4,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
+URUGUAY_TZ = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 Montevideo
 
 def build_service(service_account_info):
     creds = service_account.Credentials.from_service_account_info(
@@ -12,24 +13,13 @@ def build_service(service_account_info):
     )
     return build('calendar', 'v3', credentials=creds)
 
+
 def get_available_slots(calendar_id, credentials_json, working_hours_json, duration_minutes=30, max_days=7):
-    from googleapiclient.discovery import build
-    import datetime
-    import json
-    from google.oauth2 import service_account
-
-    def build_service(service_account_info):
-        creds = service_account.Credentials.from_service_account_info(
-            json.loads(service_account_info),
-            scopes=['https://www.googleapis.com/auth/calendar']
-        )
-        return build('calendar', 'v3', credentials=creds)
-
     service = build_service(credentials_json)
-    uruguay_tz = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 Montevideo
-    now = datetime.datetime.now(tz=uruguay_tz)
+    now = datetime.datetime.now(tz=URUGUAY_TZ)
     end_date = now + datetime.timedelta(days=max_days)
 
+    # Obtener eventos ocupados
     events_result = service.events().list(
         calendarId=calendar_id,
         timeMin=now.astimezone(datetime.timezone.utc).isoformat(),
@@ -48,6 +38,7 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
             end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00'))
             busy.append((start_dt, end_dt))
 
+    # Parsear y normalizar horarios laborales
     if isinstance(working_hours_json, str):
         try:
             working_hours = json.loads(working_hours_json)
@@ -81,12 +72,12 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
                     period_start = datetime.datetime.combine(
                         current.date(),
                         datetime.datetime.strptime(period['from'], "%H:%M").time(),
-                        tzinfo=uruguay_tz
+                        tzinfo=URUGUAY_TZ
                     )
                     period_end = datetime.datetime.combine(
                         current.date(),
                         datetime.datetime.strptime(period['to'], "%H:%M").time(),
-                        tzinfo=uruguay_tz
+                        tzinfo=URUGUAY_TZ
                     )
 
                     slot = period_start
@@ -103,22 +94,13 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
 
     return available
 
+
 def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes=30):
-    from googleapiclient.discovery import build
-    import datetime
-    import json
-    from google.oauth2 import service_account
-
-    def build_service(service_account_info):
-        creds = service_account.Credentials.from_service_account_info(
-            json.loads(service_account_info),
-            scopes=['https://www.googleapis.com/auth/calendar']
-        )
-        return build('calendar', 'v3', credentials=creds)
-
     service = build_service(service_account_info)
-    uruguay_tz = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 Montevideo
-    dt = datetime.datetime.strptime(slot_str, '%d/%m %H:%M').replace(tzinfo=uruguay_tz)
+    today = datetime.datetime.now(tz=URUGUAY_TZ)
+
+    # Agregar el año actual si no está presente
+    dt = datetime.datetime.strptime(slot_str + f"/{today.year}", "%d/%m %H:%M/%Y").replace(tzinfo=URUGUAY_TZ)
     start_time = dt.isoformat()
     end_time = (dt + datetime.timedelta(minutes=duration_minutes)).isoformat()
 
