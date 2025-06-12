@@ -37,7 +37,22 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
             end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00'))
             busy.append((start_dt, end_dt))
 
-    working_hours = json.loads(working_hours_json)
+    # Convertir JSON string a estructura si es necesario
+    if isinstance(working_hours_json, str):
+        working_hours = json.loads(working_hours_json)
+    else:
+        working_hours = working_hours_json
+
+    # Reestructurar si viene como lista en lugar de dict
+    if isinstance(working_hours, list):
+        normalized = {}
+        for item in working_hours:
+            day = item['day'].lower()
+            if day not in normalized:
+                normalized[day] = []
+            normalized[day].append({"from": item['from'], "to": item['to']})
+        working_hours = normalized
+
     available = []
     current = now
 
@@ -45,8 +60,16 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
         day_str = current.strftime('%A').lower()
         if day_str in working_hours:
             for period in working_hours[day_str]:
-                period_start = datetime.datetime.combine(current.date(), datetime.datetime.strptime(period['from'], "%H:%M").time(), tzinfo=datetime.timezone.utc)
-                period_end = datetime.datetime.combine(current.date(), datetime.datetime.strptime(period['to'], "%H:%M").time(), tzinfo=datetime.timezone.utc)
+                period_start = datetime.datetime.combine(
+                    current.date(),
+                    datetime.datetime.strptime(period['from'], "%H:%M").time(),
+                    tzinfo=datetime.timezone.utc
+                )
+                period_end = datetime.datetime.combine(
+                    current.date(),
+                    datetime.datetime.strptime(period['to'], "%H:%M").time(),
+                    tzinfo=datetime.timezone.utc
+                )
 
                 slot = period_start
                 while slot + datetime.timedelta(minutes=duration_minutes) <= period_end:
