@@ -49,7 +49,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
 
         WELCOME_MESSAGE = (
-            f"✋ Hola! Soy tu asistente virtual para *{tenant.comercio}*\n"
+            f"✋ Hola! Soy el asistente virtual para *{tenant.comercio}*\n"
             "Escribe \"Turno\" para agendar\n"
             "o \"Ayuda\" para hablar con un asesor."
         )
