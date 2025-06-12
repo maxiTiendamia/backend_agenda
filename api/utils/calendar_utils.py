@@ -14,18 +14,20 @@ def build_service(service_account_info):
 
 def get_available_slots(calendar_id, credentials_json, working_hours_json, duration_minutes=30, max_days=7):
     service = build_service(credentials_json)
-    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    uruguay_tz = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 Montevideo
+    now = datetime.datetime.now(tz=uruguay_tz)
     end_date = now + datetime.timedelta(days=max_days)
 
+    # Buscar eventos ocupados
     events_result = service.events().list(
         calendarId=calendar_id,
-        timeMin=now.isoformat(),
-        timeMax=end_date.isoformat(),
+        timeMin=now.astimezone(datetime.timezone.utc).isoformat(),
+        timeMax=end_date.astimezone(datetime.timezone.utc).isoformat(),
         singleEvents=True,
         orderBy='startTime'
     ).execute()
-    events = events_result.get('items', [])
 
+    events = events_result.get('items', [])
     busy = []
     for e in events:
         start = e['start'].get('dateTime') or e['start'].get('date')
@@ -35,24 +37,21 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
             end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00'))
             busy.append((start_dt, end_dt))
 
-    # Convertir JSON string a estructura si es necesario
+    # Cargar y normalizar horarios laborales
     if isinstance(working_hours_json, str):
         try:
             working_hours = json.loads(working_hours_json)
         except json.JSONDecodeError:
-            return []  # formato inválido
+            return []
     else:
         working_hours = working_hours_json
 
-    # Reestructurar si viene como lista en lugar de dict
     if isinstance(working_hours, list):
         normalized = {}
         for item in working_hours:
             if isinstance(item, dict) and 'day' in item and 'from' in item and 'to' in item:
                 day = item['day'].lower()
-                if day not in normalized:
-                    normalized[day] = []
-                normalized[day].append({"from": item['from'], "to": item['to']})
+                normalized.setdefault(day, []).append({"from": item['from'], "to": item['to']})
         working_hours = normalized
 
     available = []
@@ -72,12 +71,12 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
                     period_start = datetime.datetime.combine(
                         current.date(),
                         datetime.datetime.strptime(period['from'], "%H:%M").time(),
-                        tzinfo=datetime.timezone.utc
+                        tzinfo=uruguay_tz
                     )
                     period_end = datetime.datetime.combine(
                         current.date(),
                         datetime.datetime.strptime(period['to'], "%H:%M").time(),
-                        tzinfo=datetime.timezone.utc
+                        tzinfo=uruguay_tz
                     )
 
                     slot = period_start
@@ -96,8 +95,8 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
 
 def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes=30):
     service = build_service(service_account_info)
-    dt = datetime.datetime.strptime(slot_str, '%d/%m %H:%M')
-    dt = dt.replace(tzinfo=datetime.timezone(datetime.timedelta(hours=-3)))  # UTC-3 Montevideo
+    uruguay_tz = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 Montevideo
+    dt = datetime.datetime.strptime(slot_str, '%d/%m %H:%M').replace(tzinfo=uruguay_tz)
     start_time = dt.isoformat()
     end_time = (dt + datetime.timedelta(minutes=duration_minutes)).isoformat()
 
@@ -113,5 +112,11 @@ def create_event(calendar_id, slot_str, user_phone, service_account_info, durati
             'timeZone': 'America/Montevideo',
         },
     }
-    event = service.events().insert(calendarId=calendar_id, body=event).execute()
-    return event.get('id')
+
+    try:
+        created = service.events().insert(calendarId=calendar_id, body=event).execute()
+        print("✅ Evento creado:", created)
+        return created.get('id')
+    except Exception as e:
+        print("❌ Error al crear evento:", e)
+        raise
