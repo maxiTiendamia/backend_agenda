@@ -106,6 +106,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if message_text.isdigit():
             index = int(message_text) - 1
             slots = state.get("slots", [])
+
+            # Si los slots están vacíos (por reinicio u otro motivo), volver a obtenerlos
+            if not slots:
+                slots = get_available_slots(
+                    calendar_id=tenant.calendar_id,
+                    credentials_json=GOOGLE_CREDENTIALS_JSON,
+                    working_hours_json=tenant.working_hours,
+                    duration_minutes=SLOT_DURATION_MINUTES
+                )
+                state["slots"] = slots
+
             if 0 <= index < len(slots):
                 try:
                     event_id = create_event(
