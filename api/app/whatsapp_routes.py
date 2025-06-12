@@ -8,16 +8,17 @@ from utils.message_templates import build_message
 from utils.whatsapp import send_whatsapp_message
 from utils.config import GOOGLE_CREDENTIALS_JSON, VERIFY_TOKEN
 import traceback
+import time
 
 WELCOME_MESSAGE = (
     "✋ Hola! Soy tu asistente virtual.\n"
-    "Responde con:\n"
-    "1. Para ver los turnos disponibles\n"
-    "2. Para solicitar atención personalizada"
+    "Escribe Turno para agendar\n"
+    "o Ayuda para hablar con un asesor."
 )
 
 # Cache temporal en memoria (reinicio borra)
-USER_SLOTS_CACHE = {}
+USER_STATE_CACHE = {}  # {from_number: {"slots": [...], "last_interaction": timestamp, "mode": "bot"|"human"}}
+SESSION_TTL = 300  # segundos
 
 router = APIRouter()
 
@@ -47,35 +48,40 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
         from_number = messages[0]['from']
         message_text = messages[0]['text']['body'].strip().lower()
-
         phone_number_id = value.get("metadata", {}).get("phone_number_id")
-        print("🔍 phone_number_id recibido:", phone_number_id)
-
-        if not phone_number_id:
-            return JSONResponse(content={"error": "phone_number_id no encontrado"}, status_code=400)
 
         tenant = db.query(Tenant).filter_by(phone_number_id=phone_number_id).first()
-
         if not tenant:
             return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
 
-        if not GOOGLE_CREDENTIALS_JSON:
-            return JSONResponse(content={"error": "Credenciales de Google faltantes"}, status_code=500)
+        # Obtener o resetear sesión
+        now = time.time()
+        state = USER_STATE_CACHE.get(from_number)
+        if not state or now - state.get("last_interaction", 0) > SESSION_TTL:
+            state = {"slots": [], "last_interaction": now, "mode": "bot"}
+            USER_STATE_CACHE[from_number] = state
+        else:
+            state["last_interaction"] = now
 
-        # 1 - Mensaje de bienvenida
-        if message_text in ["hola", "hola!", "buenas", "buenos días", "buenas tardes", "buenas noches"]:
+        # No responder si está en modo humano
+        if state.get("mode") == "human":
+            return {"status": "modo humano - sin respuesta"}
+
+        # Ayuda -> cambiar a modo humano
+        if "ayuda" in message_text:
+            state["mode"] = "human"
             await send_whatsapp_message(
                 to=from_number,
-                text=WELCOME_MESSAGE,
+                text="🚪 Un asesor te responderá a la brevedad.",
                 token=tenant.access_token,
                 phone_number_id=tenant.phone_number_id
             )
-            return {"status": "mensaje de bienvenida enviado"}
+            return {"status": "modo humano activado"}
 
-        # 2 - Ver disponibilidad
-        if message_text == "1":
+        # Turno -> mostrar disponibilidad
+        if "turno" in message_text:
             slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
-            USER_SLOTS_CACHE[from_number] = slots  # guardamos por contacto
+            state["slots"] = slots
             response = "📅 Estos son los próximos turnos disponibles:\n"
             for i, slot in enumerate(slots):
                 response += f"{i+1}. {slot}\n"
@@ -86,23 +92,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 token=tenant.access_token,
                 phone_number_id=tenant.phone_number_id
             )
-            return {"status": "disponibilidad enviada"}
+            return {"status": "slots enviados"}
 
-        # 3 - Atención personalizada
-        if message_text == "2":
-            await send_whatsapp_message(
-                to=from_number,
-                text="🚪 Un asesor te responderá a la brevedad.",
-                token=tenant.access_token,
-                phone_number_id=tenant.phone_number_id
-            )
-            return {"status": "mensaje de atención enviado"}
-
-        # 4 - Reserva por número
+        # Responder con número para reservar
         if message_text.isdigit():
             index = int(message_text) - 1
-            slots = USER_SLOTS_CACHE.get(from_number)
-            if slots and 0 <= index < len(slots):
+            slots = state.get("slots", [])
+            if 0 <= index < len(slots):
                 try:
                     event_id = create_event(
                         calendar_id=tenant.calendar_id,
@@ -117,12 +113,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         phone_number_id=tenant.phone_number_id
                     )
                     return {"status": "turno reservado", "event_id": event_id}
-                except Exception as e:
-                    print("❌ Error creando evento:", e)
-                    traceback.print_exc()
+                except Exception:
                     slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
-                    USER_SLOTS_CACHE[from_number] = slots
-                    retry_msg = "⚠️ El turno seleccionado ya no está disponible. Elige otra opción:\n"
+                    state["slots"] = slots
+                    retry_msg = "⚠️ El turno ya no está disponible. Elige otra opción:\n"
                     for i, slot in enumerate(slots):
                         retry_msg += f"{i+1}. {slot}\n"
                     await send_whatsapp_message(
@@ -133,14 +127,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                     return JSONResponse(content={"error": "Turno ocupado"}, status_code=409)
 
-        # 5 - Mensaje genérico por default
-        await send_whatsapp_message(
-            to=from_number,
-            text="👋 Puedes escribir '1' para ver turnos o '2' para atención personalizada.",
-            token=tenant.access_token,
-            phone_number_id=tenant.phone_number_id
-        )
-        return {"status": "mensaje default enviado"}
+        # Si es el primer mensaje de una nueva sesión
+        if not state["slots"] and state["mode"] == "bot":
+            await send_whatsapp_message(
+                to=from_number,
+                text=WELCOME_MESSAGE,
+                token=tenant.access_token,
+                phone_number_id=tenant.phone_number_id
+            )
+            return {"status": "mensaje bienvenida enviado"}
+
+        return JSONResponse(content={"status": "sin respuesta"})
 
     except Exception as e:
         print("❌ Error general procesando mensaje:", e)
