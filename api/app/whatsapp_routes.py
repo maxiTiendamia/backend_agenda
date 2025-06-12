@@ -10,14 +10,7 @@ from utils.config import GOOGLE_CREDENTIALS_JSON, VERIFY_TOKEN
 import traceback
 import time
 
-WELCOME_MESSAGE = (
-    "✋ Hola! Soy tu asistente virtual.\n"
-    "Escribe Turno para agendar\n"
-    "o Ayuda para hablar con un asesor."
-)
-
-# Cache temporal en memoria (reinicio borra)
-USER_STATE_CACHE = {}  # {from_number: {"slots": [...], "last_interaction": timestamp, "mode": "bot"|"human"}}
+USER_STATE_CACHE = {}
 SESSION_TTL = 300  # segundos
 
 router = APIRouter()
@@ -54,7 +47,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if not tenant:
             return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
 
-        # Obtener o resetear sesión
+        WELCOME_MESSAGE = (
+            f"✋ Hola! Soy tu asistente virtual para *{tenant.business_name}*\n"
+            "Escribe \"Turno\" para agendar\n"
+            "o \"Ayuda\" para hablar con un asesor."
+        )
+
         now = time.time()
         state = USER_STATE_CACHE.get(from_number)
         if not state or now - state.get("last_interaction", 0) > SESSION_TTL:
@@ -63,11 +61,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         else:
             state["last_interaction"] = now
 
-        # No responder si está en modo humano
         if state.get("mode") == "human":
             return {"status": "modo humano - sin respuesta"}
 
-        # Ayuda -> cambiar a modo humano
         if "ayuda" in message_text:
             state["mode"] = "human"
             await send_whatsapp_message(
@@ -78,14 +74,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "modo humano activado"}
 
-        # Turno -> mostrar disponibilidad
         if "turno" in message_text:
             slots = get_available_slots(tenant.calendar_id, GOOGLE_CREDENTIALS_JSON)
             state["slots"] = slots
             response = "📅 Estos son los próximos turnos disponibles:\n"
             for i, slot in enumerate(slots):
-                response += f"{i+1}. {slot}\n"
-            response += "\nResponde con el número del turno que prefieras."
+                response += f"🔹 *{i+1}*. {slot}\n"
+            response += "\nResponde con el *número* del turno que prefieras."
             await send_whatsapp_message(
                 to=from_number,
                 text=response,
@@ -94,7 +89,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "slots enviados"}
 
-        # Responder con número para reservar
         if message_text.isdigit():
             index = int(message_text) - 1
             slots = state.get("slots", [])
@@ -108,7 +102,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                     await send_whatsapp_message(
                         to=from_number,
-                        text=f"✅ Tu turno fue reservado con éxito para el {slots[index]}",
+                        text=f"✅ Tu turno fue reservado con éxito para el {slots[index]}.\nDirección: {tenant.address or '📍 a confirmar con el asesor'}",
                         token=tenant.access_token,
                         phone_number_id=tenant.phone_number_id
                     )
@@ -118,7 +112,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["slots"] = slots
                     retry_msg = "⚠️ El turno ya no está disponible. Elige otra opción:\n"
                     for i, slot in enumerate(slots):
-                        retry_msg += f"{i+1}. {slot}\n"
+                        retry_msg += f"🔹 *{i+1}*. {slot}\n"
                     await send_whatsapp_message(
                         to=from_number,
                         text=retry_msg,
@@ -127,7 +121,15 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                     return JSONResponse(content={"error": "Turno ocupado"}, status_code=409)
 
-        # Si es el primer mensaje de una nueva sesión
+        if any(x in message_text for x in ["gracias", "chau", "chao", "nos vemos"]):
+            await send_whatsapp_message(
+                to=from_number,
+                text="😊 ¡Gracias por tu mensaje! Que tengas un buen día!",
+                token=tenant.access_token,
+                phone_number_id=tenant.phone_number_id
+            )
+            return {"status": "respuesta de despedida"}
+
         if not state["slots"] and state["mode"] == "bot":
             await send_whatsapp_message(
                 to=from_number,
@@ -139,7 +141,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
         await send_whatsapp_message(
             to=from_number,
-            text="❓ No entendí tu mensaje. Escribe 'Turno' para agendar o 'Ayuda' para hablar con un asesor.",
+            text="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con un asesor.",
             token=tenant.access_token,
             phone_number_id=tenant.phone_number_id
         )
