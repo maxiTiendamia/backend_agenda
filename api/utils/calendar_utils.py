@@ -5,14 +5,12 @@ from googleapiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-
 def build_service(service_account_info):
     creds = service_account.Credentials.from_service_account_info(
         json.loads(service_account_info),
         scopes=SCOPES
     )
     return build('calendar', 'v3', credentials=creds)
-
 
 def get_available_slots(calendar_id, credentials_json, working_hours_json, duration_minutes=30, max_days=7):
     service = build_service(credentials_json)
@@ -64,6 +62,12 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
         day_str = current.strftime('%A').lower()
         if day_str in working_hours:
             for period in working_hours[day_str]:
+                if isinstance(period, str) and '-' in period:
+                    from_str, to_str = period.split('-')
+                    period = {'from': from_str.strip(), 'to': to_str.strip()}
+                elif not isinstance(period, dict):
+                    print(f"❌ Periodo inválido: {period}")
+                    continue
                 try:
                     period_start = datetime.datetime.combine(
                         current.date(),
@@ -89,7 +93,6 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
         current += datetime.timedelta(days=1)
 
     return available
-
 
 def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes=30):
     service = build_service(service_account_info)
