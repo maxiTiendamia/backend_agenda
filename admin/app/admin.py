@@ -3,7 +3,7 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template
 from wtforms import Field
-from app.models import Tenant
+from app.models import Tenant, Servicio, Empleado
 from app.database import db
 import json
 
@@ -89,4 +89,7 @@ def init_admin(app, db):
         template_mode="bootstrap4"
     )
     admin.add_view(TenantModelView(Tenant, db.session, name="Clientes"))
+    admin.add_view(ModelView(Servicio, db.session, name="Servicios"))
+    admin.add_view(ModelView(Empleado, db.session, name="Empleados"))
     print("✅ Panel de administración inicializado")
+

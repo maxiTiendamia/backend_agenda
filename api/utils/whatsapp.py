@@ -20,4 +20,20 @@ async def send_whatsapp_message(to: str, text: str, token: str, phone_number_id:
         print("📬 Respuesta de WhatsApp:", response.status_code, response.text)
         return response.json()
 
+def obtener_texto(data):
+    try:
+        return data['entry'][0]['changes'][0]['value']['messages'][0]['text']['body']
+    except (KeyError, IndexError):
+        return None
 
+def obtener_phone_number_id(data):
+    try:
+        return data['entry'][0]['changes'][0]['value']['metadata']['phone_number_id']
+    except (KeyError, IndexError):
+        return None
+
+def obtener_numero_cliente(data):
+    try:
+        return data['entry'][0]['changes'][0]['value']['messages'][0]['from']
+    except (KeyError, IndexError):
+        return None
