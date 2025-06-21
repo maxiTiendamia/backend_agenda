@@ -4,7 +4,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
-URUGUAY_TZ = datetime.timezone(datetime.timedelta(hours=-3))
+URUGUAY_TZ = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 Montevideo
 
 def build_service(service_account_info):
     creds = service_account.Credentials.from_service_account_info(
@@ -13,11 +13,13 @@ def build_service(service_account_info):
     )
     return build('calendar', 'v3', credentials=creds)
 
+
 def get_available_slots(calendar_id, credentials_json, working_hours_json, duration_minutes=30, max_days=7):
     service = build_service(credentials_json)
     now = datetime.datetime.now(tz=URUGUAY_TZ)
     end_date = now + datetime.timedelta(days=max_days)
 
+    # Obtener eventos ocupados
     events_result = service.events().list(
         calendarId=calendar_id,
         timeMin=now.astimezone(datetime.timezone.utc).isoformat(),
@@ -36,6 +38,7 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
             end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00'))
             busy.append((start_dt, end_dt))
 
+    # Parsear y normalizar horarios laborales
     if isinstance(working_hours_json, str):
         try:
             working_hours = json.loads(working_hours_json)
@@ -63,6 +66,7 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
                     from_str, to_str = period.split('-')
                     period = {'from': from_str.strip(), 'to': to_str.strip()}
                 elif not isinstance(period, dict):
+                    print(f"❌ Periodo inválido: {period}")
                     continue
                 try:
                     period_start = datetime.datetime.combine(
@@ -84,21 +88,24 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
                             available.append(slot.strftime('%d/%m %H:%M'))
                         slot += datetime.timedelta(minutes=duration_minutes)
                 except Exception as e:
+                    print(f"❌ Error procesando franja horaria: {e}")
                     continue
         current += datetime.timedelta(days=1)
 
     return available
 
-def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes=30, nombre_cliente="Cliente"):
+
+def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes=30):
     service = build_service(service_account_info)
     today = datetime.datetime.now(tz=URUGUAY_TZ)
 
+    # Agregar el año actual si no está presente
     dt = datetime.datetime.strptime(slot_str + f"/{today.year}", "%d/%m %H:%M/%Y").replace(tzinfo=URUGUAY_TZ)
     start_time = dt.isoformat()
     end_time = (dt + datetime.timedelta(minutes=duration_minutes)).isoformat()
 
     event = {
-        'summary': f'Turno para {nombre_cliente}',
+        'summary': 'Turno reservado',
         'description': f'Reservado automáticamente para {user_phone}',
         'start': {
             'dateTime': start_time,
@@ -117,13 +124,3 @@ def create_event(calendar_id, slot_str, user_phone, service_account_info, durati
     except Exception as e:
         print("❌ Error al crear evento:", e)
         raise
-
-def eliminar_evento(calendar_id, evento_id, service_account_info):
-    service = build_service(service_account_info)
-    try:
-        service.events().delete(calendarId=calendar_id, eventId=evento_id).execute()
-        print("🗑️ Evento eliminado exitosamente.")
-        return True
-    except Exception as e:
-        print("❌ Error al eliminar evento:", e)
-        return False
