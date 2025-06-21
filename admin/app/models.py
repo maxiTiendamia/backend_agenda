@@ -1,4 +1,3 @@
-from app.database import db
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, TIMESTAMP
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import relationship
