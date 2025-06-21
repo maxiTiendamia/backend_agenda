@@ -1,6 +1,6 @@
+from app.database import db
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, TIMESTAMP, JSON
 from sqlalchemy.orm import relationship
-from .db_core import Base
 
 class Tenant(Base):
     __tablename__ = "tenants"
@@ -17,7 +17,7 @@ class Tenant(Base):
     direccion = Column(String(200))
     working_hours = Column(JSON)
 
-class Servicio(Base):
+class Servicio():
     __tablename__ = "servicios"
     id = Column(Integer, primary_key=True)
     tenant_id = Column(Integer, ForeignKey('tenants.id'))
@@ -25,14 +25,14 @@ class Servicio(Base):
     precio = Column(Float)
     duracion = Column(Integer)
 
-class Empleado(Base):
+class Empleado():
     __tablename__ = "empleados"
     id = Column(Integer, primary_key=True)
     tenant_id = Column(Integer, ForeignKey('tenants.id'))
     nombre = Column(String(100))
     calendar_id = Column(String(200))
 
-class Reserva(Base):
+class Reserva():
     __tablename__ = "reservas"
     id = Column(String(10), primary_key=True)
     tenant_id = Column(Integer, ForeignKey('tenants.id'))
