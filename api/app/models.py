@@ -14,11 +14,9 @@ class Tenant(Base):
     telefono = Column(String(20), nullable=True)
     fecha_creada = Column(DateTime, default=datetime.utcnow)
     direccion = Column(String(200), nullable=True)
-    calendar_id = Column(String(400), nullable=True)
     phone_number_id = Column(String(400), nullable=True)
     verify_token = Column(String(400), nullable=True)
     access_token = Column(String(400), nullable=True)
-    working_hours = Column(JSON)
 
     servicios = relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")
