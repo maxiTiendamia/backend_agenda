@@ -1,6 +1,4 @@
-{% extends admin_base_template %}
-
-{% block body %}
+{% extends admin_base_template %} {% block body %}
 <div class="container mt-4">
   <h2>📊 Panel de control</h2>
 
@@ -44,6 +42,47 @@
               {% endfor %}
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row mt-4">
+    <div class="col-md-12">
+      <div class="card shadow-sm">
+        <div class="card-header">📖 Historial de reservas recientes</div>
+        <div class="card-body">
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Cliente</th>
+                <th>Empleado</th>
+                <th>Servicio</th>
+                <th>Fecha</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for reserva in reservas %}
+              <tr>
+                <td>{{ reserva.fake_id }}</td>
+                <td>{{ reserva.cliente_nombre }}</td>
+                <td>{{ reserva.empleado_nombre }}</td>
+                <td>{{ reserva.servicio }}</td>
+                <td>{{ reserva.fecha_reserva.strftime('%d/%m/%Y %H:%M') }}</td>
+                <td>{{ reserva.estado }}</td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="6">Sin reservas aún.</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <a href="/admin/reserva/" class="btn btn-primary"
+            >Ver historial completo y filtrar</a
+          >
         </div>
       </div>
     </div>

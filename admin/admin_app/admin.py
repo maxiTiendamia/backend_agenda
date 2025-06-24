@@ -3,7 +3,7 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template
 from wtforms import Field
-from admin_app.models import Tenant, Empleado, Servicio
+from admin_app.models import Tenant, Empleado, Servicio, Reserva
 from admin_app.database import db
 import json
 from sqlalchemy.exc import IntegrityError
@@ -89,15 +89,23 @@ class SecureAdminIndexView(AdminIndexView):
     def index(self):
         total_clientes = Tenant.query.count()
         ultimos_clientes = Tenant.query.order_by(Tenant.fecha_creada.desc()).limit(5).all()
+        reservas = Reserva.query.order_by(Reserva.fecha_reserva.desc()).limit(20).all()
         return self.render('admin/custom_index.html',
                            total_clientes=total_clientes,
-                           ultimos_clientes=ultimos_clientes)
+                           ultimos_clientes=ultimos_clientes,
+                           reservas=reservas)
 
     def is_accessible(self):
         return basic_auth.authenticate()
 
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
+
+class ReservaModelView(SecureModelView):
+    column_searchable_list = ['cliente_nombre', 'cliente_telefono', 'empleado_nombre', 'servicio']
+    column_filters = ['cliente_nombre', 'empleado_nombre', 'servicio', 'estado']
+    column_list = ('id', 'fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
+    form_columns = ('fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
 
 def init_admin(app, db):
     basic_auth.init_app(app)
@@ -108,4 +116,5 @@ def init_admin(app, db):
         template_mode="bootstrap4"
     )
     admin.add_view(TenantModelView(Tenant, db.session, name="Clientes"))
+    admin.add_view(ReservaModelView(Reserva, db.session, name="Reservas"))  # <-- Agrega esta línea
     print("✅ Panel de administración inicializado")
