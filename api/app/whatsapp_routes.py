@@ -330,6 +330,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             state.clear()
             return {"status": "turno reservado", "fake_id": fake_id}
         
+        state.clear()
+        state["step"] = "welcome"
+        state["mode"] = "bot"
         await send_whatsapp_message(
             to=from_number,
             text="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con un asesor.",
