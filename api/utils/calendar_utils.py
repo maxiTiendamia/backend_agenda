@@ -107,7 +107,7 @@ def create_event(calendar_id, slot_str, user_phone, service_account_info, durati
     end_time = (dt + datetime.timedelta(minutes=duration_minutes)).isoformat()
 
     event = {
-        'summary': {client_service},
+        'summary': client_service,
         'description': f'Reservado automáticamente para {user_phone}',
         'start': {
             'dateTime': start_time,

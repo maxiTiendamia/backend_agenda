@@ -149,7 +149,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return {"status": "sin servicios"}
             msg = "¿Qué servicio deseas reservar?\n"
             for i, s in enumerate(servicios, 1):
-                msg += f"{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
             msg += "\nResponde con el número del servicio."
             await send_whatsapp_message(
                 to=from_number,
@@ -178,7 +178,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     return {"status": "sin empleados"}
                 msg = f"¿Con qué empleado?\n"
                 for i, e in enumerate(empleados, 1):
-                    msg += f"{i}. {e.nombre}\n"
+                    msg += f"🔹{i}. {e.nombre}\n"
                 msg += "\nResponde con el número del empleado."
                 await send_whatsapp_message(
                     to=from_number,
@@ -223,7 +223,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     return {"status": "sin turnos"}
                 msg = "¿Qué turno prefieres?\n"
                 for i, slot in enumerate(slots, 1):
-                    msg += f"{i}. {slot}\n"
+                    msg += f"🔹{i}. {slot}\n"
                 msg += "\nResponde con el número del turno."
                 await send_whatsapp_message(
                     to=from_number,
