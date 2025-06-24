@@ -90,10 +90,17 @@ class SecureAdminIndexView(AdminIndexView):
         total_clientes = Tenant.query.count()
         ultimos_clientes = Tenant.query.order_by(Tenant.fecha_creada.desc()).limit(5).all()
         reservas = Reserva.query.order_by(Reserva.fecha_reserva.desc()).limit(20).all()
+        # Gráfico de reservas por estado
+        estados = [r.estado for r in Reserva.query.all()]
+        counter = Counter(estados)
+        estados_reservas = list(counter.keys())
+        cantidad_por_estado = list(counter.values())
         return self.render('admin/custom_index.html',
                            total_clientes=total_clientes,
                            ultimos_clientes=ultimos_clientes,
-                           reservas=reservas)
+                           reservas=reservas,
+                           estados_reservas=estados_reservas,
+                           cantidad_por_estado=cantidad_por_estado)
 
     def is_accessible(self):
         return basic_auth.authenticate()
@@ -102,6 +109,10 @@ class SecureAdminIndexView(AdminIndexView):
         return basic_auth.challenge()
 
 class ReservaModelView(SecureModelView):
+    can_create = False
+    can_edit = False
+    can_delete = False
+    can_view_details = True
     column_searchable_list = ['cliente_nombre', 'cliente_telefono', 'empleado_nombre', 'servicio']
     column_filters = ['cliente_nombre', 'empleado_nombre', 'servicio', 'estado']
     column_list = ('id', 'fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
