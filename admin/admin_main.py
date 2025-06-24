@@ -1,10 +1,10 @@
 from flask import Flask
-from app.database import init_db, db
-from app.admin import init_admin
+from admin_app.database import init_db, db
+from admin_app.admin import init_admin
 import os
 
 # Especificar carpeta de templates
-template_dir = os.path.join(os.path.dirname(__file__), 'app', 'templates')
+template_dir = os.path.join(os.path.dirname(__file__), 'admin_app', 'templates')
 app = Flask(__name__, template_folder=template_dir)
 
 # Configuración base

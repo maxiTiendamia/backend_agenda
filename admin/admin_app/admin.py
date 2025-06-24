@@ -3,13 +3,16 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template
 from wtforms import Field
-from app.models import Tenant
-from app.database import db
+from admin_app.models import Tenant, Empleado, Servicio
+from admin_app.database import db
 import json
+from sqlalchemy.exc import IntegrityError
+
+print("✅ Servicio:", Servicio.tenant.property.back_populates)
+
 
 basic_auth = BasicAuth()
 
-# Widget personalizado para editar horarios laborales
 class WorkingHoursWidget:
     def __call__(self, field, **kwargs):
         days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -58,12 +61,29 @@ class SecureModelView(ModelView):
 
 class TenantModelView(SecureModelView):
     form_overrides = {'working_hours': WorkingHoursField}
+    inline_models = [
+    (Servicio, dict(form_columns=['id', 'nombre', 'precio', 'duracion'])),
+    (Empleado, dict(
+        form_overrides={'working_hours': WorkingHoursField},
+        form_columns=['id', 'nombre', 'calendar_id', 'working_hours']
+    ))
+    ]
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada')
     form_columns = (
-        'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
-        'calendar_id', 'phone_number_id', 'verify_token',
-        'access_token', 'working_hours'
+        'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'phone_number_id', 'verify_token',
+        'access_token'
     )
+    
+    def on_model_change(self, form, model, is_created):
+        try:
+            super().on_model_change(form, model, is_created)
+        except IntegrityError as e:
+            db.session.rollback()
+            if 'tenants_telefono_key' in str(e):
+                flash('⚠️ Ya existe un cliente con ese número de teléfono.', 'error')
+            else:
+                flash(f'⚠️ Error inesperado: {e}', 'error')
+            raise
 
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
