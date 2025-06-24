@@ -190,6 +190,22 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["servicio_id"] = servicio_id
                 state["empleados"] = [e.id for e in empleados]
                 return {"status": "empleados enviados"}
+            else:
+                # Resetea el estado y vuelve a mostrar los servicios
+                servicios = tenant.servicios
+                msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
+                for i, s in enumerate(servicios, 1):
+                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                msg += "\nResponde con el número del servicio."
+                await send_whatsapp_message(
+                    to=from_number,
+                    text=msg,
+                    token=ACCESS_TOKEN,
+                    phone_number_id=tenant.phone_number_id
+                    )
+                state["step"] = "waiting_servicio"
+                state["servicios"] = [s.id for s in servicios]
+                return {"status": "servicio inválido"}
 
         if state.get("step") == "waiting_empleado" and message_text.isdigit():
             idx = int(message_text) - 1
@@ -235,6 +251,22 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["empleado_id"] = empleado_id
                 state["slots"] = slots_mostrar
                 return {"status": "turnos enviados"}
+            else:
+                # Opción inválida, vuelve a mostrar la lista de empleados
+                empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+                msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
+                for i, e in enumerate(empleados, 1):
+                    msg += f"🔹{i}. {e.nombre}\n"
+                msg += "\nResponde con el número del empleado."
+                await send_whatsapp_message(
+                    to=from_number,
+                    text=msg,
+                    token=ACCESS_TOKEN,
+                    phone_number_id=tenant.phone_number_id
+                    )
+                state["step"] = "waiting_empleado"
+                state["empleados"] = [e.id for e in empleados]
+                return {"status": "empleado inválido"}
         
         if state.get("step") == "waiting_turno_final" and message_text.isdigit():
             idx = int(message_text) - 1
