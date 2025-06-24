@@ -97,6 +97,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     service_account_info=GOOGLE_CREDENTIALS_JSON
                     )
                 if exito:
+                    reserva.estado = "cancelado"
                     db.delete(reserva)
                     db.commit()
                     await send_whatsapp_message(
@@ -260,7 +261,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     user_phone=from_number,
                     service_account_info=GOOGLE_CREDENTIALS_JSON,
                     duration_minutes=servicio.duracion,
-                    client_service = f"Cliente: {cliente_nombre or ''} - Tel: {user_phone} - Servicio: {servicio.nombre}"
+                    client_service = f"Cliente: {nombre_apellido or ''} - Tel: {from_number} - Servicio: {servicio.nombre}"
                 )
                 fake_id = generar_fake_id()
                 reserva = Reserva(
