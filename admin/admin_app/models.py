@@ -13,8 +13,6 @@ class Tenant(db.Model):
     fecha_creada = db.Column(db.DateTime, default=datetime.utcnow)
     direccion = db.Column(db.String(200), nullable=True)
     phone_number_id = db.Column(db.String(400), nullable=True)
-    verify_token = db.Column(db.String(400), nullable=True)
-    access_token = db.Column(db.String(400), nullable=True)
 
     servicios = db.relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = db.relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")

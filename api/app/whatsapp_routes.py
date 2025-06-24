@@ -16,6 +16,7 @@ USER_STATE_CACHE = {}
 SESSION_TTL = 600  # 10 minutos
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
 
 @router.get("/webhook")
 async def verify_webhook(request: Request):
@@ -62,7 +63,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             await send_whatsapp_message(
                 to=from_number,
                 text="😊 ¡Gracias por tu mensaje! Que tengas un buen día!",
-                token=tenant.access_token,
+                token=ACCESS_TOKEN,
                 phone_number_id=tenant.phone_number_id
             )
             return {"status": "respuesta de despedida"}
@@ -72,7 +73,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             await send_whatsapp_message(
                 to=from_number,
                 text="🚪 Un asesor te responderá a la brevedad.",
-                token=tenant.access_token,
+                token=ACCESS_TOKEN,
                 phone_number_id=tenant.phone_number_id
             )
             return {"status": "modo humano activado"}
@@ -90,7 +91,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     await send_whatsapp_message(
                         to=from_number,
                         text="✅ Tu turno fue cancelado correctamente.",
-                        token=tenant.access_token,
+                        token=ACCESS_TOKEN,
                         phone_number_id=tenant.phone_number_id
                     )
                     state.clear()
@@ -99,7 +100,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     await send_whatsapp_message(
                         to=from_number,
                         text="❌ No se pudo cancelar el turno. Verifica el ID o intenta más tarde.",
-                        token=tenant.access_token,
+                        token=ACCESS_TOKEN,
                         phone_number_id=tenant.phone_number_id
                     )
                     return {"status": "cancelación fallida"}
@@ -108,7 +109,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 await send_whatsapp_message(
                     to=from_number,
                     text="❌ Error interno al cancelar el turno.",
-                    token=tenant.access_token,
+                    token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
                 )
                 return {"status": "error cancelación"}
@@ -117,7 +118,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             await send_whatsapp_message(
                 to=from_number,
                 text=f"✋ Hola! Soy el asistente virtual para *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor.",
-                token=tenant.access_token,
+                token=ACCESS_TOKEN,
                 phone_number_id=tenant.phone_number_id
             )
             state["step"] = "waiting_turno"
@@ -129,7 +130,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 await send_whatsapp_message(
                     to=from_number,
                     text="⚠️ No hay servicios disponibles.",
-                    token=tenant.access_token,
+                    token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
                 )
                 return {"status": "sin servicios"}
@@ -140,7 +141,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             await send_whatsapp_message(
                 to=from_number,
                 text=msg,
-                token=tenant.access_token,
+                token=ACCESS_TOKEN,
                 phone_number_id=tenant.phone_number_id
             )
             state["step"] = "waiting_servicio"
@@ -158,7 +159,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     await send_whatsapp_message(
                         to=from_number,
                         text="⚠️ No hay empleados disponibles.",
-                        token=tenant.access_token,
+                        token=ACCESS_TOKEN,
                         phone_number_id=tenant.phone_number_id
                     )
                     return {"status": "sin empleados"}
@@ -169,7 +170,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 await send_whatsapp_message(
                     to=from_number,
                     text=msg,
-                    token=tenant.access_token,
+                    token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
                 )
                 state["step"] = "waiting_empleado"
@@ -194,7 +195,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     await send_whatsapp_message(
                         to=from_number,
                         text="⚠️ No hay turnos disponibles para este empleado.",
-                        token=tenant.access_token,
+                        token=ACCESS_TOKEN,
                         phone_number_id=tenant.phone_number_id
                     )
                     return {"status": "sin turnos"}
@@ -205,7 +206,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 await send_whatsapp_message(
                     to=from_number,
                     text=msg,
-                    token=tenant.access_token,
+                    token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
                 )
                 state["step"] = "waiting_turno_final"
@@ -236,7 +237,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         f"Tu ID de reserva es: {event_id}\n"
                         f"Si querés cancelar, escribí: cancelar {event_id}"
                     ),
-                    token=tenant.access_token,
+                    token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
                 )
                 state.clear()
@@ -245,7 +246,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         await send_whatsapp_message(
             to=from_number,
             text="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con un asesor.",
-            token=tenant.access_token,
+            token=ACCESS_TOKEN,
             phone_number_id=tenant.phone_number_id
         )
         return JSONResponse(content={"status": "mensaje no reconocido"})

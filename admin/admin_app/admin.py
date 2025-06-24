@@ -70,8 +70,7 @@ class TenantModelView(SecureModelView):
     ]
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada')
     form_columns = (
-        'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'phone_number_id', 'verify_token',
-        'access_token'
+        'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'phone_number_id'
     )
     
     def on_model_change(self, form, model, is_created):

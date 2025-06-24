@@ -1,7 +1,6 @@
 import os
 import json
 
-ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ADMIN_USER = os.environ.get("ADMIN_USER", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -10,6 +9,7 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "")
 SECRET_KEY = os.environ.get("SECRET_KEY", "")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "")
+ACCESS_TOKEN = os.environ.getenv("ACCESS_TOKEN", "")
 
 CALENDAR_ID = GOOGLE_CALENDAR_ID
 
