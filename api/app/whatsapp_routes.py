@@ -57,9 +57,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         else:
             state["last_interaction"] = now
         
-        if state.get("mode") == "human" and now - state.get("last_interaction", 0) > SESSION_TTL:
-            state["mode"] = "bot"
-            state["step"] = "welcome"
+        # --- Agrega aquí el bloque de modo humano ---
+        if state.get("mode") == "human":
+            if message_text in ["bot", "volver"]:
+                state["mode"] = "bot"
+                state["step"] = "welcome"
+                await send_whatsapp_message(
+                    to=from_number,
+                    text="🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar.",
+                    token=ACCESS_TOKEN,
+                    phone_number_id=tenant.phone_number_id
+                    )
+                return {"status": "modo bot reactivado"}
+            else:
+                return JSONResponse(content={"status": "en modo humano"}, status_code=200)
             
         if any(x in message_text for x in ["gracias", "chau", "chao", "nos vemos"]):
             await send_whatsapp_message(
@@ -287,6 +298,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     phone_number_id=tenant.phone_number_id
                     )
                 return {"status": "pidiendo nombre"}
+            else:
+                msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
+                for i, slot in enumerate(slots, 1):
+                    msg += f"🔹{i}. {slot}\n"
+                    msg += "\nResponde con el número del turno."
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text=msg,
+                        token=ACCESS_TOKEN,
+                        phone_number_id=tenant.phone_number_id
+                        )
+                    state["step"] = "waiting_turno_final"
+                    state["slots"] = slots
+                    return {"status": "turno inválido"}
 
         elif state.get("step") == "waiting_nombre":
             nombre_apellido = message_text.strip().title()
@@ -331,7 +356,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return {"status": "turno reservado", "fake_id": fake_id}
         
         state.clear()
-        state["step"] = "welcome"
+        state["step"] = "waiting_turno"
         state["mode"] = "bot"
         await send_whatsapp_message(
             to=from_number,
