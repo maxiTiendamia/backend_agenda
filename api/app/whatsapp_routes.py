@@ -202,9 +202,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     calendar_id=empleado.calendar_id,
                     credentials_json=GOOGLE_CREDENTIALS_JSON,
                     working_hours_json=empleado.working_hours,
-                    duration_minutes=servicio.duracion
-                )
-                if not slots:
+                    service_duration=servicio.duracion,    
+                    intervalo_entre_turnos=20,             
+                    max_turnos=10
+                    )
+                from datetime import datetime
+                import pytz
+                ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                slots_futuros = [s for s in slots if datetime.strptime(s + f"/{ahora.year}", "%d/%m %H:%M/%Y").replace(tzinfo=ahora.tzinfo) > ahora]
+                # Limitar la cantidad máxima de turnos ofrecidos
+                max_turnos = 10
+                slots_mostrar = slots_futuros[:max_turnos]
+                if not slots_mostrar:
                     await send_whatsapp_message(
                         to=from_number,
                         text="⚠️ No hay turnos disponibles para este empleado.",
@@ -249,48 +258,46 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
         elif state.get("step") == "waiting_nombre":
             nombre_apellido = message_text.strip().title()
-            idx = int(message_text) - 1
-            slots = state.get("slots", [])
-            if 0 <= idx < len(slots):
-                slot = slots[idx]
-                empleado = db.query(Empleado).get(state["empleado_id"])
-                servicio = db.query(Servicio).get(state["servicio_id"])
-                event_id = create_event(
-                    calendar_id=empleado.calendar_id,
-                    slot_str=slot,
-                    user_phone=from_number,
-                    service_account_info=GOOGLE_CREDENTIALS_JSON,
-                    duration_minutes=servicio.duracion,
-                    client_service = f"Cliente: {nombre_apellido or ''} - Tel: {from_number} - Servicio: {servicio.nombre}"
+            slot = state.get("slot")  # El slot ya fue guardado antes
+            empleado = db.query(Empleado).get(state["empleado_id"])
+            servicio = db.query(Servicio).get(state["servicio_id"])
+            event_id = create_event(
+                calendar_id=empleado.calendar_id,
+                slot_str=slot,
+                user_phone=from_number,
+                service_account_info=GOOGLE_CREDENTIALS_JSON,
+                duration_minutes=servicio.duracion,
+                client_service=f"Cliente: {nombre_apellido or ''} - Tel: {from_number} - Servicio: {servicio.nombre}"
                 )
-                fake_id = generar_fake_id()
-                reserva = Reserva(
-                    fake_id=fake_id,
-                    event_id=event_id,
-                    empresa=tenant.comercio,
-                    empleado_id=empleado.id,
-                    empleado_nombre=empleado.nombre,
-                    empleado_calendar_id=empleado.calendar_id,
-                    cliente_nombre=nombre_apellido,  
-                    cliente_telefono=from_number,
-                    servicio=servicio.nombre
-                    )
-                db.add(reserva)
-                db.commit()
-                await send_whatsapp_message(
-                    to=from_number,
-                    text=(
-                        f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot} con {empleado.nombre}.\n"
-                        f"Servicio: {servicio.nombre}\n"
-                        f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
-                        f"\nSi querés cancelar, escribí: cancelar {event_id}"
+            fake_id = generar_fake_id()
+            reserva = Reserva(
+                fake_id=fake_id,
+                event_id=event_id,
+                empresa=tenant.comercio,
+                empleado_id=empleado.id,
+                empleado_nombre=empleado.nombre,
+                empleado_calendar_id=empleado.calendar_id,
+                cliente_nombre=nombre_apellido,
+                cliente_telefono=from_number,
+                servicio=servicio.nombre,
+                estado="activo"
+                )
+            db.add(reserva)
+            db.commit()
+            await send_whatsapp_message(
+                to=from_number,
+                text=(
+                    f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot} con {empleado.nombre}.\n"
+                    f"Servicio: {servicio.nombre}\n"
+                    f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
+                    f"\nSi querés cancelar, escribí: cancelar {fake_id}"
                     ),
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
+                token=ACCESS_TOKEN,
+                phone_number_id=tenant.phone_number_id
                 )
-                state.clear()
-                return {"status": "turno reservado", "event_id": event_id}
-
+            state.clear()
+            return {"status": "turno reservado", "fake_id": fake_id}
+        
         await send_whatsapp_message(
             to=from_number,
             text="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con un asesor.",

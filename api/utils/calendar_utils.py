@@ -14,7 +14,7 @@ def build_service(service_account_info):
     return build('calendar', 'v3', credentials=creds)
 
 
-def get_available_slots(calendar_id, credentials_json, working_hours_json, duration_minutes=30, max_days=7):
+def get_available_slots(calendar_id,credentials_json,working_hours_json,service_duration,intervalo_entre_turnos=20, max_days=7,max_turnos=10):
     service = build_service(credentials_json)
     now = datetime.datetime.now(tz=URUGUAY_TZ)
     end_date = now + datetime.timedelta(days=max_days)
@@ -57,8 +57,9 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
 
     available = []
     current = now
+    turnos_generados = 0
 
-    while current < end_date:
+    while current < end_date and turnos_generados < max_turnos:
         day_str = current.strftime('%A').lower()
         if day_str in working_hours:
             for period in working_hours[day_str]:
@@ -66,7 +67,6 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
                     from_str, to_str = period.split('-')
                     period = {'from': from_str.strip(), 'to': to_str.strip()}
                 elif not isinstance(period, dict):
-                    print(f"❌ Periodo inválido: {period}")
                     continue
                 try:
                     period_start = datetime.datetime.combine(
@@ -80,15 +80,17 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
                         tzinfo=URUGUAY_TZ
                     )
 
-                    slot = period_start
-                    while slot + datetime.timedelta(minutes=duration_minutes) <= period_end:
-                        slot_end = slot + datetime.timedelta(minutes=duration_minutes)
+                    slot = max(current, period_start)
+                    while slot + datetime.timedelta(minutes=service_duration) <= period_end and turnos_generados < max_turnos:
+                        slot_end = slot + datetime.timedelta(minutes=service_duration)
                         overlapping = any(bs < slot_end and be > slot for bs, be in busy)
-                        if not overlapping:
+                        if not overlapping and slot > now:
                             available.append(slot.strftime('%d/%m %H:%M'))
-                        slot += datetime.timedelta(minutes=duration_minutes)
+                            turnos_generados += 1
+                            slot += datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
+                        else:
+                            slot += datetime.timedelta(minutes=5)  # Avanza 5 min si ocupado
                 except Exception as e:
-                    print(f"❌ Error procesando franja horaria: {e}")
                     continue
         current += datetime.timedelta(days=1)
 
