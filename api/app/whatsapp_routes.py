@@ -8,6 +8,7 @@ from api.utils.calendar_utils import get_available_slots, create_event
 import time
 import traceback
 import os
+from api.utils.calendar_utils import cancelar_evento_google
 
 router = APIRouter()
 
@@ -75,7 +76,43 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 phone_number_id=tenant.phone_number_id
             )
             return {"status": "modo humano activado"}
-
+                # --- BLOQUE DE CANCELACIÓN ---
+        if message_text.startswith("cancelar "):
+            reserva_id = message_text.split(" ", 1)[1].strip()
+            try:
+                from api.utils.calendar_utils import cancelar_evento_google  # Ajusta el import si es necesario
+                exito = cancelar_evento_google(
+                    calendar_id=tenant.calendar_id,
+                    reserva_id=reserva_id,
+                    service_account_info=GOOGLE_CREDENTIALS_JSON
+                )
+                if exito:
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text="✅ Tu turno fue cancelado correctamente.",
+                        token=tenant.access_token,
+                        phone_number_id=tenant.phone_number_id
+                    )
+                    state.clear()
+                    return {"status": "turno cancelado"}
+                else:
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text="❌ No se pudo cancelar el turno. Verifica el ID o intenta más tarde.",
+                        token=tenant.access_token,
+                        phone_number_id=tenant.phone_number_id
+                    )
+                    return {"status": "cancelación fallida"}
+            except Exception as e:
+                print("❌ Error al cancelar turno:", e)
+                await send_whatsapp_message(
+                    to=from_number,
+                    text="❌ Error interno al cancelar el turno.",
+                    token=tenant.access_token,
+                    phone_number_id=tenant.phone_number_id
+                )
+                return {"status": "error cancelación"}
+        # --- FIN BLOQUE DE CANCELACIÓN ---
         if state.get("step") == "welcome":
             await send_whatsapp_message(
                 to=from_number,
@@ -192,7 +229,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 )
                 await send_whatsapp_message(
                     to=from_number,
-                    text=f"✅ Tu turno fue reservado con éxito para el {slot} con {empleado.nombre}.\nServicio: {servicio.nombre}\nDirección: {tenant.direccion or '📍 a confirmar con el asesor'}",
+                    text=(
+                        f"✅ Tu turno fue reservado con éxito para el {slot} con {empleado.nombre}.\n"
+                        f"Servicio: {servicio.nombre}\n"
+                        f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
+                        f"Tu ID de reserva es: {event_id}\n"
+                        f"Si querés cancelar, escribí: cancelar {event_id}"
+                    ),
                     token=tenant.access_token,
                     phone_number_id=tenant.phone_number_id
                 )

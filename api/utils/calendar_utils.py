@@ -124,3 +124,25 @@ def create_event(calendar_id, slot_str, user_phone, service_account_info, durati
     except Exception as e:
         print("❌ Error al crear evento:", e)
         raise
+
+def cancelar_evento_google(calendar_id, reserva_id, service_account_info):
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    try:
+        # Si service_account_info es string, conviértelo a dict
+        if isinstance(service_account_info, str):
+            import json
+            service_account_info = json.loads(service_account_info)
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=["https://www.googleapis.com/auth/calendar"]
+        )
+        service = build("calendar", "v3", credentials=credentials)
+        service.events().delete(
+            calendarId=calendar_id,
+            eventId=reserva_id
+        ).execute()
+        return True
+    except Exception as e:
+        print("Error al cancelar evento:", e)
+        return False
