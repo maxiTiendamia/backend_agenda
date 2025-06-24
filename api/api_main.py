@@ -1,10 +1,10 @@
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from fastapi import FastAPI
-from app.models import Tenant
-from app.whatsapp_routes import router as whatsapp_router
+from api.app.models import Tenant
+from api.app.whatsapp_routes import router as whatsapp_router
 from starlette.middleware.cors import CORSMiddleware
 
 app = FastAPI()

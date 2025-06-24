@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.orm import Session
-from app.models import Tenant, Servicio, Empleado
-from app.deps import get_db
-from app.utils.whatsapp import send_whatsapp_message
-from app.utils.calendar_utils import get_available_slots, create_event
+from api.app.models import Tenant, Servicio, Empleado
+from api.app.deps import get_db
+from api.app.utils.whatsapp import send_whatsapp_message
+from api.app.utils.calendar_utils import get_available_slots, create_event
 import time
 import traceback
 import os
