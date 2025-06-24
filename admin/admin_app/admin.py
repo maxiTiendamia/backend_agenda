@@ -7,6 +7,7 @@ from admin_app.models import Tenant, Empleado, Servicio, Reserva
 from admin_app.database import db
 import json
 from sqlalchemy.exc import IntegrityError
+from collections import Counter
 
 print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
