@@ -14,7 +14,7 @@ from api.utils.generador_fake_id import generar_fake_id
 router = APIRouter()
 
 USER_STATE_CACHE = {}
-SESSION_TTL = 600  # 10 minutos
+SESSION_TTL = 300 
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
@@ -56,10 +56,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             USER_STATE_CACHE[from_number] = state
         else:
             state["last_interaction"] = now
-
-        if state.get("mode") == "human":
-            return {"status": "modo humano - sin respuesta"}
-
+        
+        if state.get("mode") == "human" and now - state.get("last_interaction", 0) > SESSION_TTL:
+            state["mode"] = "bot"
+            state["step"] = "welcome"
+            
         if any(x in message_text for x in ["gracias", "chau", "chao", "nos vemos"]):
             await send_whatsapp_message(
                 to=from_number,
@@ -98,7 +99,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                 if exito:
                     reserva.estado = "cancelado"
-                    db.delete(reserva)
                     db.commit()
                     await send_whatsapp_message(
                         to=from_number,
@@ -221,7 +221,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         phone_number_id=tenant.phone_number_id
                     )
                     return {"status": "sin turnos"}
-                msg = "¿Qué turno prefieres?\n"
+                msg = "📅 Estos son los próximos turnos disponibles:\n"
                 for i, slot in enumerate(slots, 1):
                     msg += f"🔹{i}. {slot}\n"
                 msg += "\nResponde con el número del turno."
@@ -233,7 +233,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 )
                 state["step"] = "waiting_turno_final"
                 state["empleado_id"] = empleado_id
-                state["slots"] = slots
+                state["slots"] = slots_mostrar
                 return {"status": "turnos enviados"}
         
         if state.get("step") == "waiting_turno_final" and message_text.isdigit():
