@@ -18,7 +18,26 @@ class Tenant(Base):
 
     servicios = relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")
+    
+class Reserva(Base):
+    __tablename__ = "reservas"
+    id = Column(Integer, primary_key=True)  
+    fake_id = Column(String(12), unique=True, nullable=False)  
+    event_id = Column(String(200), nullable=False) 
+    empresa = Column(String(100), nullable=False)  
+    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=False)
+    empleado_nombre = Column(String(100), nullable=False)
+    empleado_calendar_id = Column(String(200), nullable=False)
+    cliente_nombre = Column(String(100), nullable=False)  
+    cliente_telefono = Column(String(20), nullable=False)
+    fecha_reserva = Column(DateTime, default=datetime.utcnow)
+    servicio = Column(String(150), nullable=False)
+    estado = Column(String(20), nullable=False, default="activo") 
 
+    empleado = relationship('Empleado')
+
+    def __repr__(self):
+        return f"<Reserva {self.fake_id} - {self.empresa} - {self.empleado_nombre}>"
 class Servicio(Base):
     __tablename__ = "servicios"
     id = Column(Integer, primary_key=True)

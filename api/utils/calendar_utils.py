@@ -95,7 +95,7 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, durat
     return available
 
 
-def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes=30):
+def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes,client_service):
     service = build_service(service_account_info)
     today = datetime.datetime.now(tz=URUGUAY_TZ)
 
@@ -105,7 +105,7 @@ def create_event(calendar_id, slot_str, user_phone, service_account_info, durati
     end_time = (dt + datetime.timedelta(minutes=duration_minutes)).isoformat()
 
     event = {
-        'summary': 'Turno reservado',
+        'summary': {client_service},
         'description': f'Reservado automáticamente para {user_phone}',
         'start': {
             'dateTime': start_time,

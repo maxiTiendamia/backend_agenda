@@ -1,6 +1,9 @@
 from datetime import datetime
 from admin_app.database import db
 from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy.orm import relationship
+
 
 class Tenant(db.Model):
     __tablename__ = "tenants"
@@ -20,6 +23,25 @@ class Tenant(db.Model):
     def __repr__(self):
         return f"<Tenant {self.nombre}>"
 
+class Reserva(db.Model):
+    __tablename__ = "reservas"
+    id = db.Column(Integer, primary_key=True)  
+    fake_id = db.Column(String(12), unique=True, nullable=False) 
+    event_id = db.Column(String(200), nullable=False)  
+    empresa = db.Column(String(100), nullable=False) 
+    empleado_id = db.Column(Integer, ForeignKey('empleados.id'), nullable=False)
+    empleado_nombre = db.Column(String(100), nullable=False)
+    empleado_calendar_id = db.Column(String(200), nullable=False)
+    cliente_nombre = db.Column(String(100), nullable=False) 
+    cliente_telefono = db.Column(String(20), nullable=False)
+    fecha_reserva = db.Column(DateTime, default=datetime.utcnow)
+    servicio = db.Column(String(150), nullable=False)
+    estado = db.Column(String(20), nullable=False, default="activo") 
+
+    empleado = relationship('Empleado')
+
+    def __repr__(self):
+        return f"<Reserva {self.fake_id} - {self.empresa} - {self.empleado_nombre}>"
 
 class Servicio(db.Model):
     __tablename__ = "servicios"
