@@ -348,49 +348,64 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return {"status": "turno inválido"}
 
         elif state.get("step") == "waiting_nombre":
-            from datetime import datetime
+            from datetime import datetime, timedelta
+            from api.utils.calendar_utils import build_service  
+
             nombre_apellido = message_text.strip().title()
-            slot = state.get("slot")  # El slot ya fue guardado antes
+            slot = state.get("slot")
             empleado = db.query(Empleado).get(state["empleado_id"])
             servicio = db.query(Servicio).get(state["servicio_id"])
             
-            # --- Verificación final de disponibilidad ---
-            # Vuelve a obtener los turnos disponibles en este instante
-            slots_actuales = get_available_slots(
-                calendar_id=empleado.calendar_id,
-                credentials_json=GOOGLE_CREDENTIALS_JSON,
-                working_hours_json=empleado.working_hours,
-                service_duration=servicio.duracion,
-                intervalo_entre_turnos=20,
-                max_turnos=50  # suficiente para cubrir todos los posibles
-                )
-            # El slot elegido sigue disponible?
-            if slot not in slots_actuales:
-                # Turno ya no disponible
+            # --- Verificación precisa de disponibilidad del slot elegido ---
+            service = build_service(GOOGLE_CREDENTIALS_JSON)
+            start_time = slot.isoformat()
+            end_time = (slot + timedelta(minutes=servicio.duracion)).isoformat()
+            
+            events_result = service.events().list(
+                calendarId=empleado.calendar_id,
+                timeMin=start_time,
+                timeMax=end_time,
+                singleEvents=True
+                ).execute()
+            events = events_result.get('items', [])
+            
+            if events:
+                # Turno ya ocupado, obtener slots nuevamente
+                slots_actuales = get_available_slots(
+                    calendar_id=empleado.calendar_id,
+                    credentials_json=GOOGLE_CREDENTIALS_JSON,
+                    working_hours_json=empleado.working_hours,
+                    service_duration=servicio.duracion,
+                    intervalo_entre_turnos=20,
+                    max_turnos=10
+                    )
+                
                 msg = "❌ El turno seleccionado ya no está disponible. Por favor, elige otro:\n"
-                for i, s in enumerate(slots_actuales[:10], 1):
-                    msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"  
-
+                for i, s in enumerate(slots_actuales, 1):
+                    msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
+                
                 await send_whatsapp_message(
                     to=from_number,
                     text=msg,
                     token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
                     )
+                
                 state["step"] = "waiting_turno_final"
-                state["slots"] = slots_actuales[:10]
+                state["slots"] = slots_actuales
                 return {"status": "turno ya ocupado"}
+            # Crear evento directamente en Google Calendar
             
-            # Si sigue disponible, crea el evento y la reserva
             event_id = create_event(
                 calendar_id=empleado.calendar_id,
                 slot_dt=slot,
                 user_phone=from_number,
                 service_account_info=GOOGLE_CREDENTIALS_JSON,
                 duration_minutes=servicio.duracion,
-                client_service=f"Cliente: {nombre_apellido or ''} - Tel: {from_number} - Servicio: {servicio.nombre}"
-                )
+                client_service=f"Cliente: {nombre_apellido} - Tel: {from_number} - Servicio: {servicio.nombre}"
+            )
+            
             fake_id = generar_fake_id()
             reserva = Reserva(
                 fake_id=fake_id,
@@ -403,21 +418,21 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 cliente_telefono=from_number,
                 servicio=servicio.nombre,
                 estado="activo"
-                )
+            )
             db.add(reserva)
             db.commit()
             
             await send_whatsapp_message(
                 to=from_number,
                 text=(
-                    f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot} con {empleado.nombre}.\n"
+                    f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')} con {empleado.nombre}.\n"
                     f"\nServicio: {servicio.nombre}\n"
                     f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
                     f"\nSi querés cancelar, escribí: cancelar {fake_id}"
-                    ),
+                ),
                 token=ACCESS_TOKEN,
                 phone_number_id=tenant.phone_number_id
-                )
+            )
             state.clear()
             return {"status": "turno reservado", "fake_id": fake_id}
         
