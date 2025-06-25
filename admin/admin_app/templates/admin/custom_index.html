@@ -1,4 +1,5 @@
-{% extends admin_base_template %} {% block body %}
+{% extends admin_base_template %}
+{% block body %}
 <div class="container mt-4">
   <h2>📊 Panel de control</h2>
 
@@ -72,12 +73,10 @@
                 <td>{{ error.cliente or "—" }}</td>
                 <td>{{ error.telefono or "—" }}</td>
                 <td>
-                  {{ error.mensaje[:40] ~ ("..." if error.mensaje and
-                  error.mensaje|length > 40 else "") }}
+                  {{ error.mensaje[:40] ~ ("..." if error.mensaje and error.mensaje|length > 40 else "") }}
                 </td>
                 <td>
-                  {{ error.fecha.strftime('%d/%m/%Y %H:%M') if error.fecha else
-                  "" }}
+                  {{ error.fecha.strftime('%d/%m/%Y %H:%M') if error.fecha else "" }}
                 </td>
                 <td>
                   <a
@@ -142,15 +141,12 @@
       </div>
     </div>
   </div>
-  {# filepath:
-  c:\Users\maxi1\Documents\GitHub\backend_agenda\admin\admin_app\templates\admin\reserva_list.html
-  #} {% extends 'admin/model/list.html' %} {% block page_body %}
+
+  <!-- Gráfico y exportación CSV de reservas por estado -->
   <div class="row mt-4">
     <div class="col-md-12">
       <div class="card shadow-sm mb-4">
-        <div
-          class="card-header d-flex justify-content-between align-items-center"
-        >
+        <div class="card-header d-flex justify-content-between align-items-center">
           <span>📈 Reservas por estado (filtradas)</span>
           <button id="export-btn" class="btn btn-sm btn-success">
             Exportar CSV
@@ -162,82 +158,81 @@
       </div>
     </div>
   </div>
-  {{ super() }} {% endblock %} {% block tail %} {{ super() }}
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script>
-    // Obtén los datos de la tabla filtrada
-    function getChartData() {
-      const estados = {};
-      document.querySelectorAll("table tbody tr").forEach((row) => {
-        const estado = row.querySelector("td:last-child");
-        if (estado) {
-          const val = estado.textContent.trim();
-          if (val) estados[val] = (estados[val] || 0) + 1;
-        }
-      });
-      return {
-        labels: Object.keys(estados),
-        data: Object.values(estados),
-      };
-    }
-
-    function renderChart() {
-      const chartData = getChartData();
-      if (window.reservasChart) window.reservasChart.destroy();
-      const ctx = document.getElementById("reservasChart").getContext("2d");
-      window.reservasChart = new Chart(ctx, {
-        type: "pie",
-        data: {
-          labels: chartData.labels,
-          datasets: [
-            {
-              data: chartData.data,
-              backgroundColor: [
-                "#4caf50",
-                "#f44336",
-                "#ff9800",
-                "#2196f3",
-                "#9c27b0",
-                "#03a9f4",
-              ],
-            },
-          ],
-        },
-      });
-    }
-
-    // Exportar tabla filtrada a CSV
-    document.getElementById("export-btn").onclick = function () {
-      let csv = "";
-      document.querySelectorAll("table thead tr").forEach((row) => {
-        csv +=
-          Array.from(row.children)
-            .map((td) => `"${td.textContent.trim()}"`)
-            .join(",") + "\n";
-      });
-      document.querySelectorAll("table tbody tr").forEach((row) => {
-        csv +=
-          Array.from(row.children)
-            .map((td) => `"${td.textContent.trim()}"`)
-            .join(",") + "\n";
-      });
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "reservas_filtradas.csv";
-      a.click();
-      URL.revokeObjectURL(url);
-    };
-
-    // Renderiza la gráfica al cargar y al filtrar
-    renderChart();
-    // Observa cambios en la tabla (por filtros)
-    const observer = new MutationObserver(renderChart);
-    observer.observe(document.querySelector("table tbody"), {
-      childList: true,
-      subtree: true,
-    });
-  </script>
-  {% endblock %}
 </div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  // Obtén los datos de la tabla filtrada
+  function getChartData() {
+    const estados = {};
+    document.querySelectorAll("table tbody tr").forEach((row) => {
+      const estado = row.querySelector("td:last-child");
+      if (estado) {
+        const val = estado.textContent.trim();
+        if (val) estados[val] = (estados[val] || 0) + 1;
+      }
+    });
+    return {
+      labels: Object.keys(estados),
+      data: Object.values(estados),
+    };
+  }
+
+  function renderChart() {
+    const chartData = getChartData();
+    if (window.reservasChart) window.reservasChart.destroy();
+    const ctx = document.getElementById("reservasChart").getContext("2d");
+    window.reservasChart = new Chart(ctx, {
+      type: "pie",
+      data: {
+        labels: chartData.labels,
+        datasets: [
+          {
+            data: chartData.data,
+            backgroundColor: [
+              "#4caf50",
+              "#f44336",
+              "#ff9800",
+              "#2196f3",
+              "#9c27b0",
+              "#03a9f4",
+            ],
+          },
+        ],
+      },
+    });
+  }
+
+  // Exportar tabla filtrada a CSV
+  document.getElementById("export-btn").onclick = function () {
+    let csv = "";
+    document.querySelectorAll("table thead tr").forEach((row) => {
+      csv +=
+        Array.from(row.children)
+          .map((td) => `"${td.textContent.trim()}"`)
+          .join(",") + "\n";
+    });
+    document.querySelectorAll("table tbody tr").forEach((row) => {
+      csv +=
+        Array.from(row.children)
+          .map((td) => `"${td.textContent.trim()}"`)
+          .join(",") + "\n";
+    });
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "reservas_filtradas.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Renderiza la gráfica al cargar y al filtrar
+  renderChart();
+  // Observa cambios en la tabla (por filtros)
+  const observer = new MutationObserver(renderChart);
+  observer.observe(document.querySelector("table tbody"), {
+    childList: true,
+    subtree: true,
+  });
+</script>
+{% endblock %}
