@@ -94,7 +94,16 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 # --- BLOQUE DE CANCELACIÓN ---
         
         if re.match(r"^cancelar\s+\w+", message_text):
-            fake_id = message_text.split(" ", 1)[1].strip().upper()
+            partes = message_text.strip().split(maxsplit=1)
+            if len(partes) < 2:
+                await send_whatsapp_message(
+                    to=from_number,
+                    text="❌ Debes escribir: cancelar <ID del turno>",
+                    token=ACCESS_TOKEN,
+                    phone_number_id=tenant.phone_number_id
+                    )
+                return {"status": "cancelación sin id"}
+            fake_id = partes[1].strip().upper()
             try:
                 reserva = db.query(Reserva).filter_by(fake_id=fake_id).first()
                 if not reserva:
@@ -409,10 +418,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         db.commit()
         print("❌ Error general procesando mensaje:", e)
         traceback.print_exc()
-        await send_whatsapp_message(
-            to=from_number,
-            text="❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde.",
-            token=ACCESS_TOKEN,
-            phone_number_id=tenant.phone_number_id
-            )
+        if not state.get("error_sent"):
+            await send_whatsapp_message(
+                to=from_number,
+                text="❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde.",
+                token=ACCESS_TOKEN,
+                phone_number_id=tenant.phone_number_id
+                )
+            state["error_sent"] = True
         return JSONResponse(content={"error": "Error interno"}, status_code=500)
