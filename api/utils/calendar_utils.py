@@ -109,14 +109,10 @@ def get_available_slots(
 
     return available
 
-def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes,client_service):
+def create_event(calendar_id, slot_dt, user_phone, service_account_info, duration_minutes, client_service):
     service = build_service(service_account_info)
-    today = datetime.datetime.now(tz=URUGUAY_TZ)
-
-    # Agregar el año actual si no está presente
-    dt = datetime.datetime.strptime(slot_str + f"/{today.year}", "%d/%m %H:%M/%Y").replace(tzinfo=URUGUAY_TZ)
-    start_time = dt.isoformat()
-    end_time = (dt + datetime.timedelta(minutes=duration_minutes)).isoformat()
+    start_time = slot_dt.isoformat()
+    end_time = (slot_dt + datetime.timedelta(minutes=duration_minutes)).isoformat()
 
     event = {
         'summary': client_service,
