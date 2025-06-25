@@ -1,10 +1,11 @@
 from flask_admin import Admin, AdminIndexView, expose
 from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
-from flask import render_template
+from flask import render_template, flash
 from wtforms import Field
 from admin_app.models import Tenant, Empleado, Servicio, Reserva, ErrorLog
 from admin_app.database import db
+from admin_app.admin import SecureModelView
 import json
 from sqlalchemy.exc import IntegrityError
 from collections import Counter
@@ -13,17 +14,6 @@ print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
 
 basic_auth = BasicAuth()
-
-class ErrorLogModelView(SecureModelView):    
-    can_create = False
-    can_edit = False
-    can_delete = True
-    can_view_details = True
-    column_searchable_list = ['cliente', 'telefono', 'mensaje', 'error']
-    column_filters = ['cliente', 'telefono', 'fecha']
-    column_list = ('id', 'cliente', 'telefono', 'mensaje', 'error', 'fecha')
-    form_columns = ('cliente', 'telefono', 'mensaje', 'error', 'fecha')
-    column_default_sort = ('fecha', True)
 
 class WorkingHoursWidget:
     def __call__(self, field, **kwargs):
@@ -96,6 +86,17 @@ class TenantModelView(SecureModelView):
                 flash(f'⚠️ Error inesperado: {e}', 'error')
             raise
 
+class ErrorLogModelView(SecureModelView):    
+    can_create = False
+    can_edit = False
+    can_delete = True
+    can_view_details = True
+    column_searchable_list = ['cliente', 'telefono', 'mensaje', 'error']
+    column_filters = ['cliente', 'telefono', 'fecha']
+    column_list = ('id', 'cliente', 'telefono', 'mensaje', 'error', 'fecha')
+    form_columns = ('cliente', 'telefono', 'mensaje', 'error', 'fecha')
+    column_default_sort = ('fecha', True)
+    
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
     def index(self):
