@@ -85,7 +85,10 @@ def get_available_slots(
                 except ValueError:
                     continue
 
-                slot_start = max(start_hour, now)
+                if current_date == now.date():
+                    slot_start = max(start_hour, now + datetime.timedelta(minutes=1))
+                else:
+                    slot_start = start_hour
                 slot_end = end_hour
                 delta = datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
 

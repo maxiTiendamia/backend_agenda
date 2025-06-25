@@ -271,7 +271,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 from datetime import datetime
                 import pytz
                 ahora = datetime.now(pytz.timezone("America/Montevideo"))
-                slots_futuros = [s for s in slots if datetime.strptime(s + f"/{ahora.year}", "%d/%m %H:%M/%Y").replace(tzinfo=ahora.tzinfo) > ahora]
+                slots_futuros = [s for s in slots if s > ahora]
                 # Limitar la cantidad máxima de turnos ofrecidos
                 max_turnos = 25
                 slots_mostrar = slots_futuros[:max_turnos]
@@ -284,8 +284,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                     return {"status": "sin turnos"}
                 msg = "📅 Estos son los próximos turnos disponibles:\n"
-                for i, slot in enumerate(slots, 1):
-                    msg += f"🔹{i}. {slot}\n"
+                for i, slot in enumerate(slots_mostrar, 1):
+                    msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
                 await send_whatsapp_message(
                     to=from_number,
