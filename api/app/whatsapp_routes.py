@@ -14,18 +14,36 @@ from api.utils.generador_fake_id import generar_fake_id
 import pytz
 import redis
 import json
+from datetime import datetime
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 SESSION_TTL = 300  # segundos
 
-def get_user_state(user_id):
-    state_json = redis_client.get(f"user_state:{user_id}")
-    return json.loads(state_json) if state_json else None
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 def set_user_state(user_id, state):
-    redis_client.setex(f"user_state:{user_id}", SESSION_TTL, json.dumps(state))
+    try:
+        redis_client.setex(
+            f"user_state:{user_id}",
+            SESSION_TTL,
+            json.dumps(state, cls=DateTimeEncoder)
+        )
+    except Exception as e:
+        print(f"⚠️ Error guardando estado en Redis: {e}")
+
+def get_user_state(user_id):
+    try:
+        state_json = redis_client.get(f"user_state:{user_id}")
+        return json.loads(state_json) if state_json else None
+    except Exception as e:
+        print(f"⚠️ Error leyendo estado de Redis: {e}")
+        return None
 
 router = APIRouter()
 
@@ -306,7 +324,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         intervalo_entre_turnos=20,             
                         max_turnos=25
                     )
-                    from datetime import datetime
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
                     slots_futuros = [s for s in slots if s > ahora]
                     max_turnos = 25
@@ -331,7 +348,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                     state["step"] = "waiting_turno_final"
                     state["empleado_id"] = empleado_id
-                    state["slots"] = slots_mostrar
+                    # Convertir slots a string antes de guardar
+                    state["slots"] = [s.isoformat() for s in slots_mostrar]
                     set_user_state(from_number, state)
                     return {"status": "turnos enviados"}
                 else:
@@ -372,13 +390,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if state.get("step") == "waiting_turno_final":
             if message_text.isdigit():
                 idx = int(message_text) - 1
-                slots = state.get("slots", [])
+                # Convertir los slots de string a datetime antes de usarlos
+                slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
                 if 0 <= idx < len(slots):
                     slot = slots[idx]
                     empleado = db.query(Empleado).get(state["empleado_id"])
                     servicio = db.query(Servicio).get(state["servicio_id"])
                     # Guardar datos temporales en el estado
-                    state["slot"] = slot
+                    state["slot"] = slot.isoformat()  # Guardar como string
                     state["empleado_id"] = empleado.id
                     state["servicio_id"] = servicio.id
                     state["step"] = "waiting_nombre"
@@ -391,7 +410,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                     return {"status": "pidiendo nombre"}
                 else:
-                    slots = state.get("slots", [])
+                    slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
                     msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
                     for i, slot in enumerate(slots, 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
@@ -406,7 +425,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     set_user_state(from_number, state)
                     return {"status": "turno inválido"}
             else:
-                slots = state.get("slots", [])
+                slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
                 msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
                 for i, slot in enumerate(slots, 1):
                     msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
@@ -422,11 +441,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return {"status": "turno inválido"}
         
         elif state.get("step") == "waiting_nombre":
-            from datetime import datetime, timedelta
+            from datetime import timedelta
             from api.utils.calendar_utils import build_service  
 
             nombre_apellido = message_text.strip().title()
+            # Recuperar slot como datetime
             slot = state.get("slot")
+            if isinstance(slot, str):
+                slot = datetime.fromisoformat(slot)
             empleado = db.query(Empleado).get(state["empleado_id"])
             servicio = db.query(Servicio).get(state["servicio_id"])
             
