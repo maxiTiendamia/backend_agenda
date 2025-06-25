@@ -134,7 +134,6 @@ class ReservaModelView(SecureModelView):
     column_filters = ['cliente_nombre', 'empleado_nombre', 'servicio', 'estado']
     column_list = ('id', 'fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
     form_columns = ('fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
-    list_template = 'admin/reserva_list.html'
     
 def init_admin(app, db):
     basic_auth.init_app(app)

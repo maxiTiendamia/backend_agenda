@@ -12,7 +12,7 @@ class Tenant(Base):
     apellido = Column(String(50), nullable=True)
     comercio = Column(String(100), nullable=True)
     telefono = Column(String(20), nullable=True)
-    fecha_creada = Column(DateTime, default=datetime.utcnow)
+    fecha_creada = Column(DateTime, default=datetime.now(timezone.utc))
     direccion = Column(String(200), nullable=True)
     phone_number_id = Column(String(400), nullable=True)
 
@@ -30,7 +30,7 @@ class Reserva(Base):
     empleado_calendar_id = Column(String(200), nullable=False)
     cliente_nombre = Column(String(100), nullable=False)  
     cliente_telefono = Column(String(20), nullable=False)
-    fecha_reserva = Column(DateTime, default=datetime.utcnow)
+    fecha_reserva = Column(DateTime, default=datetime.now(timezone.utc))
     servicio = Column(String(150), nullable=False)
     estado = Column(String(20), nullable=False, default="activo") 
 
