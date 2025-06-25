@@ -11,11 +11,24 @@ import traceback
 import os
 from api.utils.calendar_utils import cancelar_evento_google
 from api.utils.generador_fake_id import generar_fake_id
+import pytz
+import redis
+import json
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+SESSION_TTL = 300  # segundos
+
+def get_user_state(user_id):
+    state_json = redis_client.get(f"user_state:{user_id}")
+    return json.loads(state_json) if state_json else None
+
+def set_user_state(user_id, state):
+    redis_client.setex(f"user_state:{user_id}", SESSION_TTL, json.dumps(state))
 
 router = APIRouter()
 
-USER_STATE_CACHE = {}
-SESSION_TTL = 300 
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
@@ -51,18 +64,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
 
         now = time.time()
-        state = USER_STATE_CACHE.get(from_number)
+        state = get_user_state(from_number)
         if not state or now - state.get("last_interaction", 0) > SESSION_TTL:
             state = {"step": "welcome", "last_interaction": now, "mode": "bot"}
-            USER_STATE_CACHE[from_number] = state
         else:
             state["last_interaction"] = now
-        
-        # --- Agrega aquí el bloque de modo humano ---
+        set_user_state(from_number, state)
+
         if state.get("mode") == "human":
-            if message_text in ["bot", "volver"]:
+            if message_text in ["bot", "volver","Bot"]:
                 state["mode"] = "bot"
                 state["step"] = "welcome"
+                set_user_state(from_number, state)
                 await send_whatsapp_message(
                     to=from_number,
                     text="🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar.",
@@ -84,9 +97,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
         if "ayuda" in message_text:
             state["mode"] = "human"
+            set_user_state(from_number, state)
             await send_whatsapp_message(
                 to=from_number,
-                text="🚪 Un asesor te responderá a la brevedad.",
+                text="🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊",
                 token=ACCESS_TOKEN,
                 phone_number_id=tenant.phone_number_id
             )
@@ -98,7 +112,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             if len(partes) < 2:
                 await send_whatsapp_message(
                     to=from_number,
-                    text="❌ Debes escribir: cancelar <ID del turno>",
+                    text="❌ Debes escribir: cancelar + código",
                     token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
                     )
@@ -109,7 +123,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 if not reserva:
                     await send_whatsapp_message(
                         to=from_number,
-                        text="❌ No se encontró la reserva. Verifica el ID.",
+                        text="❌ No se encontró la reserva. Verifica el código.",
                         token=ACCESS_TOKEN,
                         phone_number_id=tenant.phone_number_id
                         )
@@ -129,6 +143,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         phone_number_id=tenant.phone_number_id
                         )
                     state.clear()
+                    set_user_state(from_number, state)
                     return {"status": "turno cancelado"}
                 else:
                     await send_whatsapp_message(
@@ -147,7 +162,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     phone_number_id=tenant.phone_number_id
                     )
                 return {"status": "error cancelación"}
-        # --- FIN BLOQUE DE CANCELACIÓN ---
         
         if state.get("step") == "welcome":
             if "turno" in message_text:
@@ -172,6 +186,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     )
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
+                set_user_state(from_number, state)
                 return {"status": "servicios enviados"}
             else:
                 await send_whatsapp_message(
@@ -181,6 +196,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     phone_number_id=tenant.phone_number_id
                     )
                 state["step"] = "waiting_turno"
+                set_user_state(from_number, state)
                 return {"status": "mensaje bienvenida enviado"}
 
         if state.get("step") == "waiting_turno" and "turno" in message_text:
@@ -205,39 +221,59 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             )
             state["step"] = "waiting_servicio"
             state["servicios"] = [s.id for s in servicios]
+            set_user_state(from_number, state)
             return {"status": "servicios enviados"}
 
-        if state.get("step") == "waiting_servicio" and message_text.isdigit():
-            idx = int(message_text) - 1
-            servicios_ids = state.get("servicios", [])
-            if 0 <= idx < len(servicios_ids):
-                servicio_id = servicios_ids[idx]
-                servicio = db.query(Servicio).get(servicio_id)
-                empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
-                if not empleados:
+        if state.get("step") == "waiting_servicio":
+            if message_text.isdigit():
+                idx = int(message_text) - 1
+                servicios_ids = state.get("servicios", [])
+                if 0 <= idx < len(servicios_ids):
+                    servicio_id = servicios_ids[idx]
+                    servicio = db.query(Servicio).get(servicio_id)
+                    empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+                    if not empleados:
+                        await send_whatsapp_message(
+                            to=from_number,
+                            text="⚠️ No hay empleados disponibles.",
+                            token=ACCESS_TOKEN,
+                            phone_number_id=tenant.phone_number_id
+                        )
+                        return {"status": "sin empleados"}
+                    msg = f"¿Con qué empleado?\n"
+                    for i, e in enumerate(empleados, 1):
+                        msg += f"🔹{i}. {e.nombre}\n"
+                    msg += "\nResponde con el número del empleado."
                     await send_whatsapp_message(
                         to=from_number,
-                        text="⚠️ No hay empleados disponibles.",
+                        text=msg,
                         token=ACCESS_TOKEN,
                         phone_number_id=tenant.phone_number_id
                     )
-                    return {"status": "sin empleados"}
-                msg = f"¿Con qué empleado?\n"
-                for i, e in enumerate(empleados, 1):
-                    msg += f"🔹{i}. {e.nombre}\n"
-                msg += "\nResponde con el número del empleado."
-                await send_whatsapp_message(
-                    to=from_number,
-                    text=msg,
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
-                )
-                state["step"] = "waiting_empleado"
-                state["servicio_id"] = servicio_id
-                state["empleados"] = [e.id for e in empleados]
-                return {"status": "empleados enviados"}
+                    state["step"] = "waiting_empleado"
+                    state["servicio_id"] = servicio_id
+                    state["empleados"] = [e.id for e in empleados]
+                    set_user_state(from_number, state)
+                    return {"status": "empleados enviados"}
+                else:
+                    # Resetea el estado y vuelve a mostrar los servicios
+                    servicios = tenant.servicios
+                    msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
+                    for i, s in enumerate(servicios, 1):
+                        msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                    msg += "\nResponde con el número del servicio."
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text=msg,
+                        token=ACCESS_TOKEN,
+                        phone_number_id=tenant.phone_number_id
+                    )
+                    state["step"] = "waiting_servicio"
+                    state["servicios"] = [s.id for s in servicios]
+                    set_user_state(from_number, state)
+                    return {"status": "servicio inválido"}
             else:
-                # Resetea el estado y vuelve a mostrar los servicios
+                # Mensaje no numérico, vuelve a mostrar los servicios
                 servicios = tenant.servicios
                 msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
                 for i, s in enumerate(servicios, 1):
@@ -248,57 +284,75 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     text=msg,
                     token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
-                    )
+                )
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
+                set_user_state(from_number, state)
                 return {"status": "servicio inválido"}
 
-        if state.get("step") == "waiting_empleado" and message_text.isdigit():
-            idx = int(message_text) - 1
-            empleados_ids = state.get("empleados", [])
-            if 0 <= idx < len(empleados_ids):
-                empleado_id = empleados_ids[idx]
-                empleado = db.query(Empleado).get(empleado_id)
-                servicio = db.query(Servicio).get(state["servicio_id"])
-                slots = get_available_slots(
-                    calendar_id=empleado.calendar_id,
-                    credentials_json=GOOGLE_CREDENTIALS_JSON,
-                    working_hours_json=empleado.working_hours,
-                    service_duration=servicio.duracion,    
-                    intervalo_entre_turnos=20,             
-                    max_turnos=25
+        if state.get("step") == "waiting_empleado":
+            if message_text.isdigit():
+                idx = int(message_text) - 1
+                empleados_ids = state.get("empleados", [])
+                if 0 <= idx < len(empleados_ids):
+                    empleado_id = empleados_ids[idx]
+                    empleado = db.query(Empleado).get(empleado_id)
+                    servicio = db.query(Servicio).get(state["servicio_id"])
+                    slots = get_available_slots(
+                        calendar_id=empleado.calendar_id,
+                        credentials_json=GOOGLE_CREDENTIALS_JSON,
+                        working_hours_json=empleado.working_hours,
+                        service_duration=servicio.duracion,    
+                        intervalo_entre_turnos=20,             
+                        max_turnos=25
                     )
-                from datetime import datetime
-                import pytz
-                ahora = datetime.now(pytz.timezone("America/Montevideo"))
-                slots_futuros = [s for s in slots if s > ahora]
-                # Limitar la cantidad máxima de turnos ofrecidos
-                max_turnos = 25
-                slots_mostrar = slots_futuros[:max_turnos]
-                if not slots_mostrar:
+                    from datetime import datetime
+                    ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                    slots_futuros = [s for s in slots if s > ahora]
+                    max_turnos = 25
+                    slots_mostrar = slots_futuros[:max_turnos]
+                    if not slots_mostrar:
+                        await send_whatsapp_message(
+                            to=from_number,
+                            text="⚠️ No hay turnos disponibles para este empleado.",
+                            token=ACCESS_TOKEN,
+                            phone_number_id=tenant.phone_number_id
+                        )
+                        return {"status": "sin turnos"}
+                    msg = "📅 Estos son los próximos turnos disponibles:\n"
+                    for i, slot in enumerate(slots_mostrar, 1):
+                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
                     await send_whatsapp_message(
                         to=from_number,
-                        text="⚠️ No hay turnos disponibles para este empleado.",
+                        text=msg,
                         token=ACCESS_TOKEN,
                         phone_number_id=tenant.phone_number_id
                     )
-                    return {"status": "sin turnos"}
-                msg = "📅 Estos son los próximos turnos disponibles:\n"
-                for i, slot in enumerate(slots_mostrar, 1):
-                    msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
-                msg += "\nResponde con el número del turno."
-                await send_whatsapp_message(
-                    to=from_number,
-                    text=msg,
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
-                )
-                state["step"] = "waiting_turno_final"
-                state["empleado_id"] = empleado_id
-                state["slots"] = slots_mostrar
-                return {"status": "turnos enviados"}
+                    state["step"] = "waiting_turno_final"
+                    state["empleado_id"] = empleado_id
+                    state["slots"] = slots_mostrar
+                    set_user_state(from_number, state)
+                    return {"status": "turnos enviados"}
+                else:
+                    # Opción inválida, vuelve a mostrar la lista de empleados
+                    empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+                    msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
+                    for i, e in enumerate(empleados, 1):
+                        msg += f"🔹{i}. {e.nombre}\n"
+                    msg += "\nResponde con el número del empleado."
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text=msg,
+                        token=ACCESS_TOKEN,
+                        phone_number_id=tenant.phone_number_id
+                    )
+                    state["step"] = "waiting_empleado"
+                    state["empleados"] = [e.id for e in empleados]
+                    set_user_state(from_number, state)
+                    return {"status": "empleado inválido"}
             else:
-                # Opción inválida, vuelve a mostrar la lista de empleados
+                # Mensaje no numérico, vuelve a mostrar la lista de empleados
                 empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                 msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
                 for i, e in enumerate(empleados, 1):
@@ -309,44 +363,64 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     text=msg,
                     token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
-                    )
+                )
                 state["step"] = "waiting_empleado"
                 state["empleados"] = [e.id for e in empleados]
+                set_user_state(from_number, state)
                 return {"status": "empleado inválido"}
         
-        if state.get("step") == "waiting_turno_final" and message_text.isdigit():
-            idx = int(message_text) - 1
-            slots = state.get("slots", [])
-            if 0 <= idx < len(slots):
-                slot = slots[idx]
-                empleado = db.query(Empleado).get(state["empleado_id"])
-                servicio = db.query(Servicio).get(state["servicio_id"])
-                # Guardar datos temporales en el estado
-                state["slot"] = slot
-                state["empleado_id"] = empleado.id
-                state["servicio_id"] = servicio.id
-                state["step"] = "waiting_nombre"
-                await send_whatsapp_message(
-                    to=from_number,
-                    text="Por favor, escribe tu nombre y apellido para confirmar la reserva.",
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
+        if state.get("step") == "waiting_turno_final":
+            if message_text.isdigit():
+                idx = int(message_text) - 1
+                slots = state.get("slots", [])
+                if 0 <= idx < len(slots):
+                    slot = slots[idx]
+                    empleado = db.query(Empleado).get(state["empleado_id"])
+                    servicio = db.query(Servicio).get(state["servicio_id"])
+                    # Guardar datos temporales en el estado
+                    state["slot"] = slot
+                    state["empleado_id"] = empleado.id
+                    state["servicio_id"] = servicio.id
+                    state["step"] = "waiting_nombre"
+                    set_user_state(from_number, state)
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text="Por favor, escribe tu nombre y apellido para confirmar la reserva.",
+                        token=ACCESS_TOKEN,
+                        phone_number_id=tenant.phone_number_id
                     )
-                return {"status": "pidiendo nombre"}
+                    return {"status": "pidiendo nombre"}
+                else:
+                    slots = state.get("slots", [])
+                    msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
+                    for i, slot in enumerate(slots, 1):
+                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text=msg,
+                        token=ACCESS_TOKEN,
+                        phone_number_id=tenant.phone_number_id
+                    )
+                    state["step"] = "waiting_turno_final"
+                    set_user_state(from_number, state)
+                    return {"status": "turno inválido"}
             else:
+                slots = state.get("slots", [])
                 msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
                 for i, slot in enumerate(slots, 1):
-                    msg += f"🔹{i}. {slot}\n"
+                    msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
                 await send_whatsapp_message(
                     to=from_number,
                     text=msg,
                     token=ACCESS_TOKEN,
                     phone_number_id=tenant.phone_number_id
-                    )
+                )
                 state["step"] = "waiting_turno_final"
+                set_user_state(from_number, state)
                 return {"status": "turno inválido"}
-
+        
         elif state.get("step") == "waiting_nombre":
             from datetime import datetime, timedelta
             from api.utils.calendar_utils import build_service  
@@ -394,6 +468,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 
                 state["step"] = "waiting_turno_final"
                 state["slots"] = slots_actuales
+                set_user_state(from_number, state)
                 return {"status": "turno ya ocupado"}
             # Crear evento directamente en Google Calendar
             
@@ -434,11 +509,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 phone_number_id=tenant.phone_number_id
             )
             state.clear()
+            set_user_state(from_number, state)
             return {"status": "turno reservado", "fake_id": fake_id}
         
+        # Mensaje genérico por defecto
         await send_whatsapp_message(
             to=from_number,
-            text="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con un asesor.",
+            text="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con una persona.",
             token=ACCESS_TOKEN,
             phone_number_id=tenant.phone_number_id
         )
@@ -466,4 +543,5 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 phone_number_id=tenant.phone_number_id
                 )
             state["error_sent"] = True
+            set_user_state(from_number, state)
         return JSONResponse(content={"error": "Error interno"}, status_code=500)

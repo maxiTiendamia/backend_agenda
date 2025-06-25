@@ -73,17 +73,35 @@ def get_available_slots(
                 from_str, to_str = period.split('-')
                 start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(from_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
                 end_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(to_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-                slot_start = start_hour if current_date != now.date() else max(start_hour, now + datetime.timedelta(minutes=1))
-                slot_end = end_hour
                 
+                # Si es hoy, el primer turno debe ser al menos dentro de 20 minutos
+                if current_date == now.date():
+                    min_start = now + datetime.timedelta(minutes=20)
+                    slot_start = max(start_hour, min_start)
+                else:
+                    slot_start = start_hour
+
+                slot_end = end_hour
                 delta = datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
                 
                 while slot_start + datetime.timedelta(minutes=service_duration) <= slot_end:
+                    # No ofrecer turnos que empiecen antes de 20 minutos desde ahora
+                    if slot_start < now + datetime.timedelta(minutes=20):
+                        slot_start += delta
+                        continue
+
                     slot_final = slot_start + datetime.timedelta(minutes=service_duration)
                     overlap = any(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
-                        )
-                    if not overlap:
+                    )
+
+                    # Nuevo filtro: no ofrecer turnos si el anterior ocupado terminó hace menos del intervalo
+                    hay_cerca = any(
+                        0 < (slot_start - b_end).total_seconds() / 60 < intervalo_entre_turnos
+                        for b_start, b_end in busy if b_end <= slot_start
+                    )
+
+                    if not overlap and not hay_cerca:
                         available.append(slot_start)
                         turnos_generados += 1
                         if turnos_generados >= max_turnos:
