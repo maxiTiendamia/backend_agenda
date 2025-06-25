@@ -266,14 +266,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     working_hours_json=empleado.working_hours,
                     service_duration=servicio.duracion,    
                     intervalo_entre_turnos=20,             
-                    max_turnos=10
+                    max_turnos=25
                     )
                 from datetime import datetime
                 import pytz
                 ahora = datetime.now(pytz.timezone("America/Montevideo"))
                 slots_futuros = [s for s in slots if datetime.strptime(s + f"/{ahora.year}", "%d/%m %H:%M/%Y").replace(tzinfo=ahora.tzinfo) > ahora]
                 # Limitar la cantidad máxima de turnos ofrecidos
-                max_turnos = 10
+                max_turnos = 25
                 slots_mostrar = slots_futuros[:max_turnos]
                 if not slots_mostrar:
                     await send_whatsapp_message(
