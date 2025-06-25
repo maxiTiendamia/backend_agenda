@@ -13,8 +13,15 @@ def build_service(service_account_info):
     )
     return build('calendar', 'v3', credentials=creds)
 
-
-def get_available_slots(calendar_id, credentials_json, working_hours_json, service_duration, intervalo_entre_turnos=20, max_days=7, max_turnos=25):
+def get_available_slots(
+    calendar_id,
+    credentials_json,
+    working_hours_json,
+    service_duration,
+    intervalo_entre_turnos=20,
+    max_days=7,
+    max_turnos=25
+):
     service = build_service(credentials_json)
     now = datetime.datetime.now(tz=URUGUAY_TZ)
     end_date = now + datetime.timedelta(days=max_days)
@@ -34,8 +41,8 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, servi
         start = e['start'].get('dateTime') or e['start'].get('date')
         end = e['end'].get('dateTime') or e['end'].get('date')
         if start and end:
-            start_dt = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
-            end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00'))
+            start_dt = datetime.datetime.fromisoformat(start.replace('Z', '+00:00')).astimezone(URUGUAY_TZ)
+            end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00')).astimezone(URUGUAY_TZ)
             busy.append((start_dt, end_dt))
 
     # Parsear y normalizar horarios laborales
@@ -68,41 +75,36 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, servi
                     period = {'from': from_str.strip(), 'to': to_str.strip()}
                 elif not isinstance(period, dict):
                     continue
-                try:
-                    # Si el horario está vacío o mal configurado, saltar
-                    if not period.get('from') or not period.get('to') or period['from'] == '--:--' or period['to'] == '--:--':
-                        continue
 
-                    period_start = datetime.datetime.combine(
-                        current_date,
-                        datetime.datetime.strptime(period['from'], "%H:%M").time(),
-                        tzinfo=URUGUAY_TZ
-                    )
-                    period_end = datetime.datetime.combine(
-                        current_date,
-                        datetime.datetime.strptime(period['to'], "%H:%M").time(),
-                        tzinfo=URUGUAY_TZ
-                    )
-
-                    slot = period_start
-
-                    # Si es hoy, arrancar desde la hora actual o desde el inicio del horario laboral, lo que sea mayor
-                    if current_date == now.date():
-                        slot = max(slot, now + datetime.timedelta(minutes=1))
-
-                    while slot + datetime.timedelta(minutes=service_duration) <= period_end and turnos_generados < max_turnos:
-                        slot_end = slot + datetime.timedelta(minutes=service_duration)
-                        overlapping = any(bs < slot_end and be > slot for bs, be in busy)
-                        if not overlapping:
-                            available.append(slot.strftime('%d/%m %H:%M'))
-                            turnos_generados += 1
-                        slot += datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
-                except Exception as e:
+                if not period.get('from') or not period.get('to') or period['from'] == '--:--' or period['to'] == '--:--':
                     continue
+
+                try:
+                    start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(period['from'], '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
+                    end_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(period['to'], '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
+                except ValueError:
+                    continue
+
+                slot_start = max(start_hour, now)
+                slot_end = end_hour
+                delta = datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
+
+                while slot_start + datetime.timedelta(minutes=service_duration) <= slot_end:
+                    slot_final = slot_start + datetime.timedelta(minutes=service_duration)
+
+                    overlap = any(
+                        b_start < slot_final and b_end > slot_start for b_start, b_end in busy
+                    )
+                    if not overlap:
+                        available.append(slot_start)
+                        turnos_generados += 1
+                        if turnos_generados >= max_turnos:
+                            break
+                    slot_start += delta
+
         current_date += datetime.timedelta(days=1)
 
     return available
-
 
 def create_event(calendar_id, slot_str, user_phone, service_account_info, duration_minutes,client_service):
     service = build_service(service_account_info)
