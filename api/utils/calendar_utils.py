@@ -56,10 +56,10 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, servi
         working_hours = normalized
 
     available = []
-    current = now
     turnos_generados = 0
+    current = now
 
-    while current < end_date and turnos_generados < max_turnos:
+    while current.date() < end_date.date() and turnos_generados < max_turnos:
         day_str = current.strftime('%A').lower()
         if day_str in working_hours:
             for period in working_hours[day_str]:
@@ -90,9 +90,7 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, servi
                         ):
                             available.append(slot.strftime('%d/%m %H:%M'))
                             turnos_generados += 1
-                            slot += datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
-                        else:
-                            slot += datetime.timedelta(minutes=5)  # Avanza 5 min si ocupado o no corresponde
+                        slot += datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
                 except Exception as e:
                     continue
         current += datetime.timedelta(days=1)
