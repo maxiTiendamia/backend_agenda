@@ -70,41 +70,25 @@ def get_available_slots(
         day_str = current_date.strftime('%A').lower()
         if day_str in working_hours:
             for period in working_hours[day_str]:
-                if isinstance(period, str) and '-' in period:
-                    from_str, to_str = period.split('-')
-                    period = {'from': from_str.strip(), 'to': to_str.strip()}
-                elif not isinstance(period, dict):
-                    continue
-
-                if not period.get('from') or not period.get('to') or period['from'] == '--:--' or period['to'] == '--:--':
-                    continue
-
-                try:
-                    start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(period['from'], '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-                    end_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(period['to'], '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-                except ValueError:
-                    continue
-
-                if current_date == now.date():
-                    slot_start = max(start_hour, now + datetime.timedelta(minutes=1))
-                else:
-                    slot_start = start_hour
+                from_str, to_str = period.split('-')
+                start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(from_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
+                end_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(to_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
+                slot_start = start_hour if current_date != now.date() else max(start_hour, now + datetime.timedelta(minutes=1))
                 slot_end = end_hour
+                
                 delta = datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
-
+                
                 while slot_start + datetime.timedelta(minutes=service_duration) <= slot_end:
                     slot_final = slot_start + datetime.timedelta(minutes=service_duration)
-
                     overlap = any(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
-                    )
+                        )
                     if not overlap:
                         available.append(slot_start)
                         turnos_generados += 1
                         if turnos_generados >= max_turnos:
                             break
                     slot_start += delta
-
         current_date += datetime.timedelta(days=1)
 
     return available

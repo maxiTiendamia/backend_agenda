@@ -369,7 +369,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 # Turno ya no disponible
                 msg = "❌ El turno seleccionado ya no está disponible. Por favor, elige otro:\n"
                 for i, s in enumerate(slots_actuales[:10], 1):
-                    msg += f"🔹{i}. {s}\n"
+                    msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"  
+
                 msg += "\nResponde con el número del turno."
                 await send_whatsapp_message(
                     to=from_number,
@@ -384,7 +385,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             # Si sigue disponible, crea el evento y la reserva
             event_id = create_event(
                 calendar_id=empleado.calendar_id,
-                slot_str=slot,
+                slot_dt=slot,
                 user_phone=from_number,
                 service_account_info=GOOGLE_CREDENTIALS_JSON,
                 duration_minutes=servicio.duracion,
