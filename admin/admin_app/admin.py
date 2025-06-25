@@ -3,7 +3,7 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template
 from wtforms import Field
-from admin_app.models import Tenant, Empleado, Servicio, Reserva
+from admin_app.models import Tenant, Empleado, Servicio, Reserva, ErrorLog
 from admin_app.database import db
 import json
 from sqlalchemy.exc import IntegrityError
@@ -13,6 +13,17 @@ print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
 
 basic_auth = BasicAuth()
+
+class ErrorLogModelView(SecureModelView):    
+    can_create = False
+    can_edit = False
+    can_delete = True
+    can_view_details = True
+    column_searchable_list = ['cliente', 'telefono', 'mensaje', 'error']
+    column_filters = ['cliente', 'telefono', 'fecha']
+    column_list = ('id', 'cliente', 'telefono', 'mensaje', 'error', 'fecha')
+    form_columns = ('cliente', 'telefono', 'mensaje', 'error', 'fecha')
+    column_default_sort = ('fecha', True)
 
 class WorkingHoursWidget:
     def __call__(self, field, **kwargs):
@@ -91,6 +102,9 @@ class SecureAdminIndexView(AdminIndexView):
         total_clientes = Tenant.query.count()
         ultimos_clientes = Tenant.query.order_by(Tenant.fecha_creada.desc()).limit(5).all()
         reservas = Reserva.query.order_by(Reserva.fecha_reserva.desc()).limit(20).all()
+        # Errores recientes
+        errores = ErrorLog.query.order_by(ErrorLog.fecha.desc()).limit(10).all()
+        total_errores = ErrorLog.query.count()
         # Gráfico de reservas por estado
         estados = [r.estado for r in Reserva.query.all()]
         counter = Counter(estados)
@@ -101,7 +115,9 @@ class SecureAdminIndexView(AdminIndexView):
                            ultimos_clientes=ultimos_clientes,
                            reservas=reservas,
                            estados_reservas=estados_reservas,
-                           cantidad_por_estado=cantidad_por_estado)
+                           cantidad_por_estado=cantidad_por_estado,
+                           errores=errores,
+                           total_errores=total_errores)
 
     def is_accessible(self):
         return basic_auth.authenticate()
@@ -118,7 +134,8 @@ class ReservaModelView(SecureModelView):
     column_filters = ['cliente_nombre', 'empleado_nombre', 'servicio', 'estado']
     column_list = ('id', 'fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
     form_columns = ('fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
-
+    list_template = 'admin/reserva_list.html'
+    
 def init_admin(app, db):
     basic_auth.init_app(app)
     admin = Admin(
@@ -128,5 +145,6 @@ def init_admin(app, db):
         template_mode="bootstrap4"
     )
     admin.add_view(TenantModelView(Tenant, db.session, name="Clientes"))
-    admin.add_view(ReservaModelView(Reserva, db.session, name="Reservas"))  # <-- Agrega esta línea
+    admin.add_view(ReservaModelView(Reserva, db.session, name="Reservas"))
+    admin.add_view(ErrorLogModelView(ErrorLog, db.session, name="Errores"))  
     print("✅ Panel de administración inicializado")

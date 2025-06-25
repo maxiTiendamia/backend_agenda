@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.dialects.postgresql import JSON
 from datetime import datetime
@@ -56,3 +56,12 @@ class Empleado(Base):
     working_hours = Column(JSON)
 
     tenant = relationship('Tenant', back_populates='empleados')
+    
+class ErrorLog(Base):
+    __tablename__ = "error_logs"
+    id = Column(Integer, primary_key=True)
+    cliente = Column(String(255))
+    telefono = Column(String(50))
+    mensaje = Column(Text)
+    error = Column(Text)
+    fecha = Column(DateTime, default=datetime.datetime.utcnow)

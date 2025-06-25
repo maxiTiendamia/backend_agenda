@@ -22,7 +22,7 @@ class Tenant(db.Model):
 
     def __repr__(self):
         return f"<Tenant {self.nombre}>"
-
+    
 class Reserva(db.Model):
     __tablename__ = "reservas"
     id = db.Column(Integer, primary_key=True)  
