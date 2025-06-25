@@ -14,7 +14,7 @@ def build_service(service_account_info):
     return build('calendar', 'v3', credentials=creds)
 
 
-def get_available_slots(calendar_id, credentials_json, working_hours_json, service_duration, intervalo_entre_turnos=20, max_days=7, max_turnos=10):
+def get_available_slots(calendar_id, credentials_json, working_hours_json, service_duration, intervalo_entre_turnos=20, max_days=7, max_turnos=25):
     service = build_service(credentials_json)
     now = datetime.datetime.now(tz=URUGUAY_TZ)
     end_date = now + datetime.timedelta(days=max_days)
@@ -57,10 +57,10 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, servi
 
     available = []
     turnos_generados = 0
-    current = now
+    current_date = now.date()
 
-    while current.date() < end_date.date() and turnos_generados < max_turnos:
-        day_str = current.strftime('%A').lower()
+    while current_date < end_date.date() and turnos_generados < max_turnos:
+        day_str = current_date.strftime('%A').lower()
         if day_str in working_hours:
             for period in working_hours[day_str]:
                 if isinstance(period, str) and '-' in period:
@@ -69,31 +69,37 @@ def get_available_slots(calendar_id, credentials_json, working_hours_json, servi
                 elif not isinstance(period, dict):
                     continue
                 try:
+                    # Si el horario está vacío o mal configurado, saltar
+                    if not period.get('from') or not period.get('to') or period['from'] == '--:--' or period['to'] == '--:--':
+                        continue
+
                     period_start = datetime.datetime.combine(
-                        current.date(),
+                        current_date,
                         datetime.datetime.strptime(period['from'], "%H:%M").time(),
                         tzinfo=URUGUAY_TZ
                     )
                     period_end = datetime.datetime.combine(
-                        current.date(),
+                        current_date,
                         datetime.datetime.strptime(period['to'], "%H:%M").time(),
                         tzinfo=URUGUAY_TZ
                     )
 
                     slot = period_start
+
+                    # Si es hoy, arrancar desde la hora actual o desde el inicio del horario laboral, lo que sea mayor
+                    if current_date == now.date():
+                        slot = max(slot, now + datetime.timedelta(minutes=1))
+
                     while slot + datetime.timedelta(minutes=service_duration) <= period_end and turnos_generados < max_turnos:
                         slot_end = slot + datetime.timedelta(minutes=service_duration)
                         overlapping = any(bs < slot_end and be > slot for bs, be in busy)
-                        # Solo filtrar por hora actual si es hoy
-                        if not overlapping and (
-                            (current.date() == now.date() and slot > now) or (current.date() > now.date())
-                        ):
+                        if not overlapping:
                             available.append(slot.strftime('%d/%m %H:%M'))
                             turnos_generados += 1
                         slot += datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
                 except Exception as e:
                     continue
-        current += datetime.timedelta(days=1)
+        current_date += datetime.timedelta(days=1)
 
     return available
 
