@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.dialects.postgresql import JSON
-from datetime import datetime
+from datetime import datetime, timezone
 
 Base = declarative_base()
 
@@ -64,4 +64,4 @@ class ErrorLog(Base):
     telefono = Column(String(50))
     mensaje = Column(Text)
     error = Column(Text)
-    fecha = Column(DateTime, default=datetime.datetime.utcnow)
+    fecha = Column(DateTime, default=lambda: datetime.now(timezone.utc))

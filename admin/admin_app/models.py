@@ -1,10 +1,18 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from admin_app.database import db
 from sqlalchemy.dialects.postgresql import JSON
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
 
-
+class ErrorLog(db.Model):
+    __tablename__ = "error_logs"
+    id = db.Column(Integer, primary_key=True)
+    cliente = db.Column(String(255))
+    telefono = db.Column(String(50))
+    mensaje = db.Column(Text)
+    error = db.Column(Text)
+    fecha = db.Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
 class Tenant(db.Model):
     __tablename__ = "tenants"
 
