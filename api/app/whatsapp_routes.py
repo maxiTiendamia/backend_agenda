@@ -149,15 +149,39 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return {"status": "error cancelación"}
         # --- FIN BLOQUE DE CANCELACIÓN ---
         
-        if state.get("step") == "welcome" and "turno" not in message_text:
-            await send_whatsapp_message(
-                to=from_number,
-                text=f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor.",
-                token=ACCESS_TOKEN,
-                phone_number_id=tenant.phone_number_id
-            )
-            state["step"] = "waiting_turno"
-            return {"status": "mensaje bienvenida enviado"}
+        if state.get("step") == "welcome":
+            if "turno" in message_text:
+                servicios = tenant.servicios
+                if not servicios:
+                    await send_whatsapp_message(
+                        to=from_number,
+                        text="⚠️ No hay servicios disponibles.",
+                        token=ACCESS_TOKEN,
+                        phone_number_id=tenant.phone_number_id
+                        )
+                    return {"status": "sin servicios"}
+                msg = "¿Qué servicio deseas reservar?\n"
+                for i, s in enumerate(servicios, 1):
+                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                msg += "\nResponde con el número del servicio."
+                await send_whatsapp_message(
+                    to=from_number,
+                    text=msg,
+                    token=ACCESS_TOKEN,
+                    phone_number_id=tenant.phone_number_id
+                    )
+                state["step"] = "waiting_servicio"
+                state["servicios"] = [s.id for s in servicios]
+                return {"status": "servicios enviados"}
+            else:
+                await send_whatsapp_message(
+                    to=from_number,
+                    text=f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor.",
+                    token=ACCESS_TOKEN,
+                    phone_number_id=tenant.phone_number_id
+                    )
+                state["step"] = "waiting_turno"
+                return {"status": "mensaje bienvenida enviado"}
 
         if state.get("step") == "waiting_turno" and "turno" in message_text:
             servicios = tenant.servicios

@@ -14,6 +14,13 @@ print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
 basic_auth = BasicAuth()
 
+class SecureModelView(ModelView):
+    def is_accessible(self):
+        return basic_auth.authenticate()
+
+    def inaccessible_callback(self, name, **kwargs):
+        return basic_auth.challenge()
+
 class ErrorLogModelView(SecureModelView):    
     can_create = False
     can_edit = False
@@ -63,13 +70,6 @@ class WorkingHoursField(Field):
 
     def process_data(self, value):
         self.data = value
-
-class SecureModelView(ModelView):
-    def is_accessible(self):
-        return basic_auth.authenticate()
-
-    def inaccessible_callback(self, name, **kwargs):
-        return basic_auth.challenge()
 
 class TenantModelView(SecureModelView):
     form_overrides = {'working_hours': WorkingHoursField}
