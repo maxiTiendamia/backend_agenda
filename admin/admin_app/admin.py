@@ -93,7 +93,7 @@ class TenantModelView(SecureModelView):
         try:
             super().on_model_change(form, model, is_created)
             if is_created:
-                from admin_app.utils.venom_qr import generar_qr_para_cliente
+                from admin_app.venom_qr import generar_qr_para_cliente
                 generar_qr_para_cliente(model.telefono)
         except IntegrityError as e:
             db.session.rollback()
