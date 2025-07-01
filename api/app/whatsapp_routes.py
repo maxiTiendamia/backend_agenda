@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 from api.app.models import Tenant, Servicio, Empleado, Reserva,ErrorLog
 from api.app.deps import get_db
-from api.utils.whatsapp import send_whatsapp_message
+from api.utils.whatsapp import enviar_mensaje_whatsapp
 from api.utils.calendar_utils import get_available_slots, create_event
 import time
 import re
@@ -94,7 +94,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["mode"] = "bot"
                 state["step"] = "welcome"
                 set_user_state(from_number, state)
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text="🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar.",
                     token=ACCESS_TOKEN,
@@ -105,7 +105,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return JSONResponse(content={"status": "en modo humano"}, status_code=200)
             
         if any(x in message_text for x in ["gracias", "chau", "chao", "nos vemos"]):
-            await send_whatsapp_message(
+            await enviar_mensaje_whatsapp(
                 to=from_number,
                 text="😊 ¡Gracias por tu mensaje! Que tengas un buen día!",
                 token=ACCESS_TOKEN,
@@ -116,7 +116,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if "ayuda" in message_text:
             state["mode"] = "human"
             set_user_state(from_number, state)
-            await send_whatsapp_message(
+            await enviar_mensaje_whatsapp(
                 to=from_number,
                 text="🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊",
                 token=ACCESS_TOKEN,
@@ -128,7 +128,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if re.match(r"^cancelar\s+\w+", message_text):
             partes = message_text.strip().split(maxsplit=1)
             if len(partes) < 2:
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text="❌ Debes escribir: cancelar + código",
                     token=ACCESS_TOKEN,
@@ -139,7 +139,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             try:
                 reserva = db.query(Reserva).filter_by(fake_id=fake_id).first()
                 if not reserva:
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text="❌ No se encontró la reserva. Verifica el código.",
                         token=ACCESS_TOKEN,
@@ -154,7 +154,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 if exito:
                     reserva.estado = "cancelado"
                     db.commit()
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text="✅ Tu turno fue cancelado correctamente.",
                         token=ACCESS_TOKEN,
@@ -164,7 +164,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     set_user_state(from_number, state)
                     return {"status": "turno cancelado"}
                 else:
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text="❌ No se pudo cancelar el turno. Intenta más tarde.",
                         token=ACCESS_TOKEN,
@@ -173,7 +173,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     return {"status": "cancelación fallida"}
             except Exception as e:
                 print("❌ Error al cancelar turno:", e)
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text="❌ Error interno al cancelar el turno.",
                     token=ACCESS_TOKEN,
@@ -185,7 +185,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             if "turno" in message_text:
                 servicios = tenant.servicios
                 if not servicios:
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text="⚠️ No hay servicios disponibles.",
                         token=ACCESS_TOKEN,
@@ -196,7 +196,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 for i, s in enumerate(servicios, 1):
                     msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                 msg += "\nResponde con el número del servicio."
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text=msg,
                     token=ACCESS_TOKEN,
@@ -207,7 +207,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 set_user_state(from_number, state)
                 return {"status": "servicios enviados"}
             else:
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text=f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor.",
                     token=ACCESS_TOKEN,
@@ -220,7 +220,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if state.get("step") == "waiting_turno" and "turno" in message_text:
             servicios = tenant.servicios
             if not servicios:
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text="⚠️ No hay servicios disponibles.",
                     token=ACCESS_TOKEN,
@@ -231,7 +231,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             for i, s in enumerate(servicios, 1):
                 msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
             msg += "\nResponde con el número del servicio."
-            await send_whatsapp_message(
+            await enviar_mensaje_whatsapp(
                 to=from_number,
                 text=msg,
                 token=ACCESS_TOKEN,
@@ -251,7 +251,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     servicio = db.query(Servicio).get(servicio_id)
                     empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                     if not empleados:
-                        await send_whatsapp_message(
+                        await enviar_mensaje_whatsapp(
                             to=from_number,
                             text="⚠️ No hay empleados disponibles.",
                             token=ACCESS_TOKEN,
@@ -262,7 +262,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     for i, e in enumerate(empleados, 1):
                         msg += f"🔹{i}. {e.nombre}\n"
                     msg += "\nResponde con el número del empleado."
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text=msg,
                         token=ACCESS_TOKEN,
@@ -280,7 +280,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     for i, s in enumerate(servicios, 1):
                         msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                     msg += "\nResponde con el número del servicio."
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text=msg,
                         token=ACCESS_TOKEN,
@@ -297,7 +297,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 for i, s in enumerate(servicios, 1):
                     msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                 msg += "\nResponde con el número del servicio."
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text=msg,
                     token=ACCESS_TOKEN,
@@ -329,7 +329,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     max_turnos = 25
                     slots_mostrar = slots_futuros[:max_turnos]
                     if not slots_mostrar:
-                        await send_whatsapp_message(
+                        await enviar_mensaje_whatsapp(
                             to=from_number,
                             text="⚠️ No hay turnos disponibles para este empleado.",
                             token=ACCESS_TOKEN,
@@ -340,7 +340,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     for i, slot in enumerate(slots_mostrar, 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                     msg += "\nResponde con el número del turno."
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text=msg,
                         token=ACCESS_TOKEN,
@@ -359,7 +359,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     for i, e in enumerate(empleados, 1):
                         msg += f"🔹{i}. {e.nombre}\n"
                     msg += "\nResponde con el número del empleado."
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text=msg,
                         token=ACCESS_TOKEN,
@@ -376,7 +376,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 for i, e in enumerate(empleados, 1):
                     msg += f"🔹{i}. {e.nombre}\n"
                 msg += "\nResponde con el número del empleado."
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text=msg,
                     token=ACCESS_TOKEN,
@@ -402,7 +402,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["servicio_id"] = servicio.id
                     state["step"] = "waiting_nombre"
                     set_user_state(from_number, state)
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text="Por favor, escribe tu nombre y apellido para confirmar la reserva.",
                         token=ACCESS_TOKEN,
@@ -415,7 +415,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     for i, slot in enumerate(slots, 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                     msg += "\nResponde con el número del turno."
-                    await send_whatsapp_message(
+                    await enviar_mensaje_whatsapp(
                         to=from_number,
                         text=msg,
                         token=ACCESS_TOKEN,
@@ -430,7 +430,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 for i, slot in enumerate(slots, 1):
                     msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text=msg,
                     token=ACCESS_TOKEN,
@@ -481,7 +481,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
                 
-                await send_whatsapp_message(
+                await enviar_mensaje_whatsapp(
                     to=from_number,
                     text=msg,
                     token=ACCESS_TOKEN,
@@ -519,7 +519,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             db.add(reserva)
             db.commit()
             
-            await send_whatsapp_message(
+            await enviar_mensaje_whatsapp(
                 to=from_number,
                 text=(
                     f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')} con {empleado.nombre}.\n"
@@ -535,7 +535,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return {"status": "turno reservado", "fake_id": fake_id}
         
         # Mensaje genérico por defecto
-        await send_whatsapp_message(
+        await enviar_mensaje_whatsapp(
             to=from_number,
             text="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con una persona.",
             token=ACCESS_TOKEN,
@@ -558,7 +558,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         print("❌ Error general procesando mensaje:", e)
         traceback.print_exc()
         if not state.get("error_sent"):
-            await send_whatsapp_message(
+            await enviar_mensaje_whatsapp(
                 to=from_number,
                 text="❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde.",
                 token=ACCESS_TOKEN,
