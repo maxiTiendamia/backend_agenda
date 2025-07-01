@@ -1,23 +1,35 @@
-import httpx
+import requests
+import os
 
-async def send_whatsapp_message(to: str, text: str, token: str, phone_number_id: str):
-    url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": text}
-    }
+VENOM_BASE_URL = os.getenv("VENOM_URL", "http://localhost:3000")  # URL de tu servicio Venom
 
-    print("🛰️ Enviando mensaje a WhatsApp:", data)
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=data)
-        print("📬 Respuesta de WhatsApp:", response.status_code, response.text)
-        return response.json()
+def enviar_mensaje_whatsapp(cliente_id: str, numero: str, mensaje: str) -> bool:
+    """
+    Envía un mensaje a un número específico usando la sesión activa de Venom para el cliente.
+    """
+    try:
+        # Paso 1: asegurar que la sesión esté activa
+        iniciar_url = f"{VENOM_BASE_URL}/iniciar/{cliente_id}"
+        requests.get(iniciar_url, timeout=10)
+
+        # Paso 2: enviar el mensaje
+        payload = {
+            "clienteId": cliente_id,
+            "to": numero,
+            "message": mensaje
+        }
+        respuesta = requests.post(f"{VENOM_BASE_URL}/send", json=payload, timeout=10)
+
+        if respuesta.status_code == 200:
+            print(f"✅ Mensaje enviado a {numero} desde cliente {cliente_id}")
+            return True
+        else:
+            print(f"❌ Error al enviar mensaje: {respuesta.text}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error general en envío de mensaje: {e}")
+        return False
 
 
