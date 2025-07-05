@@ -1,4 +1,18 @@
+# Archivos sensibles
 .env
+
+# Carpetas de sesiones y tokens temporales
 sessions/
-node_modules/
 venom-service/tokens/
+
+# Dependencias
+node_modules/
+__pycache__/
+
+# Archivos innecesarios o temporales
+*.log
+*.sqlite3
+.DS_Store
+
+# Configuraciones de IDE
+.vscode/
