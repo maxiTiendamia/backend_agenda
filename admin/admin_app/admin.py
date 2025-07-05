@@ -9,6 +9,7 @@ import json
 from sqlalchemy.exc import IntegrityError
 from collections import Counter
 import os
+import requests
 
 print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
@@ -86,15 +87,32 @@ class TenantModelView(SecureModelView):
     )
 
     column_formatters = {
-        'qr_code': lambda v, c, m, p: Markup(f"<img src='data:image/png;base64,{m.qr_code}' style='height:150px;'>") if m.qr_code else ''
-    }
+        'qr_code': lambda v, c, m, p: Markup(
+            f"<img src='data:image/png;base64,{m.qr_code}' style='height:150px;'>"
+            ) if m.qr_code and not m.qr_code.startswith("http") and not m.qr_code.startswith("data:image") else (
+                Markup(f"<img src='{m.qr_code}' style='height:150px;'>")
+                ) if m.qr_code else Markup("<span style='color: gray;'>⏳ Esperando QR...</span>")
+        }
 
     def on_model_change(self, form, model, is_created):
         try:
             super().on_model_change(form, model, is_created)
+
             if is_created:
-                from admin_app.venom_qr import generar_qr_para_cliente
-                generar_qr_para_cliente(model.telefono)
+                db.session.flush()  # Nos aseguramos de tener model.id
+
+                try:
+                    venom_url = f"http://localhost:3000/iniciar/{model.id}"
+                    print(f"🛠️ Enviando solicitud a Venom para generar QR de cliente {model.id}")
+                    response = requests.get(venom_url)
+
+                    if response.ok:
+                        flash("✅ Solicitud enviada a Venom para generar QR.", "success")
+                    else:
+                        flash("⚠️ Venom no respondió correctamente al generar el QR.", "warning")
+                except Exception as e:
+                    flash(f"❌ Error al comunicarse con Venom: {str(e)}", "danger")
+
         except IntegrityError as e:
             db.session.rollback()
             if 'tenants_telefono_key' in str(e):
@@ -102,6 +120,7 @@ class TenantModelView(SecureModelView):
             else:
                 flash(f'⚠️ Error inesperado: {e}', 'error')
             raise
+
 
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
