@@ -13,6 +13,8 @@ import requests
 
 print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
+VENOM_URL = os.getenv("VENOM_URL", "https://venom-service.onrender.com")
+
 basic_auth = BasicAuth()
 
 class SecureModelView(ModelView):
@@ -102,7 +104,7 @@ class TenantModelView(SecureModelView):
                 db.session.flush()  # Nos aseguramos de tener model.id
 
                 try:
-                    venom_url = f"http://localhost:3000/iniciar/{model.id}"
+                    venom_url = f"{VENOM_URL}/iniciar/{model.id}"
                     print(f"🛠️ Enviando solicitud a Venom para generar QR de cliente {model.id}")
                     response = requests.get(venom_url)
 
