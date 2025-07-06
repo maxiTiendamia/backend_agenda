@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-# Instala dependencias necesarias para Puppeteer/Venom
+# Dependencias necesarias
 RUN apt-get update && apt-get install -y \
   wget \
   ca-certificates \
@@ -23,12 +23,17 @@ RUN apt-get update && apt-get install -y \
   libvulkan1 \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Directorio de trabajo
+# Establecer directorio de trabajo
 WORKDIR /app
 
+# ⛔️ Evita que Puppeteer descargue Chromium automáticamente
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+# Copiar e instalar dependencias
 COPY ./venom-service/package*.json ./
 RUN npm install
 
+# Copiar el resto del código
 COPY ./venom-service ./
 
 EXPOSE 3000

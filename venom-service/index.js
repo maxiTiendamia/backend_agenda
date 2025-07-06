@@ -1,5 +1,5 @@
-const { Pool } = require("pg");
 const express = require("express");
+const { Pool } = require("pg");
 const fs = require("fs");
 const path = require("path");
 const venom = require("venom-bot");
@@ -29,14 +29,14 @@ pool
 
 async function crearSesion(clienteId) {
   const sessionId = String(clienteId);
-  
+
   if (sessions[sessionId]) {
     console.log(`🟡 Sesión ya activa para ${sessionId}`);
     return sessions[sessionId];
   }
 
   console.log(`⚙️ Iniciando sesión para ${sessionId}...`);
-  
+
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
 
   if (!fs.existsSync(sessionDir)) {
@@ -44,52 +44,57 @@ async function crearSesion(clienteId) {
     console.log("📁 Carpeta 'sessions' creada");
   }
 
-  const client = await venom.create({
-    session: sessionId,
-    multidevice: true,
-    disableWelcome: true,
-    sessionFolder: sessionDir,
-    autoClose: false,
-    useChrome: true,
-    browserArgs: ["--no-sandbox", "--disable-setuid-sandbox"],
-    puppeteerOptions: {
-      headless: "new",
-    },
-    catchQR: async (base64Qr) => {
-      console.log("🟡 Generando QR para:", sessionId);
+  try {
+    const client = await venom.create({
+      session: sessionId,
+      multidevice: true,
+      disableWelcome: true,
+      sessionFolder: sessionDir,
+      autoClose: false,
+      useChrome: true,
+      browserArgs: ["--no-sandbox", "--disable-setuid-sandbox"],
+      puppeteerOptions: {
+        headless: "new",
+      },
+      catchQR: async (base64Qr) => {
+        console.log("🟡 Generando QR para:", sessionId);
 
-      const html = `
-      <html>
-        <body style="display:flex;justify-content:center;align-items:center;height:100vh;">
-          <img src="${base64Qr}" />
-        </body>
-      </html>`;
-      const qrPath = path.join(sessionDir, `${sessionId}.html`);
+        const html = `
+        <html>
+          <body style="display:flex;justify-content:center;align-items:center;height:100vh;">
+            <img src="${base64Qr}" />
+          </body>
+        </html>`;
 
-      fs.writeFileSync(qrPath, html);
-      console.log(`✅ QR guardado en: ${qrPath}`);
+        const qrPath = path.join(sessionDir, `${sessionId}.html`);
+        fs.writeFileSync(qrPath, html);
+        console.log(`✅ QR guardado en: ${qrPath}`);
 
-      try {
-        await pool.query(
-          "UPDATE tenants SET qr_code = $1 WHERE id = $2",
-          [base64Qr.replace(/^data:image\/\w+;base64,/, ""), sessionId]
-        );
-        console.log(`📬 QR guardado en DB para cliente ${sessionId}`);
-      } catch (err) {
-        console.error("❌ Error guardando QR en DB:", err);
+        try {
+          await pool.query(
+            "UPDATE tenants SET qr_code = $1 WHERE id = $2",
+            [base64Qr.replace(/^data:image\/\w+;base64,/, ""), sessionId]
+          );
+          console.log(`📬 QR guardado en DB para cliente ${sessionId}`);
+        } catch (err) {
+          console.error("❌ Error guardando QR en DB:", err);
+        }
+      },
+    });
+
+    sessions[sessionId] = client;
+
+    client.onMessage(async (message) => {
+      if (message.body.toLowerCase() === "hola") {
+        await client.sendText(message.from, "¡Hola! ¿En qué puedo ayudarte? 🤖");
       }
-    },
-  });
+    });
 
-  sessions[sessionId] = client;
-
-  client.onMessage(async (message) => {
-    if (message.body.toLowerCase() === "hola") {
-      await client.sendText(message.from, "¡Hola! ¿En qué puedo ayudarte? 🤖");
-    }
-  });
-
-  return client;
+    return client;
+  } catch (err) {
+    console.error(`❌ Error creando sesión para ${sessionId}:`, err);
+    throw err;
+  }
 }
 
 // 🔁 Restaurar sesiones activas desde la DB al iniciar
@@ -154,6 +159,10 @@ app.get("/qr_base64/:clienteId", async (req, res) => {
 app.post("/send", async (req, res) => {
   const { clienteId, to, message } = req.body;
 
+  if (!clienteId || !to || !message) {
+    return res.status(400).json({ error: "Faltan parámetros requeridos: clienteId, to, message" });
+  }
+
   try {
     const client = await crearSesion(clienteId);
     await client.sendText(to, message);
@@ -166,5 +175,5 @@ app.post("/send", async (req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
-  await restaurarSesiones(); // 🔁 Restaurar sesiones activas
+  await restaurarSesiones();
 });
