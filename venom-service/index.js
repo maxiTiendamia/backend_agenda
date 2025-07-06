@@ -36,8 +36,8 @@ async function crearSesion(clienteId) {
   }
 
   console.log(`⚙️ Iniciando sesión para ${sessionId}...`);
-
-  const sessionDir = path.join(__dirname, "sessions");
+  
+  const sessionDir = process.env.SESSION_DIR || path.join(__dirname, "sessions");
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir);
     console.log("📁 Carpeta 'sessions' creada");
