@@ -1,7 +1,7 @@
 import requests
 import os
 
-VENOM_BASE_URL = os.getenv("VENOM_URL", "http://localhost:3000")  # URL de tu servicio Venom
+VENOM_BASE_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")  # URL de tu servicio Venom
 
 
 def enviar_mensaje_whatsapp(cliente_id: str, numero: str, mensaje: str) -> bool:

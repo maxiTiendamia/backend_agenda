@@ -13,7 +13,7 @@ import requests
 
 print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
-VENOM_URL = os.getenv("VENOM_URL", "https://venom-service.onrender.com")
+VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
 
 basic_auth = BasicAuth()
 
