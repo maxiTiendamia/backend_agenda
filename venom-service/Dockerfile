@@ -1,4 +1,4 @@
-# Imagen base oficial de Node.js
+# Imagen base de Node.js
 FROM node:20-slim
 
 # Instala dependencias necesarias para Puppeteer/Venom
@@ -24,20 +24,17 @@ RUN apt-get update && apt-get install -y \
   libvulkan1 \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Crea y establece el directorio de trabajo
+# Directorio de trabajo
 WORKDIR /app
 
-# Copia solo los archivos necesarios primero para aprovechar cache
-COPY package*.json ./
-
-# Instala dependencias
+# Copia los archivos desde venom-service/
+COPY ./venom-service/package*.json ./
 RUN npm install
 
-# Copia el resto del código fuente
-COPY . .
+COPY ./venom-service ./
 
-# Puerto en el que corre tu app
+# Puerto (ajustalo si usás otro en index.js)
 EXPOSE 3000
 
-# Comando para ejecutar la app
+# Comando para iniciar tu app
 CMD ["node", "index.js"]
