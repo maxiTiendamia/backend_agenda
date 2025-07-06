@@ -37,7 +37,8 @@ async function crearSesion(clienteId) {
 
   console.log(`⚙️ Iniciando sesión para ${sessionId}...`);
   
-  const sessionDir = process.env.SESSION_DIR || path.join(__dirname, "sessions");
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir);
     console.log("📁 Carpeta 'sessions' creada");
@@ -63,7 +64,8 @@ async function crearSesion(clienteId) {
           <img src="${base64Qr}" />
         </body>
       </html>`;
-      const qrPath = `./sessions/${sessionId}.html`;
+      const qrPath = path.join(sessionDir, `${sessionId}.html`);
+
       fs.writeFileSync(qrPath, html);
       console.log(`✅ QR guardado en: ${qrPath}`);
 
