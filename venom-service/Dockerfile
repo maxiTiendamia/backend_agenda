@@ -29,18 +29,17 @@ RUN apt-get update && apt-get install -y \
   && apt-get update && apt-get install -y google-chrome-stable \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Evitar que puppeteer descargue Chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
-# Crear directorio de trabajo
+# Cambiar al directorio correcto
 WORKDIR /app
 
-# Copiar archivos desde el contexto (que ya es venom-service)
+# Copiar solo lo que necesita venom-service
 COPY ./venom-service/package*.json ./
 RUN npm install
 
-# Copiar todo el código
-COPY . .
+COPY ./venom-service ./
 
 EXPOSE 3000
+
 CMD ["node", "index.js"]
