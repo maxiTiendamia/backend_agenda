@@ -1,4 +1,3 @@
-# Imagen base de Node.js
 FROM node:20-slim
 
 # Instala dependencias necesarias para Puppeteer/Venom
@@ -27,14 +26,10 @@ RUN apt-get update && apt-get install -y \
 # Directorio de trabajo
 WORKDIR /app
 
-# Copia los archivos desde venom-service/
 COPY ./venom-service/package*.json ./
 RUN npm install
 
 COPY ./venom-service ./
 
-# Puerto (ajustalo si usás otro en index.js)
 EXPOSE 3000
-
-# Comando para iniciar tu app
 CMD ["node", "index.js"]
