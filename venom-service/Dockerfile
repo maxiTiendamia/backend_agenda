@@ -1,7 +1,6 @@
-# Imagen base con Node.js
 FROM node:20-slim
 
-# Instalar dependencias del sistema y Google Chrome estable
+# Instalar dependencias del sistema y Google Chrome
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg2 \
@@ -24,30 +23,24 @@ RUN apt-get update && apt-get install -y \
     libu2f-udev \
     libvulkan1 \
     unzip \
-    gnupg \
     curl \
   && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
   && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
   && apt-get update && apt-get install -y google-chrome-stable \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Variable de entorno para que Puppeteer no descargue Chromium
+# Evitar que puppeteer descargue Chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
-# Crear carpeta de trabajo
+# Crear directorio de trabajo
 WORKDIR /app
 
-# Copiar solo package.json y package-lock.json para aprovechar cache de dependencias
-COPY ./package*.json ./
-
-# Instalar dependencias del proyecto
+# Copiar archivos desde el contexto (que ya es venom-service)
+COPY package*.json ./
 RUN npm install
 
-# Copiar el resto de la aplicación
+# Copiar todo el código
 COPY . .
 
-# Exponer el puerto (ajustalo si usás otro)
 EXPOSE 3000
-
-# Comando para iniciar tu app
 CMD ["node", "index.js"]
