@@ -19,11 +19,11 @@
       <tr>
         <th>Cliente ID</th>
         <th>Estado</th>
-        <th>Acción</th>
+        <th>Acciones</th>
       </tr>
     </thead>
     <tbody>
-      {% for sesion in estado_sesiones %}
+      {% if estado_sesiones is iterable %} {% for sesion in estado_sesiones %}
       <tr>
         <td>{{ sesion.clienteId }}</td>
         <td>
@@ -34,23 +34,30 @@
           {% elif estado == 'TIMEOUT' %}
           <span style="color: orange">🟠 Timeout</span>
           {% else %}
-          <span style="color: gray">⚪ {{ estado }}</span>
+          <span style="color: gray">⚪ {{ estado or "No iniciada" }}</span>
           {% endif %}
+
+          <a
+            href="/admin/reiniciar/{{ sesion.clienteId }}"
+            class="btn btn-sm btn-warning mt-1 d-block"
+            onclick="return confirm('¿Seguro que deseas reiniciar la sesión del cliente {{ sesion.clienteId }}?')"
+          >
+            🔁 Reiniciar
+          </a>
         </td>
         <td>
           <a
             href="/admin/reiniciar/{{ sesion.clienteId }}"
             class="btn btn-sm btn-warning"
+            >Reiniciar</a
           >
-            🔁 Reiniciar
-          </a>
         </td>
       </tr>
-      {% else %}
+      {% endfor %} {% else %}
       <tr>
-        <td colspan="3" class="text-muted">No hay sesiones aún.</td>
+        <td colspan="3">⚠️ No se pudieron obtener las sesiones activas.</td>
       </tr>
-      {% endfor %}
+      {% endif %}
     </tbody>
   </table>
 
