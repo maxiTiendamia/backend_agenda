@@ -186,6 +186,23 @@ app.get("/qr_base64/:clienteId", async (req, res) => {
   }
 });
 
+app.post("/enviar-mensaje", async (req, res) => {
+  const { cliente_id, telefono, mensaje } = req.body;
+
+  const session = sessions[String(cliente_id)];
+  if (!session) {
+    return res.status(404).json({ error: "Sesión no encontrada para este cliente" });
+  }
+
+  try {
+    await session.sendText(`${telefono}@c.us`, mensaje);
+    res.json({ status: "mensaje enviado" });
+  } catch (err) {
+    console.error("❌ Error enviando mensaje:", err);
+    res.status(500).json({ error: "Error al enviar mensaje" });
+  }
+});
+
 app.post("/send", async (req, res) => {
   const { clienteId, to, message } = req.body;
 

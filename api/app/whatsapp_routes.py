@@ -1,24 +1,23 @@
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.orm import Session
-from api.app.models import Tenant, Servicio, Empleado, Reserva,ErrorLog
+from api.app.models import Tenant, Servicio, Empleado, Reserva, ErrorLog
 from api.app.deps import get_db
-from api.utils.whatsapp import enviar_mensaje_whatsapp
-from api.utils.calendar_utils import get_available_slots, create_event
+from api.utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google
+from api.utils.generador_fake_id import generar_fake_id
 import time
 import re
 import traceback
 import os
-from api.utils.calendar_utils import cancelar_evento_google
-from api.utils.generador_fake_id import generar_fake_id
 import pytz
 import redis
 import json
-from datetime import datetime
+import httpx
+from datetime import datetime, timedelta
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+VENOM_URL = os.getenv("VENOM_URL", "http://venom-service:3000")
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-
 SESSION_TTL = 300  # segundos
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -44,6 +43,20 @@ def get_user_state(user_id):
     except Exception as e:
         print(f"⚠️ Error leyendo estado de Redis: {e}")
         return None
+
+async def enviar_mensaje_venom(cliente_id: str, telefono: str, mensaje: str):
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{VENOM_URL}/enviar-mensaje", json={
+                "cliente_id": cliente_id,
+                "telefono": telefono,
+                "mensaje": mensaje
+            })
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        print(f"❌ Error enviando mensaje con Venom: {e}")
+        return {"error": str(e)}
 
 router = APIRouter()
 
@@ -94,57 +107,49 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["mode"] = "bot"
                 state["step"] = "welcome"
                 set_user_state(from_number, state)
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text="🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar.",
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
-                    )
+                await enviar_mensaje_venom(cliente_id=tenant.id, telefono=from_number, mensaje="🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar.")
+
                 return {"status": "modo bot reactivado"}
             else:
                 return JSONResponse(content={"status": "en modo humano"}, status_code=200)
             
         if any(x in message_text for x in ["gracias", "chau", "chao", "nos vemos"]):
-            await enviar_mensaje_whatsapp(
-                to=from_number,
-                text="😊 ¡Gracias por tu mensaje! Que tengas un buen día!",
-                token=ACCESS_TOKEN,
-                phone_number_id=tenant.phone_number_id
-            )
+
+            await enviar_mensaje_venom(cliente_id=tenant.id, telefono=from_number, mensaje="😊 ¡Gracias por tu mensaje! Que tengas un buen día!")
             return {"status": "respuesta de despedida"}
 
         if "ayuda" in message_text:
             state["mode"] = "human"
             set_user_state(from_number, state)
-            await enviar_mensaje_whatsapp(
-                to=from_number,
-                text="🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊",
-                token=ACCESS_TOKEN,
-                phone_number_id=tenant.phone_number_id
+
+            await enviar_mensaje_venom(
+                cliente_id=tenant.id,
+                telefono=from_number,
+                mensaje="🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"
             )
+
             return {"status": "modo humano activado"}
                 # --- BLOQUE DE CANCELACIÓN ---
         
         if re.match(r"^cancelar\s+\w+", message_text):
             partes = message_text.strip().split(maxsplit=1)
             if len(partes) < 2:
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text="❌ Debes escribir: cancelar + código",
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
-                    )
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje="❌ Debes escribir: cancelar + código"
+                )
+                
                 return {"status": "cancelación sin id"}
             fake_id = partes[1].strip().upper()
             try:
                 reserva = db.query(Reserva).filter_by(fake_id=fake_id).first()
                 if not reserva:
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text="❌ No se encontró la reserva. Verifica el código.",
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
-                        )
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje="❌ No se encontró la reserva. Verifica el código."
+                    )
                     return {"status": "cancelación fallida"}
                 exito = cancelar_evento_google(
                     calendar_id=reserva.empleado_calendar_id,
@@ -154,65 +159,68 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 if exito:
                     reserva.estado = "cancelado"
                     db.commit()
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text="✅ Tu turno fue cancelado correctamente.",
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
-                        )
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje="✅ Tu turno fue cancelado correctamente."
+                    )
                     state.clear()
                     set_user_state(from_number, state)
                     return {"status": "turno cancelado"}
                 else:
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text="❌ No se pudo cancelar el turno. Intenta más tarde.",
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
-                        )
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje="❌ No se pudo cancelar el turno. Intenta más tarde."
+                    )
                     return {"status": "cancelación fallida"}
             except Exception as e:
                 print("❌ Error al cancelar turno:", e)
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text="❌ Error interno al cancelar el turno.",
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje="❌ No se pudo cancelar el turno. Intenta más tarde."
                     )
+                return {"status": "cancelación fallida"}
+            except Exception as e:
+                print("❌ Error al cancelar turno:", e)
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje="❌ Error interno al cancelar el turno."
+                )
+                    
                 return {"status": "error cancelación"}
         
         if state.get("step") == "welcome":
             if "turno" in message_text:
                 servicios = tenant.servicios
                 if not servicios:
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text="⚠️ No hay servicios disponibles.",
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
-                        )
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje="⚠️ No hay servicios disponibles."
+                    )
                     return {"status": "sin servicios"}
                 msg = "¿Qué servicio deseas reservar?\n"
                 for i, s in enumerate(servicios, 1):
                     msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                 msg += "\nResponde con el número del servicio."
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text=msg,
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
-                    )
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje=msg
+                )
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
                 set_user_state(from_number, state)
                 return {"status": "servicios enviados"}
             else:
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text=f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor.",
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
-                    )
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje=f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor."
+                )
                 state["step"] = "waiting_turno"
                 set_user_state(from_number, state)
                 return {"status": "mensaje bienvenida enviado"}
@@ -220,22 +228,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if state.get("step") == "waiting_turno" and "turno" in message_text:
             servicios = tenant.servicios
             if not servicios:
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text="⚠️ No hay servicios disponibles.",
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje="⚠️ No hay servicios disponibles."
                 )
                 return {"status": "sin servicios"}
             msg = "¿Qué servicio deseas reservar?\n"
             for i, s in enumerate(servicios, 1):
                 msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
             msg += "\nResponde con el número del servicio."
-            await enviar_mensaje_whatsapp(
-                to=from_number,
-                text=msg,
-                token=ACCESS_TOKEN,
-                phone_number_id=tenant.phone_number_id
+            await enviar_mensaje_venom(
+                cliente_id=tenant.id,
+                telefono=from_number,
+                mensaje=msg
             )
             state["step"] = "waiting_servicio"
             state["servicios"] = [s.id for s in servicios]
@@ -251,22 +257,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     servicio = db.query(Servicio).get(servicio_id)
                     empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                     if not empleados:
-                        await enviar_mensaje_whatsapp(
-                            to=from_number,
-                            text="⚠️ No hay empleados disponibles.",
-                            token=ACCESS_TOKEN,
-                            phone_number_id=tenant.phone_number_id
+                        await enviar_mensaje_venom(
+                            cliente_id=tenant.id,
+                            telefono=from_number,
+                            mensaje="⚠️ No hay empleados disponibles."
                         )
                         return {"status": "sin empleados"}
                     msg = f"¿Con qué empleado?\n"
                     for i, e in enumerate(empleados, 1):
                         msg += f"🔹{i}. {e.nombre}\n"
                     msg += "\nResponde con el número del empleado."
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text=msg,
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje=msg
                     )
                     state["step"] = "waiting_empleado"
                     state["servicio_id"] = servicio_id
@@ -280,11 +284,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     for i, s in enumerate(servicios, 1):
                         msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                     msg += "\nResponde con el número del servicio."
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text=msg,
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje=msg
                     )
                     state["step"] = "waiting_servicio"
                     state["servicios"] = [s.id for s in servicios]
@@ -297,11 +300,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 for i, s in enumerate(servicios, 1):
                     msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                 msg += "\nResponde con el número del servicio."
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text=msg,
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje=msg
                 )
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
@@ -329,22 +331,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     max_turnos = 25
                     slots_mostrar = slots_futuros[:max_turnos]
                     if not slots_mostrar:
-                        await enviar_mensaje_whatsapp(
-                            to=from_number,
-                            text="⚠️ No hay turnos disponibles para este empleado.",
-                            token=ACCESS_TOKEN,
-                            phone_number_id=tenant.phone_number_id
+                        await enviar_mensaje_venom(
+                            cliente_id=tenant.id,
+                            telefono=from_number,
+                            mensaje="⚠️ No hay turnos disponibles para este empleado."
                         )
                         return {"status": "sin turnos"}
                     msg = "📅 Estos son los próximos turnos disponibles:\n"
                     for i, slot in enumerate(slots_mostrar, 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                     msg += "\nResponde con el número del turno."
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text=msg,
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje=msg
                     )
                     state["step"] = "waiting_turno_final"
                     state["empleado_id"] = empleado_id
@@ -359,11 +359,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     for i, e in enumerate(empleados, 1):
                         msg += f"🔹{i}. {e.nombre}\n"
                     msg += "\nResponde con el número del empleado."
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text=msg,
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje=msg
                     )
                     state["step"] = "waiting_empleado"
                     state["empleados"] = [e.id for e in empleados]
@@ -376,11 +375,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 for i, e in enumerate(empleados, 1):
                     msg += f"🔹{i}. {e.nombre}\n"
                 msg += "\nResponde con el número del empleado."
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text=msg,
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje=msg
                 )
                 state["step"] = "waiting_empleado"
                 state["empleados"] = [e.id for e in empleados]
@@ -402,11 +400,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["servicio_id"] = servicio.id
                     state["step"] = "waiting_nombre"
                     set_user_state(from_number, state)
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text="Por favor, escribe tu nombre y apellido para confirmar la reserva.",
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje="Por favor, escribe tu nombre y apellido para confirmar la reserva."
                     )
                     return {"status": "pidiendo nombre"}
                 else:
@@ -415,11 +412,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     for i, slot in enumerate(slots, 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                     msg += "\nResponde con el número del turno."
-                    await enviar_mensaje_whatsapp(
-                        to=from_number,
-                        text=msg,
-                        token=ACCESS_TOKEN,
-                        phone_number_id=tenant.phone_number_id
+                    await enviar_mensaje_venom(
+                        cliente_id=tenant.id,
+                        telefono=from_number,
+                        mensaje=msg
                     )
                     state["step"] = "waiting_turno_final"
                     set_user_state(from_number, state)
@@ -430,11 +426,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 for i, slot in enumerate(slots, 1):
                     msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text=msg,
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje=msg
                 )
                 state["step"] = "waiting_turno_final"
                 set_user_state(from_number, state)
@@ -480,13 +475,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 for i, s in enumerate(slots_actuales, 1):
                     msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
-                
-                await enviar_mensaje_whatsapp(
-                    to=from_number,
-                    text=msg,
-                    token=ACCESS_TOKEN,
-                    phone_number_id=tenant.phone_number_id
-                    )
+
+                await enviar_mensaje_venom(
+                    cliente_id=tenant.id,
+                    telefono=from_number,
+                    mensaje=msg
+                )
                 
                 state["step"] = "waiting_turno_final"
                 state["slots"] = slots_actuales
@@ -518,28 +512,26 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             )
             db.add(reserva)
             db.commit()
-            
-            await enviar_mensaje_whatsapp(
-                to=from_number,
-                text=(
+
+            await enviar_mensaje_venom(
+                cliente_id=tenant.id,
+                telefono=from_number,
+                mensaje=(
                     f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')} con {empleado.nombre}.\n"
                     f"\nServicio: {servicio.nombre}\n"
                     f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
                     f"\nSi querés cancelar, escribí: cancelar {fake_id}"
                 ),
-                token=ACCESS_TOKEN,
-                phone_number_id=tenant.phone_number_id
             )
             state.clear()
             set_user_state(from_number, state)
             return {"status": "turno reservado", "fake_id": fake_id}
         
         # Mensaje genérico por defecto
-        await enviar_mensaje_whatsapp(
-            to=from_number,
-            text="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con una persona.",
-            token=ACCESS_TOKEN,
-            phone_number_id=tenant.phone_number_id
+        await enviar_mensaje_venom(
+            cliente_id=tenant.id,
+            telefono=from_number,
+            mensaje="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con una persona."
         )
         return JSONResponse(content={"status": "mensaje no reconocido"})
 
@@ -558,12 +550,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         print("❌ Error general procesando mensaje:", e)
         traceback.print_exc()
         if not state.get("error_sent"):
-            await enviar_mensaje_whatsapp(
-                to=from_number,
-                text="❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde.",
-                token=ACCESS_TOKEN,
-                phone_number_id=tenant.phone_number_id
-                )
+            await enviar_mensaje_venom(
+                cliente_id=tenant.id,
+                telefono=from_number,
+                mensaje="❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde."
+            )
             state["error_sent"] = True
             set_user_state(from_number, state)
         return JSONResponse(content={"error": "Error interno"}, status_code=500)
