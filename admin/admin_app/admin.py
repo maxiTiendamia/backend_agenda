@@ -197,6 +197,11 @@ class SecureAdminIndexView(AdminIndexView):
 
     @expose('/reiniciar/<int:cliente_id>')
     def reiniciar_cliente(self, cliente_id):
+        # Elimina el QR viejo de la base antes de pedir uno nuevo
+        tenant = Tenant.query.get(cliente_id)
+        if tenant:
+            tenant.qr_code = None
+            db.session.commit()
         threading.Thread(target=llamar_a_venom_async, args=(cliente_id,)).start()
         flash(f"🔁 Reinicio de sesión solicitado para cliente {cliente_id}.", "info")
         return redirect(request.referrer or url_for('admin.index'))

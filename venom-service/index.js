@@ -39,13 +39,25 @@ function crearSesionConTimeout(clienteId, timeoutMs = 60000) {
 
 async function crearSesion(clienteId, permitirGuardarQR = true) {
   const sessionId = String(clienteId);
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+  const qrPath = path.join(sessionDir, `${sessionId}.html`);
+
+  // Si se pide regenerar QR, borra el archivo y el campo en la base
+  if (permitirGuardarQR) {
+    if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
+    try {
+      await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [sessionId]);
+    } catch (err) {
+      console.error("❌ Error limpiando QR en DB:", err);
+    }
+  }
+
   if (sessions[sessionId]) {
     console.log(`🟡 Sesión ya activa para ${sessionId}`);
     return sessions[sessionId];
   }
 
   console.log(`⚙️ Iniciando sesión para ${sessionId}...`);
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir);
     console.log("📁 Carpeta 'sessions' creada");
