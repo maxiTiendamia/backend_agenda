@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require("express");
 const { Pool } = require("pg");
 const fs = require("fs");
@@ -251,34 +252,39 @@ async function restaurarSesiones() {
       return;
     }
 
-    // Leer todas las carpetas de sesión del disco
-    const sessionFolders = fs.readdirSync(sessionDir).filter(item => {
-      const itemPath = path.join(sessionDir, item);
-      return fs.statSync(itemPath).isDirectory() && !isNaN(item);
-    });
-
-    console.log(`📂 Encontradas ${sessionFolders.length} carpetas de sesión en disco`);
-
-    // Si no hay carpetas pero existe la carpeta /app/tokens, buscar ahí
-    if (sessionFolders.length === 0 && fs.existsSync("/app/tokens")) {
-      console.log("🔍 Buscando en /app/tokens...");
+    // Leer todas las carpetas de sesión del disco (priorizar /app/tokens)
+    let sessionFolders = [];
+    
+    // Primero buscar en /app/tokens si existe
+    if (fs.existsSync("/app/tokens")) {
+      console.log("🔍 Buscando carpetas en /app/tokens...");
       const appTokenFolders = fs.readdirSync("/app/tokens").filter(item => {
         const itemPath = path.join("/app/tokens", item);
         return fs.statSync(itemPath).isDirectory() && !isNaN(item);
       });
-      console.log(`📂 Encontradas ${appTokenFolders.length} carpetas en /app/tokens`);
+      console.log(`📂 Encontradas ${appTokenFolders.length} carpetas en /app/tokens:`, appTokenFolders);
       
-      // Copiar carpetas encontradas al array principal
-      sessionFolders.push(...appTokenFolders.map(folder => {
-        // Si las carpetas están en /app/tokens, usar esa ruta
-        return { id: folder, path: path.join("/app/tokens", folder) };
+      sessionFolders = appTokenFolders.map(folder => ({
+        id: folder,
+        path: path.join("/app/tokens", folder)
       }));
-    } else {
-      // Agregar path completo a las carpetas encontradas
-      sessionFolders.forEach((folder, index) => {
-        sessionFolders[index] = { id: folder, path: path.join(sessionDir, folder) };
-      });
     }
+    
+    // Si no hay carpetas en /app/tokens, buscar en sessionDir local
+    if (sessionFolders.length === 0) {
+      const localFolders = fs.readdirSync(sessionDir).filter(item => {
+        const itemPath = path.join(sessionDir, item);
+        return fs.statSync(itemPath).isDirectory() && !isNaN(item);
+      });
+      console.log(`📂 Encontradas ${localFolders.length} carpetas en ${sessionDir}:`, localFolders);
+      
+      sessionFolders = localFolders.map(folder => ({
+        id: folder,
+        path: path.join(sessionDir, folder)
+      }));
+    }
+
+    console.log(`📋 Carpetas de sesión encontradas:`, sessionFolders.map(f => f.id));
 
     // Verificar cuáles clientes existen en la base de datos
     let result;
@@ -297,6 +303,57 @@ async function restaurarSesiones() {
     }
     
     const clientesActivos = result.rows.map(row => String(row.id));
+    console.log(`🔍 Clientes activos en BD (strings): [${clientesActivos.join(', ')}]`);
+    
+    // Verificar estado de sesiones activas en memoria
+    const sesionesEnMemoria = Object.keys(sessions);
+    console.log(`💾 Sesiones activas en memoria: [${sesionesEnMemoria.join(', ')}]`);
+    
+    // Análisis detallado de carpetas vs clientes
+    const carpetasIds = sessionFolders.map(f => f.id);
+    const clientesConCarpeta = clientesActivos.filter(id => carpetasIds.includes(id));
+    const clientesSinCarpeta = clientesActivos.filter(id => !carpetasIds.includes(id));
+    const carpetasHuerfanas = carpetasIds.filter(id => !clientesActivos.includes(id));
+    
+    console.log(`📋 ANÁLISIS COMPLETO:`);
+    console.log(`  - Clientes con carpeta: [${clientesConCarpeta.join(', ')}]`);
+    console.log(`  - Clientes sin carpeta: [${clientesSinCarpeta.join(', ')}]`);
+    console.log(`  - Carpetas huérfanas: [${carpetasHuerfanas.join(', ')}]`);
+    
+    // Verificar específicamente el cliente 35
+    if (clientesActivos.includes('35')) {
+      console.log(`🔍 DIAGNÓSTICO CLIENTE 35:`);
+      console.log(`  - Existe en BD: ✅`);
+      console.log(`  - Tiene carpeta en disco: ${carpetasIds.includes('35') ? '✅' : '❌'}`);
+      console.log(`  - Sesión en memoria: ${sesionesEnMemoria.includes('35') ? '✅' : '❌'}`);
+      
+      if (sessions['35']) {
+        try {
+          const estado35 = await sessions['35'].getConnectionState();
+          console.log(`  - Estado actual: ${estado35}`);
+        } catch (e) {
+          console.log(`  - Error verificando estado: ${e.message}`);
+        }
+      }
+      
+      // Buscar carpeta 35 manualmente en ambas ubicaciones
+      const paths35 = [
+        path.join(sessionDir, '35'),
+        '/app/tokens/35'
+      ];
+      
+      for (const pathToCheck of paths35) {
+        console.log(`  - Verificando ruta ${pathToCheck}: ${fs.existsSync(pathToCheck) ? '✅' : '❌'}`);
+        if (fs.existsSync(pathToCheck)) {
+          const defaultPath = path.join(pathToCheck, 'Default');
+          console.log(`    - Default folder: ${fs.existsSync(defaultPath) ? '✅' : '❌'}`);
+          if (fs.existsSync(pathToCheck)) {
+            const files = fs.readdirSync(pathToCheck);
+            console.log(`    - Archivos en carpeta: [${files.join(', ')}]`);
+          }
+        }
+      }
+    }
     
     for (const sessionFolder of sessionFolders) {
       const clienteId = typeof sessionFolder === 'string' ? sessionFolder : sessionFolder.id;
@@ -600,6 +657,137 @@ app.get("/restaurar/:clienteId", async (req, res) => {
   }
 });
 
+app.get("/debug/cliente/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🔍 Diagnóstico detallado para cliente ${clienteId}...`);
+    
+    const diagnostico = {
+      clienteId,
+      timestamp: new Date().toISOString(),
+      baseDatos: {},
+      carpetas: {},
+      sesionMemoria: {},
+      venom: {}
+    };
+    
+    // 1. Verificar en base de datos
+    try {
+      const result = await pool.query("SELECT id, nombre, comercio FROM tenants WHERE id = $1", [clienteId]);
+      diagnostico.baseDatos = {
+        existe: result.rows.length > 0,
+        datos: result.rows[0] || null
+      };
+    } catch (err) {
+      diagnostico.baseDatos = { error: err.message };
+    }
+    
+    // 2. Verificar carpetas en disco
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const rutasVerificar = [
+      path.join(sessionDir, clienteId),
+      `/app/tokens/${clienteId}`
+    ];
+    
+    diagnostico.carpetas.rutas = {};
+    for (const ruta of rutasVerificar) {
+      const existe = fs.existsSync(ruta);
+      diagnostico.carpetas.rutas[ruta] = {
+        existe,
+        archivos: existe ? fs.readdirSync(ruta) : [],
+        defaultFolder: existe ? fs.existsSync(path.join(ruta, 'Default')) : false
+      };
+      
+      if (existe) {
+        const defaultPath = path.join(ruta, 'Default');
+        if (fs.existsSync(defaultPath)) {
+          diagnostico.carpetas.rutas[ruta].defaultFiles = fs.readdirSync(defaultPath);
+          
+          // Verificar archivos importantes de WhatsApp
+          const archivosImportantes = [
+            'Local Storage',
+            'Session Storage', 
+            'IndexedDB',
+            'Preferences'
+          ];
+          
+          diagnostico.carpetas.rutas[ruta].archivosImportantes = {};
+          for (const archivo of archivosImportantes) {
+            const archivoPath = path.join(defaultPath, archivo);
+            diagnostico.carpetas.rutas[ruta].archivosImportantes[archivo] = fs.existsSync(archivoPath);
+          }
+        }
+      }
+    }
+    
+    // 3. Verificar sesión en memoria
+    diagnostico.sesionMemoria = {
+      existe: !!sessions[clienteId],
+      tipo: sessions[clienteId] ? typeof sessions[clienteId] : null
+    };
+    
+    if (sessions[clienteId]) {
+      try {
+        const estado = await sessions[clienteId].getConnectionState();
+        diagnostico.sesionMemoria.estado = estado;
+        
+        const isConnected = await sessions[clienteId].isConnected();
+        diagnostico.sesionMemoria.conectado = isConnected;
+        
+        // Intentar obtener información de la sesión
+        try {
+          const hostDevice = await sessions[clienteId].getHostDevice();
+          diagnostico.sesionMemoria.dispositivo = hostDevice;
+        } catch (e) {
+          diagnostico.sesionMemoria.dispositivo = `Error: ${e.message}`;
+        }
+        
+      } catch (err) {
+        diagnostico.sesionMemoria.error = err.message;
+      }
+    }
+    
+    // 4. Verificar si Venom puede detectar la sesión
+    try {
+      // Simular las opciones que usaría venom
+      const carpetaEncontrada = rutasVerificar.find(ruta => fs.existsSync(ruta));
+      
+      if (carpetaEncontrada) {
+        diagnostico.venom = {
+          carpetaDetectada: carpetaEncontrada,
+          puedeRestaurar: fs.existsSync(path.join(carpetaEncontrada, 'Default')),
+          configuracion: {
+            session: clienteId,
+            userDataDir: carpetaEncontrada,
+            browserArgs: [
+              '--no-sandbox',
+              '--disable-setuid-sandbox', 
+              '--disable-dev-shm-usage'
+            ]
+          }
+        };
+      } else {
+        diagnostico.venom = {
+          carpetaDetectada: null,
+          puedeRestaurar: false,
+          requiereQR: true
+        };
+      }
+    } catch (err) {
+      diagnostico.venom = { error: err.message };
+    }
+    
+    console.log(`📋 Diagnóstico completo para cliente ${clienteId}:`, JSON.stringify(diagnostico, null, 2));
+    
+    res.json(diagnostico);
+    
+  } catch (error) {
+    console.error(`❌ Error en diagnóstico de cliente ${clienteId}:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/debug/clientes", async (req, res) => {
   try {
     const result = await pool.query("SELECT id, nombre, comercio FROM tenants ORDER BY id");
@@ -733,6 +921,102 @@ app.delete("/limpiar-huerfanas", async (req, res) => {
   } catch (err) {
     console.error("❌ Error limpiando carpetas huérfanas:", err);
     res.status(500).json({ error: "Error limpiando carpetas" });
+  }
+});
+
+app.post("/forzar-nueva-sesion/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🔄 Forzando nueva sesión para cliente ${clienteId}...`);
+    
+    // 1. Verificar que el cliente existe en la base de datos
+    try {
+      const result = await pool.query("SELECT id, comercio FROM tenants WHERE id = $1", [clienteId]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ 
+          error: `Cliente ${clienteId} no existe en la base de datos`,
+          accion: "verificar_cliente"
+        });
+      }
+      console.log(`✅ Cliente ${clienteId} encontrado en BD: ${result.rows[0].comercio}`);
+    } catch (dbError) {
+      console.error(`❌ Error verificando cliente en BD: ${dbError.message}`);
+      // Continuar anyway si hay problemas de BD
+    }
+    
+    // 2. Cerrar sesión existente si está en memoria
+    if (sessions[clienteId]) {
+      console.log(`🔒 Cerrando sesión existente en memoria para ${clienteId}...`);
+      try {
+        await sessions[clienteId].close();
+        console.log(`✅ Sesión en memoria cerrada para ${clienteId}`);
+      } catch (closeError) {
+        console.log(`⚠️ Error cerrando sesión: ${closeError.message}`);
+      }
+      delete sessions[clienteId];
+    }
+    
+    // 3. Limpiar archivos de sesión existentes si los hay
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const rutasLimpiar = [
+      path.join(sessionDir, clienteId),
+      `/app/tokens/${clienteId}`
+    ];
+    
+    for (const rutaLimpiar of rutasLimpiar) {
+      if (fs.existsSync(rutaLimpiar)) {
+        console.log(`🗑️ Eliminando carpeta de sesión: ${rutaLimpiar}`);
+        try {
+          fs.rmSync(rutaLimpiar, { recursive: true, force: true });
+          console.log(`✅ Carpeta eliminada: ${rutaLimpiar}`);
+        } catch (deleteError) {
+          console.log(`⚠️ Error eliminando carpeta: ${deleteError.message}`);
+        }
+      }
+    }
+    
+    // 4. Limpiar QR en base de datos
+    try {
+      await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [clienteId]);
+      console.log(`✅ QR limpiado en base de datos para cliente ${clienteId}`);
+    } catch (dbError) {
+      console.log(`⚠️ Error limpiando QR en BD: ${dbError.message}`);
+    }
+    
+    // 5. Crear nueva sesión desde cero
+    console.log(`🚀 Creando nueva sesión desde cero para cliente ${clienteId}...`);
+    
+    try {
+      await crearSesionConTimeout(clienteId, 30000, true); // 30 segundos timeout, generar QR
+      
+      const response = {
+        success: true,
+        mensaje: `Nueva sesión creada para cliente ${clienteId}`,
+        accion: "escanear_qr",
+        qr_url: `/qr/${clienteId}`,
+        timestamp: new Date().toISOString()
+      };
+      
+      console.log(`✅ Nueva sesión creada exitosamente para cliente ${clienteId}`);
+      res.json(response);
+      
+    } catch (createError) {
+      console.error(`❌ Error creando nueva sesión: ${createError.message}`);
+      res.status(500).json({
+        error: "Error creando nueva sesión",
+        details: createError.message,
+        accion: "reintentar",
+        qr_url: `/qr/${clienteId}` // Intentar mostrar QR anyway
+      });
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error en forzar-nueva-sesion para ${clienteId}:`, error);
+    res.status(500).json({ 
+      error: "Error interno del servidor",
+      details: error.message 
+    });
   }
 });
 
