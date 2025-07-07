@@ -39,7 +39,7 @@ function crearSesionConTimeout(clienteId, timeoutMs = 60000, permitirGuardarQR =
 
 async function crearSesion(clienteId, permitirGuardarQR = true) {
   const sessionId = String(clienteId);
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
   const qrPath = path.join(sessionDir, `${sessionId}.html`);
 
   // Si se pide regenerar QR, borra el archivo, la sesión en memoria y el campo en la base
@@ -79,8 +79,26 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       sessionFolder: sessionDir,
       autoClose: 180000,
       useChrome: true,
-      browserArgs: ["--no-sandbox", "--disable-setuid-sandbox"],
-      puppeteerOptions: { headless: "new" },
+      browserArgs: [
+        "--no-sandbox", 
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--no-first-run",
+        "--no-zygote",
+        "--disable-gpu",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding"
+      ],
+      puppeteerOptions: { 
+        headless: "new",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox"
+        ]
+      },
+      createPathFileToken: true,
       catchQR: async (base64Qr) => {
         if (!permitirGuardarQR) return;
         const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;"><img src="${base64Qr}" /></body></html>`;
@@ -201,13 +219,13 @@ async function verificarEstadoSesiones() {
   }
 }
 
-// Verificar sesiones cada 5 minutos
-setInterval(verificarEstadoSesiones, 5 * 60 * 1000);
+// Verificar sesiones cada 10 minutos (deshabilitado temporalmente)
+// setInterval(verificarEstadoSesiones, 10 * 60 * 1000);
 
 async function restaurarSesiones() {
   try {
     console.log("🔄 Iniciando restauración de sesiones...");
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
     
     // Buscar todos los clientes que tienen carpetas de sesión en el disco
     if (!fs.existsSync(sessionDir)) {
@@ -224,12 +242,35 @@ async function restaurarSesiones() {
 
     console.log(`📂 Encontradas ${sessionFolders.length} carpetas de sesión en disco`);
 
+    // Si no hay carpetas pero existe la carpeta /app/tokens, buscar ahí
+    if (sessionFolders.length === 0 && fs.existsSync("/app/tokens")) {
+      console.log("🔍 Buscando en /app/tokens...");
+      const appTokenFolders = fs.readdirSync("/app/tokens").filter(item => {
+        const itemPath = path.join("/app/tokens", item);
+        return fs.statSync(itemPath).isDirectory() && !isNaN(item);
+      });
+      console.log(`📂 Encontradas ${appTokenFolders.length} carpetas en /app/tokens`);
+      
+      // Copiar carpetas encontradas al array principal
+      sessionFolders.push(...appTokenFolders.map(folder => {
+        // Si las carpetas están en /app/tokens, usar esa ruta
+        return { id: folder, path: path.join("/app/tokens", folder) };
+      }));
+    } else {
+      // Agregar path completo a las carpetas encontradas
+      sessionFolders.forEach((folder, index) => {
+        sessionFolders[index] = { id: folder, path: path.join(sessionDir, folder) };
+      });
+    }
+
     // Verificar cuáles clientes existen en la base de datos
     const result = await pool.query("SELECT id, comercio FROM tenants");
     const clientesActivos = result.rows.map(row => String(row.id));
     
     for (const sessionFolder of sessionFolders) {
-      const clienteId = sessionFolder;
+      const clienteId = typeof sessionFolder === 'string' ? sessionFolder : sessionFolder.id;
+      const sessionPath = typeof sessionFolder === 'string' ? 
+        path.join(sessionDir, sessionFolder) : sessionFolder.path;
       
       // Solo restaurar si el cliente existe en la base de datos
       if (!clientesActivos.includes(clienteId)) {
@@ -238,22 +279,27 @@ async function restaurarSesiones() {
       }
 
       // Verificar si existe el archivo de datos de WhatsApp Web
-      const sessionPath = path.join(sessionDir, clienteId);
-      const whatsappDataFile = path.join(sessionPath, "Default", "Local Storage", "leveldb");
+      const defaultPath = path.join(sessionPath, "Default");
+      const whatsappDataFile = path.join(sessionPath, "Default", "Local Storage");
       
-      if (fs.existsSync(whatsappDataFile) || fs.existsSync(path.join(sessionPath, "Default"))) {
+      if (fs.existsSync(defaultPath) || fs.existsSync(whatsappDataFile)) {
         console.log(`🔄 Restaurando sesión para cliente ${clienteId}...`);
+        console.log(`📁 Usando ruta: ${sessionPath}`);
         try {
+          // Configurar la variable de entorno para esta sesión específica
+          process.env.SESSION_FOLDER = path.dirname(sessionPath);
+          
           await crearSesion(clienteId, false); // false = no regenerar QR
           console.log(`✅ Sesión restaurada para cliente ${clienteId}`);
           
           // Esperar un poco entre restauraciones para no sobrecargar
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (err) {
           console.error(`❌ Error restaurando sesión ${clienteId}:`, err.message);
         }
       } else {
-        console.log(`⚠️ No hay datos de sesión válidos para cliente ${clienteId}`);
+        console.log(`⚠️ No hay datos de sesión válidos para cliente ${clienteId} en ${sessionPath}`);
+        console.log(`🔍 Archivos en la carpeta:`, fs.existsSync(sessionPath) ? fs.readdirSync(sessionPath) : "Carpeta no existe");
       }
     }
     
@@ -276,7 +322,8 @@ app.get("/iniciar/:clienteId", async (req, res) => {
 
 app.get("/qr/:clienteId", (req, res) => {
   const clienteId = req.params.clienteId;
-  const filePath = path.join(__dirname, "sessions", `${clienteId}.html`);
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const filePath = path.join(sessionDir, `${clienteId}.html`);
   if (fs.existsSync(filePath)) {
     res.sendFile(filePath);
   } else {
@@ -304,7 +351,7 @@ app.get("/estado-sesiones", async (req, res) => {
   const estados = [];
   try {
     const result = await pool.query("SELECT id, nombre, comercio FROM tenants");
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
     
     for (const cliente of result.rows) {
       const clienteId = String(cliente.id);
@@ -315,6 +362,12 @@ app.get("/estado-sesiones", async (req, res) => {
       const sessionPath = path.join(sessionDir, clienteId);
       if (fs.existsSync(sessionPath)) {
         const defaultPath = path.join(sessionPath, "Default");
+        tieneArchivos = fs.existsSync(defaultPath);
+      }
+      
+      // También verificar en /app/tokens si no se encuentra en la ruta local
+      if (!tieneArchivos && fs.existsSync(`/app/tokens/${clienteId}`)) {
+        const defaultPath = path.join(`/app/tokens/${clienteId}`, "Default");
         tieneArchivos = fs.existsSync(defaultPath);
       }
       
@@ -350,8 +403,14 @@ app.get("/restaurar/:clienteId", async (req, res) => {
   try {
     console.log(`🔄 Forzando restauración de sesión para cliente ${clienteId}...`);
     
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
-    const sessionPath = path.join(sessionDir, clienteId);
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    let sessionPath = path.join(sessionDir, clienteId);
+    
+    // Si no existe en la ruta local, buscar en /app/tokens
+    if (!fs.existsSync(sessionPath) && fs.existsSync(`/app/tokens/${clienteId}`)) {
+      sessionPath = `/app/tokens/${clienteId}`;
+      console.log(`📁 Usando ruta alternativa: ${sessionPath}`);
+    }
     
     if (!fs.existsSync(sessionPath)) {
       return res.status(404).json({ 
@@ -370,24 +429,40 @@ app.get("/restaurar/:clienteId", async (req, res) => {
       delete sessions[clienteId];
     }
     
-    // Restaurar desde archivos del disco
-    await crearSesion(clienteId, false);
+    // Configurar la ruta de sesión temporalmente
+    const originalSessionFolder = process.env.SESSION_FOLDER;
+    process.env.SESSION_FOLDER = path.dirname(sessionPath);
     
-    // Verificar estado después de restaurar
-    let estado = "UNKNOWN";
-    if (sessions[clienteId]) {
-      try {
-        estado = await sessions[clienteId].getConnectionState();
-      } catch (err) {
-        estado = "ERROR";
+    try {
+      // Restaurar desde archivos del disco
+      await crearSesion(clienteId, false);
+      
+      // Verificar estado después de restaurar
+      let estado = "UNKNOWN";
+      if (sessions[clienteId]) {
+        try {
+          // Esperar un poco para que la sesión se establezca
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          estado = await sessions[clienteId].getConnectionState();
+        } catch (err) {
+          estado = "ERROR";
+        }
+      }
+      
+      res.json({ 
+        success: true, 
+        mensaje: `Sesión restaurada para cliente ${clienteId}`,
+        estado: estado,
+        rutaUsada: sessionPath
+      });
+    } finally {
+      // Restaurar la configuración original
+      if (originalSessionFolder) {
+        process.env.SESSION_FOLDER = originalSessionFolder;
+      } else {
+        delete process.env.SESSION_FOLDER;
       }
     }
-    
-    res.json({ 
-      success: true, 
-      mensaje: `Sesión restaurada para cliente ${clienteId}`,
-      estado: estado
-    });
   } catch (error) {
     console.error("❌ Error restaurando sesión:", error);
     res.status(500).json({ 
@@ -399,5 +474,13 @@ app.get("/restaurar/:clienteId", async (req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
+  console.log(`📁 Carpeta de sesiones configurada: ${process.env.SESSION_FOLDER || path.join(__dirname, "tokens")}`);
+  console.log(`🔍 Verificando si existe /app/tokens:`, fs.existsSync("/app/tokens"));
+  
+  if (fs.existsSync("/app/tokens")) {
+    const folders = fs.readdirSync("/app/tokens").filter(item => !isNaN(item));
+    console.log(`📂 Carpetas numéricas encontradas en /app/tokens:`, folders);
+  }
+  
   await restaurarSesiones();
 });
