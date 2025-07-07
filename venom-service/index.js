@@ -56,6 +56,13 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
   console.log(`⚙️ Iniciando sesión para ${sessionId}...`);
 
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+  const sessionPath = path.join(sessionDir, sessionId);
+
+  // 🔴 1. Eliminar carpeta de sesión si ya existe
+  if (fs.existsSync(sessionPath)) {
+    fs.rmSync(sessionPath, { recursive: true, force: true });
+    console.log(`🧹 Carpeta de sesión anterior eliminada para ${sessionId}`);
+  }
 
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir);
@@ -68,11 +75,20 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       multidevice: true,
       disableWelcome: true,
       sessionFolder: sessionDir,
-      autoClose: 180000,
+      autoClose: 0, // ⏱️ 2. No cerrar automáticamente la sesión
       useChrome: true,
-      browserArgs: ["--no-sandbox", "--disable-setuid-sandbox"],
+      // 🛡️ 2. Flags seguros para entorno limitado como Render
+      browserArgs: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--disable-gpu",
+        "--no-zygote",
+        "--single-process"
+      ],
       puppeteerOptions: {
-        headless: "new",
+        headless: "new"
       },
       catchQR: async (base64Qr) => {
         if (!permitirGuardarQR) return;
@@ -98,7 +114,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
         } catch (err) {
           console.error("❌ Error guardando QR en DB:", err);
         }
-      },
+      }
     });
 
     sessions[sessionId] = client;
@@ -108,6 +124,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
     throw err;
   }
 }
+
 
 async function restaurarSesiones() {
   try {
