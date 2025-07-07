@@ -16,9 +16,17 @@ const pool = new Pool({
 const sessions = {};
 
 pool.connect()
-  .then((client) => {
+  .then(async (client) => {
     console.log("✅ Conexión a PostgreSQL exitosa");
     client.release();
+    
+    // Verificar qué clientes existen en la base de datos
+    try {
+      const result = await pool.query("SELECT id, comercio FROM tenants");
+      console.log(`📊 Clientes encontrados en DB:`, result.rows.map(r => `${r.id}(${r.comercio})`));
+    } catch (err) {
+      console.error("❌ Error verificando clientes en DB:", err);
+    }
   })
   .catch((err) => {
     console.error("❌ Error al conectar con la base de datos:", err);
@@ -264,7 +272,21 @@ async function restaurarSesiones() {
     }
 
     // Verificar cuáles clientes existen en la base de datos
-    const result = await pool.query("SELECT id, comercio FROM tenants");
+    let result;
+    try {
+      result = await pool.query("SELECT id, comercio FROM tenants");
+      console.log(`📊 Consultando base de datos... Encontrados ${result.rows.length} clientes`);
+      if (result.rows.length > 0) {
+        console.log(`👥 Clientes en DB:`, result.rows.map(r => `${r.id}(${r.comercio || 'Sin comercio'})`));
+      } else {
+        console.log("⚠️ No se encontraron clientes en la base de datos");
+        return;
+      }
+    } catch (err) {
+      console.error("❌ Error consultando clientes de la base de datos:", err);
+      return;
+    }
+    
     const clientesActivos = result.rows.map(row => String(row.id));
     
     for (const sessionFolder of sessionFolders) {
@@ -274,7 +296,7 @@ async function restaurarSesiones() {
       
       // Solo restaurar si el cliente existe en la base de datos
       if (!clientesActivos.includes(clienteId)) {
-        console.log(`⚠️ Cliente ${clienteId} no existe en DB, saltando...`);
+        console.log(`⚠️ Cliente ${clienteId} no existe en DB (Clientes válidos: ${clientesActivos.join(', ')}), saltando...`);
         continue;
       }
 
@@ -282,20 +304,34 @@ async function restaurarSesiones() {
       const defaultPath = path.join(sessionPath, "Default");
       const whatsappDataFile = path.join(sessionPath, "Default", "Local Storage");
       
+      console.log(`🔍 Verificando archivos para cliente ${clienteId}:`);
+      console.log(`  - Ruta sesión: ${sessionPath}`);
+      console.log(`  - Carpeta Default: ${fs.existsSync(defaultPath) ? '✅' : '❌'}`);
+      console.log(`  - Local Storage: ${fs.existsSync(whatsappDataFile) ? '✅' : '❌'}`);
+      
       if (fs.existsSync(defaultPath) || fs.existsSync(whatsappDataFile)) {
         console.log(`🔄 Restaurando sesión para cliente ${clienteId}...`);
         console.log(`📁 Usando ruta: ${sessionPath}`);
         try {
           // Configurar la variable de entorno para esta sesión específica
+          const originalSessionFolder = process.env.SESSION_FOLDER;
           process.env.SESSION_FOLDER = path.dirname(sessionPath);
           
           await crearSesion(clienteId, false); // false = no regenerar QR
           console.log(`✅ Sesión restaurada para cliente ${clienteId}`);
           
+          // Restaurar configuración original
+          if (originalSessionFolder) {
+            process.env.SESSION_FOLDER = originalSessionFolder;
+          } else {
+            delete process.env.SESSION_FOLDER;
+          }
+          
           // Esperar un poco entre restauraciones para no sobrecargar
           await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (err) {
           console.error(`❌ Error restaurando sesión ${clienteId}:`, err.message);
+          console.error(`🔍 Stack trace:`, err.stack);
         }
       } else {
         console.log(`⚠️ No hay datos de sesión válidos para cliente ${clienteId} en ${sessionPath}`);
@@ -472,6 +508,47 @@ app.get("/restaurar/:clienteId", async (req, res) => {
   }
 });
 
+app.get("/debug/clientes", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT id, nombre, comercio FROM tenants ORDER BY id");
+    res.json({
+      total: result.rows.length,
+      clientes: result.rows
+    });
+  } catch (error) {
+    console.error("❌ Error consultando clientes:", error);
+    res.status(500).json({ error: "Error consultando clientes", details: error.message });
+  }
+});
+
+app.get("/debug/carpetas", (req, res) => {
+  const carpetas = [];
+  
+  if (fs.existsSync("/app/tokens")) {
+    const folders = fs.readdirSync("/app/tokens").filter(item => {
+      const itemPath = path.join("/app/tokens", item);
+      return fs.statSync(itemPath).isDirectory() && !isNaN(item);
+    });
+    
+    folders.forEach(folder => {
+      const folderPath = path.join("/app/tokens", folder);
+      const defaultPath = path.join(folderPath, "Default");
+      carpetas.push({
+        id: folder,
+        ruta: folderPath,
+        tieneDefault: fs.existsSync(defaultPath),
+        archivos: fs.existsSync(folderPath) ? fs.readdirSync(folderPath) : []
+      });
+    });
+  }
+  
+  res.json({
+    rutaTokens: "/app/tokens",
+    existeRuta: fs.existsSync("/app/tokens"),
+    carpetas: carpetas
+  });
+});
+
 app.listen(PORT, async () => {
   console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
   console.log(`📁 Carpeta de sesiones configurada: ${process.env.SESSION_FOLDER || path.join(__dirname, "tokens")}`);
@@ -481,6 +558,10 @@ app.listen(PORT, async () => {
     const folders = fs.readdirSync("/app/tokens").filter(item => !isNaN(item));
     console.log(`📂 Carpetas numéricas encontradas en /app/tokens:`, folders);
   }
+  
+  // Esperar un poco para asegurar que la DB esté lista
+  console.log("⏱️ Esperando conexión estable a la base de datos...");
+  await new Promise(resolve => setTimeout(resolve, 3000));
   
   await restaurarSesiones();
 });
