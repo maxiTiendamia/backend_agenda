@@ -139,6 +139,14 @@ class SecureAdminIndexView(AdminIndexView):
         counter = Counter(estados)
         estados_reservas = list(counter.keys())
         cantidad_por_estado = list(counter.values())
+
+        # Consulta al venom-service para estados de sesión
+        try:
+            respuesta = requests.get(f"{VENOM_URL}/estado-sesiones", timeout=10)
+            estado_sesiones = respuesta.json()
+        except Exception as e:
+            estado_sesiones = {"error": str(e)}
+
         return self.render('admin/custom_index.html',
                            total_clientes=total_clientes,
                            ultimos_clientes=ultimos_clientes,
@@ -146,7 +154,8 @@ class SecureAdminIndexView(AdminIndexView):
                            estados_reservas=estados_reservas,
                            cantidad_por_estado=cantidad_por_estado,
                            errores=errores,
-                           total_errores=total_errores)
+                           total_errores=total_errores,
+                           estado_sesiones=estado_sesiones)
 
     def is_accessible(self):
         return basic_auth.authenticate()

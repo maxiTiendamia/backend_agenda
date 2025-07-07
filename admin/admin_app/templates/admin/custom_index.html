@@ -1,5 +1,4 @@
-{% extends admin_base_template %}
-{% block body %}
+{% extends admin_base_template %} {% block body %}
 <div class="container mt-4">
   <h2>📊 Panel de control</h2>
 
@@ -11,6 +10,23 @@
           <h3 class="card-title">{{ total_clientes }}</h3>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="card mt-4 shadow-sm">
+    <div class="card-header">🟢 Estado de sesiones Venom</div>
+    <div class="card-body">
+      {% if estado_sesiones.error %}
+      <p class="text-danger">
+        Error al consultar Venom: {{ estado_sesiones.error }}
+      </p>
+      {% else %}
+      <ul>
+        {% for session_id, estado in estado_sesiones.items() %}
+        <li><strong>Cliente {{ session_id }}:</strong> {{ estado }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
     </div>
   </div>
 
@@ -73,10 +89,12 @@
                 <td>{{ error.cliente or "—" }}</td>
                 <td>{{ error.telefono or "—" }}</td>
                 <td>
-                  {{ error.mensaje[:40] ~ ("..." if error.mensaje and error.mensaje|length > 40 else "") }}
+                  {{ error.mensaje[:40] ~ ("..." if error.mensaje and
+                  error.mensaje|length > 40 else "") }}
                 </td>
                 <td>
-                  {{ error.fecha.strftime('%d/%m/%Y %H:%M') if error.fecha else "" }}
+                  {{ error.fecha.strftime('%d/%m/%Y %H:%M') if error.fecha else
+                  "" }}
                 </td>
                 <td>
                   <a
@@ -146,7 +164,9 @@
   <div class="row mt-4">
     <div class="col-md-12">
       <div class="card shadow-sm mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
+        <div
+          class="card-header d-flex justify-content-between align-items-center"
+        >
           <span>📈 Reservas por estado (filtradas)</span>
           <button id="export-btn" class="btn btn-sm btn-success">
             Exportar CSV

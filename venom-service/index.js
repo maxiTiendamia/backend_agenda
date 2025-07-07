@@ -208,6 +208,22 @@ app.post("/enviar-mensaje", async (req, res) => {
   }
 });
 
+app.get("/estado-sesiones", async (req, res) => {
+  const estados = {};
+
+  for (const clienteId in sessions) {
+    try {
+      const estado = await sessions[clienteId].getConnectionState();
+      estados[clienteId] = estado;
+    } catch (err) {
+      console.error(`❌ Error obteniendo estado de sesión ${clienteId}:`, err);
+      estados[clienteId] = "ERROR";
+    }
+  }
+
+  res.json(estados);
+});
+
 app.post("/send", async (req, res) => {
   const { clienteId, to, message } = req.body;
 
