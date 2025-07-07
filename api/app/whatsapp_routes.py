@@ -56,9 +56,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         data = await request.json()
         telefono = data.get("telefono")
         mensaje = data.get("mensaje", "").strip().lower()
-        cliente_id = data.get("cliente_id", "default")
+        cliente_id = data.get("cliente_id")
 
-        # Busca el tenant por cliente_id (ajusta según tu modelo)
+        # Validar que cliente_id sea un entero
+        try:
+            cliente_id = int(cliente_id)
+        except (TypeError, ValueError):
+            return JSONResponse(content={"mensaje": "❌ Error: cliente_id inválido."}, status_code=400)
+
         tenant = db.query(Tenant).filter_by(id=cliente_id).first()
         if not tenant:
             return JSONResponse(content={"mensaje": "⚠️ Cliente no encontrado."})
