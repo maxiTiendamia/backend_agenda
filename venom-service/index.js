@@ -348,10 +348,24 @@ async function restaurarSesiones() {
     
     if (clientesSinCarpetas.length > 0) {
       console.log(`📋 Clientes sin carpetas de sesión:`, clientesSinCarpetas);
-      console.log(`💡 Para crear sesiones nuevas, usa: /iniciar/{clienteId}`);
-      console.log(`📱 Ejemplos:`);
+      console.log(`� Creando sesiones automáticamente...`);
+      
+      for (const clienteId of clientesSinCarpetas) {
+        try {
+          console.log(`⚙️ Creando sesión automática para cliente ${clienteId}...`);
+          await crearSesion(clienteId, true); // true = generar QR
+          console.log(`✅ Sesión creada para cliente ${clienteId}. QR disponible en /qr/${clienteId}`);
+          
+          // Esperar un poco entre creaciones para no sobrecargar
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (err) {
+          console.error(`❌ Error creando sesión automática para ${clienteId}:`, err.message);
+        }
+      }
+      
+      console.log(`📱 QR codes disponibles en:`);
       clientesSinCarpetas.forEach(id => {
-        console.log(`  - /iniciar/${id} (luego escanear QR en /qr/${id})`);
+        console.log(`  - https://backend-agenda-us92.onrender.com/qr/${id}`);
       });
     } else {
       console.log("✅ Todos los clientes activos tienen carpetas de sesión");
@@ -380,6 +394,48 @@ app.get("/qr/:clienteId", (req, res) => {
     res.sendFile(filePath);
   } else {
     res.status(404).send(`<h2>⚠️ Aún no se generó un QR para el cliente: ${clienteId}</h2>`);
+  }
+});
+
+app.get("/estado", async (req, res) => {
+  try {
+    // Obtener clientes de la DB
+    const result = await pool.query("SELECT id, comercio FROM tenants");
+    const clientesDB = result.rows.map(r => ({ id: String(r.id), comercio: r.comercio }));
+    
+    // Obtener carpetas existentes
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const carpetas = fs.existsSync(sessionDir) ? 
+      fs.readdirSync(sessionDir).filter(item => {
+        const itemPath = path.join(sessionDir, item);
+        return fs.statSync(itemPath).isDirectory() && !isNaN(item);
+      }) : [];
+    
+    // Estado de sesiones activas
+    const sesionesActivas = Object.keys(sessions);
+    
+    // Análisis
+    const clientesConCarpeta = clientesDB.filter(c => carpetas.includes(c.id));
+    const clientesSinCarpeta = clientesDB.filter(c => !carpetas.includes(c.id));
+    const carpetasHuerfanas = carpetas.filter(c => !clientesDB.find(cl => cl.id === c));
+    
+    res.json({
+      timestamp: new Date().toISOString(),
+      clientes_en_db: clientesDB.length,
+      carpetas_en_disco: carpetas.length,
+      sesiones_activas: sesionesActivas.length,
+      clientes_db: clientesDB,
+      carpetas_existentes: carpetas,
+      sesiones_activas_ids: sesionesActivas,
+      analisis: {
+        clientes_con_carpeta: clientesConCarpeta,
+        clientes_sin_carpeta: clientesSinCarpeta,
+        carpetas_huerfanas: carpetasHuerfanas
+      }
+    });
+  } catch (err) {
+    console.error("❌ Error obteniendo estado:", err);
+    res.status(500).json({ error: "Error obteniendo estado" });
   }
 });
 
@@ -609,6 +665,57 @@ app.post("/admin/limpiar-carpetas-huerfanas", async (req, res) => {
   }
 });
 
+app.delete("/limpiar-huerfanas", async (req, res) => {
+  try {
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    if (!fs.existsSync(sessionDir)) {
+      return res.json({ mensaje: "No existe carpeta de sesiones", eliminadas: [] });
+    }
+    
+    // Obtener clientes válidos de la DB
+    const result = await pool.query("SELECT id FROM tenants");
+    const clientesValidos = result.rows.map(r => String(r.id));
+    
+    // Encontrar carpetas huérfanas
+    const carpetas = fs.readdirSync(sessionDir).filter(item => {
+      const itemPath = path.join(sessionDir, item);
+      return fs.statSync(itemPath).isDirectory() && !isNaN(item);
+    });
+    
+    const carpetasHuerfanas = carpetas.filter(c => !clientesValidos.includes(c));
+    const eliminadas = [];
+    
+    for (const carpeta of carpetasHuerfanas) {
+      try {
+        const carpetaPath = path.join(sessionDir, carpeta);
+        console.log(`🗑️ Eliminando carpeta huérfana: ${carpetaPath}`);
+        
+        // Cerrar sesión si está activa
+        if (sessions[carpeta]) {
+          await sessions[carpeta].close();
+          delete sessions[carpeta];
+        }
+        
+        // Eliminar carpeta recursivamente
+        fs.rmSync(carpetaPath, { recursive: true, force: true });
+        eliminadas.push(carpeta);
+        console.log(`✅ Carpeta ${carpeta} eliminada`);
+      } catch (err) {
+        console.error(`❌ Error eliminando carpeta ${carpeta}:`, err);
+      }
+    }
+    
+    res.json({
+      mensaje: `Limpieza completada. ${eliminadas.length} carpetas eliminadas.`,
+      carpetas_eliminadas: eliminadas,
+      clientes_validos: clientesValidos
+    });
+  } catch (err) {
+    console.error("❌ Error limpiando carpetas huérfanas:", err);
+    res.status(500).json({ error: "Error limpiando carpetas" });
+  }
+});
+
 app.post("/notificar-chat-humano", async (req, res) => {
   try {
     const { cliente_id, telefono, mensaje, tipo } = req.body;
@@ -621,11 +728,10 @@ app.post("/notificar-chat-humano", async (req, res) => {
     console.log(`🚨 ALERTA: ATENCIÓN HUMANA REQUERIDA`);
     console.log(`🚨 ==========================================`);
     console.log(`📞 Cliente ID: ${cliente_id}`);
-    console.log(`� Teléfono: ${telefono}`);
+    console.log(`📱 Teléfono: ${telefono}`);
     console.log(`💬 Último mensaje: ${mensaje}`);
     console.log(`🔔 Tipo: ${tipo || 'solicitud_ayuda'}`);
     console.log(`⏰ Fecha: ${new Date().toLocaleString('es-AR')}`);
-    console.log(`🚨 ==========================================`);
     
     // Buscar información del cliente en la base de datos
     try {
@@ -639,33 +745,17 @@ app.post("/notificar-chat-humano", async (req, res) => {
       console.log(`⚠️ No se pudo obtener info del cliente: ${err.message}`);
     }
     
-    // Intentar enviar un mensaje de confirmación al teléfono para que aparezca como "sin leer"
-    const session = sessions[String(cliente_id)];
-    if (session) {
-      try {
-        const estado = await session.getConnectionState();
-        if (estado === "CONNECTED") {
-          // Enviar un mensaje de sistema que quede como "sin leer" para el operador
-          await session.sendText(`${telefono}@c.us`, "🔔 *Notificación del sistema*: Se ha registrado tu solicitud de ayuda. Un asesor revisará este chat pronto.");
-          console.log(`✅ Mensaje de notificación enviado a ${telefono}`);
-        } else {
-          console.log(`⚠️ Sesión ${cliente_id} no conectada (${estado}), no se pudo enviar notificación por WhatsApp`);
-        }
-      } catch (err) {
-        console.log(`❌ Error enviando mensaje de notificación: ${err.message}`);
-      }
-    } else {
-      console.log(`⚠️ No hay sesión activa para cliente ${cliente_id}`);
-    }
-    
+    console.log(`🚨 ==========================================`);
+    console.log(`💡 El usuario puede escribir "Bot" para volver al asistente virtual`);
     console.log(`🚨 ==========================================`);
     
+    // NO enviar mensaje por WhatsApp - solo registrar la notificación
     res.json({ 
       success: true, 
-      mensaje: "Notificación de chat humano registrada y procesada",
+      mensaje: "Notificación de chat humano registrada",
       cliente_id,
       telefono,
-      notificacion_enviada: !!session
+      action: "logged_only"
     });
   } catch (error) {
     console.error("❌ Error procesando notificación de chat humano:", error);

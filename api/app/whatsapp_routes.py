@@ -102,29 +102,30 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             state = {"step": "welcome", "last_interaction": now, "mode": "bot"}
         else:
             state["last_interaction"] = now
-        set_user_state(telefono, state)
 
-        # Lógica de flujo (igual que antes, pero en vez de enviar mensaje, solo devuelve el texto)
+        # --- MANEJO DE MODO HUMANO ---
+        # Si el usuario está en modo humano, solo responder a comandos específicos
         if state.get("mode") == "human":
-            if mensaje in ["bot", "volver", "Bot"]:
+            if mensaje in ["bot", "volver", "Bot", "VOLVER", "BOT"]:
                 state["mode"] = "bot"
                 state["step"] = "welcome"
                 set_user_state(telefono, state)
-                return {"mensaje": "🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar."}
+                return JSONResponse(content={"mensaje": "🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar."})
             else:
-                # Solo notificar sin guardar en DB
+                # Usuario sigue en modo humano, reenviar mensaje al asesor
                 try:
                     import asyncio
                     asyncio.create_task(notificar_chat_humano_simple(tenant.id, telefono, mensaje))
                 except Exception as e:
                     print(f"⚠️ Error enviando notificación: {e}")
-                return {"mensaje": "🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"}
+                # NO actualizar estado aquí para mantener el modo humano
+                return JSONResponse(content={"mensaje": ""})  # Respuesta vacía para no confundir
 
-        if any(x in mensaje for x in ["gracias", "chau", "chao", "nos vemos"]):
-            return {"mensaje": "😊 ¡Gracias por tu mensaje! Que tengas un buen día!"}
-
+        # --- SOLICITUD DE AYUDA ---
+        # Verificar si solicita ayuda ANTES de cualquier otra lógica
         if "ayuda" in mensaje:
             state["mode"] = "human"
+            state["step"] = "human_mode"
             set_user_state(telefono, state)
             # Solo notificar al venom-service
             try:
@@ -132,17 +133,24 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 asyncio.create_task(notificar_chat_humano_simple(tenant.id, telefono, mensaje))
             except Exception as e:
                 print(f"⚠️ Error enviando notificación: {e}")
-            return {"mensaje": "🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"}
+            return JSONResponse(content={"mensaje": "🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"})
+
+        # Actualizar estado solo si NO está en modo humano
+        set_user_state(telefono, state)
+
+        # --- MENSAJES DE DESPEDIDA ---
+        if any(x in mensaje for x in ["gracias", "chau", "chao", "nos vemos"]):
+            return JSONResponse(content={"mensaje": "😊 ¡Gracias por tu mensaje! Que tengas un buen día!"})
 
         if re.match(r"^cancelar\s+\w+", mensaje):
             partes = mensaje.strip().split(maxsplit=1)
             if len(partes) < 2:
-                return {"mensaje": "❌ Debes escribir: cancelar + código"}
+                return JSONResponse(content={"mensaje": "❌ Debes escribir: cancelar + código"})
             fake_id = partes[1].strip().upper()
             try:
                 reserva = db.query(Reserva).filter_by(fake_id=fake_id).first()
                 if not reserva:
-                    return {"mensaje": "❌ No se encontró la reserva. Verifica el código."}
+                    return JSONResponse(content={"mensaje": "❌ No se encontró la reserva. Verifica el código."})
                 exito = cancelar_evento_google(
                     calendar_id=reserva.empleado_calendar_id,
                     reserva_id=reserva.event_id,
@@ -153,18 +161,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     db.commit()
                     state.clear()
                     set_user_state(telefono, state)
-                    return {"mensaje": "✅ Tu turno fue cancelado correctamente."}
+                    return JSONResponse(content={"mensaje": "✅ Tu turno fue cancelado correctamente."})
                 else:
-                    return {"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."}
+                    return JSONResponse(content={"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."})
             except Exception as e:
                 print("❌ Error al cancelar turno:", e)
-                return {"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."}
+                return JSONResponse(content={"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."})
 
         if state.get("step") == "welcome":
             if "turno" in mensaje:
                 servicios = tenant.servicios
                 if not servicios:
-                    return {"mensaje": "⚠️ No hay servicios disponibles."}
+                    return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
                 msg = "¿Qué servicio deseas reservar?\n"
                 for i, s in enumerate(servicios, 1):
                     msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
@@ -172,23 +180,23 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
                 set_user_state(telefono, state)
-                return {"mensaje": msg}
+                return JSONResponse(content={"mensaje": msg})
             elif "informacion" in mensaje or "info" in mensaje:
                 if tenant.informacion_local:
                     state["step"] = "after_info"
                     set_user_state(telefono, state)
-                    return {"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+                    return JSONResponse(content={"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
                 else:
-                    return {"mensaje": "⚠️ No hay información disponible en este momento."}
+                    return JSONResponse(content={"mensaje": "⚠️ No hay información disponible en este momento."})
             else:
                 state["step"] = "waiting_turno"
                 set_user_state(telefono, state)
-                return {"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+                return JSONResponse(content={"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
 
         if state.get("step") == "waiting_turno" and "turno" in mensaje:
             servicios = tenant.servicios
             if not servicios:
-                return {"mensaje": "⚠️ No hay servicios disponibles."}
+                return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
             msg = "¿Qué servicio deseas reservar?\n"
             for i, s in enumerate(servicios, 1):
                 msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
@@ -196,21 +204,21 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             state["step"] = "waiting_servicio"
             state["servicios"] = [s.id for s in servicios]
             set_user_state(telefono, state)
-            return {"mensaje": msg}
+            return JSONResponse(content={"mensaje": msg})
 
         if state.get("step") == "waiting_turno" and ("informacion" in mensaje or "info" in mensaje):
             if tenant.informacion_local:
                 state["step"] = "after_info"
                 set_user_state(telefono, state)
-                return {"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+                return JSONResponse(content={"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
             else:
-                return {"mensaje": "⚠️ No hay información disponible en este momento."}
+                return JSONResponse(content={"mensaje": "⚠️ No hay información disponible en este momento."})
 
         if state.get("step") == "after_info":
             if "turno" in mensaje:
                 servicios = tenant.servicios
                 if not servicios:
-                    return {"mensaje": "⚠️ No hay servicios disponibles."}
+                    return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
                 msg = "¿Qué servicio deseas reservar?\n"
                 for i, s in enumerate(servicios, 1):
                     msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
@@ -218,9 +226,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
                 set_user_state(telefono, state)
-                return {"mensaje": msg}
+                return JSONResponse(content={"mensaje": msg})
             else:
-                return {"mensaje": "¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+                return JSONResponse(content={"mensaje": "¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
 
         if state.get("step") == "waiting_servicio":
             if mensaje.isdigit():
@@ -231,7 +239,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     servicio = db.query(Servicio).get(servicio_id)
                     empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                     if not empleados:
-                        return {"mensaje": "⚠️ No hay empleados disponibles."}
+                        return JSONResponse(content={"mensaje": "⚠️ No hay empleados disponibles."})
                     msg = f"¿Con qué empleado?\n"
                     for i, e in enumerate(empleados, 1):
                         msg += f"🔹{i}. {e.nombre}\n"
@@ -240,7 +248,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["servicio_id"] = servicio_id
                     state["empleados"] = [e.id for e in empleados]
                     set_user_state(telefono, state)
-                    return {"mensaje": msg}
+                    return JSONResponse(content={"mensaje": msg})
                 else:
                     servicios = tenant.servicios
                     msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
@@ -250,7 +258,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["step"] = "waiting_servicio"
                     state["servicios"] = [s.id for s in servicios]
                     set_user_state(telefono, state)
-                    return {"mensaje": msg}
+                    return JSONResponse(content={"mensaje": msg})
             else:
                 servicios = tenant.servicios
                 msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
@@ -260,7 +268,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
                 set_user_state(telefono, state)
-                return {"mensaje": msg}
+                return JSONResponse(content={"mensaje": msg})
 
         if state.get("step") == "waiting_empleado":
             if mensaje.isdigit():
@@ -283,7 +291,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     max_turnos = 25
                     slots_mostrar = slots_futuros[:max_turnos]
                     if not slots_mostrar:
-                        return {"mensaje": "⚠️ No hay turnos disponibles para este empleado."}
+                        return JSONResponse(content={"mensaje": "⚠️ No hay turnos disponibles para este empleado."})
                     msg = "📅 Estos son los próximos turnos disponibles:\n"
                     for i, slot in enumerate(slots_mostrar, 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
@@ -292,7 +300,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["empleado_id"] = empleado_id
                     state["slots"] = [s.isoformat() for s in slots_mostrar]
                     set_user_state(telefono, state)
-                    return {"mensaje": msg}
+                    return JSONResponse(content={"mensaje": msg})
                 else:
                     empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                     msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
@@ -302,7 +310,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["step"] = "waiting_empleado"
                     state["empleados"] = [e.id for e in empleados]
                     set_user_state(telefono, state)
-                    return {"mensaje": msg}
+                    return JSONResponse(content={"mensaje": msg})
             else:
                 empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                 msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
@@ -312,7 +320,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["step"] = "waiting_empleado"
                 state["empleados"] = [e.id for e in empleados]
                 set_user_state(telefono, state)
-                return {"mensaje": msg}
+                return JSONResponse(content={"mensaje": msg})
 
         if state.get("step") == "waiting_turno_final":
             if mensaje.isdigit():
@@ -327,7 +335,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["servicio_id"] = servicio.id
                     state["step"] = "waiting_nombre"
                     set_user_state(telefono, state)
-                    return {"mensaje": "Por favor, escribe tu nombre y apellido para confirmar la reserva."}
+                    return JSONResponse(content={"mensaje": "Por favor, escribe tu nombre y apellido para confirmar la reserva."})
                 else:
                     slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
                     msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
@@ -336,7 +344,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     msg += "\nResponde con el número del turno."
                     state["step"] = "waiting_turno_final"
                     set_user_state(telefono, state)
-                    return {"mensaje": msg}
+                    return JSONResponse(content={"mensaje": msg})
             else:
                 slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
                 msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
@@ -345,7 +353,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 msg += "\nResponde con el número del turno."
                 state["step"] = "waiting_turno_final"
                 set_user_state(telefono, state)
-                return {"mensaje": msg}
+                return JSONResponse(content={"mensaje": msg})
 
         elif state.get("step") == "waiting_nombre":
             nombre_apellido = mensaje.strip().title()
@@ -383,7 +391,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["step"] = "waiting_turno_final"
                 state["slots"] = [s.isoformat() for s in slots_actuales]
                 set_user_state(telefono, state)
-                return {"mensaje": msg}
+                return JSONResponse(content={"mensaje": msg})
 
             # Crear evento en Google Calendar
             event_id = create_event(
@@ -411,20 +419,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             db.commit()
             state.clear()
             set_user_state(telefono, state)
-            return {"mensaje": (
+            return JSONResponse(content={"mensaje": (
                 f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')} con {empleado.nombre}.\n"
                 f"\nServicio: {servicio.nombre}\n"
                 f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
                 f"\nSi querés cancelar, escribí: cancelar {fake_id}"
-            )}
+            )})
 
         # Mensaje genérico por defecto
         if mensaje in ["hola", "hello", "hi", "buenas", "buen dia", "buenas tardes", "buenas noches"]:
             state["step"] = "welcome"
             set_user_state(telefono, state)
-            return {"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+            return JSONResponse(content={"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
         
-        return {"mensaje": "❓ No entendí tu mensaje.\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+        return JSONResponse(content={"mensaje": "❓ No entendí tu mensaje.\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
 
     except Exception as e:
         import traceback as tb
@@ -441,4 +449,4 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if not state.get("error_sent"):
             state["error_sent"] = True
             set_user_state(telefono, state)
-        return {"mensaje": "❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde."}
+        return JSONResponse(content={"mensaje": "❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde."})
