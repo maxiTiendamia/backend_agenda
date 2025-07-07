@@ -44,278 +44,151 @@ def get_user_state(user_id):
         print(f"⚠️ Error leyendo estado de Redis: {e}")
         return None
 
-async def enviar_mensaje_venom(cliente_id: str, telefono: str, mensaje: str):
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{VENOM_URL}/enviar-mensaje", json={
-                "cliente_id": cliente_id,
-                "telefono": telefono,
-                "mensaje": mensaje
-            })
-            response.raise_for_status()
-            return response.json()
-    except Exception as e:
-        print(f"❌ Error enviando mensaje con Venom: {e}")
-        return {"error": str(e)}
-
 router = APIRouter()
 
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
 
-@router.get("/webhook")
-async def verify_webhook(request: Request):
-    params = request.query_params
-    mode = params.get("hub.mode")
-    token = params.get("hub.verify_token")
-    challenge = params.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return PlainTextResponse(content=challenge)
-    return PlainTextResponse(content="Verification failed", status_code=403)
-
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
-    print(f"📩 Mensaje recibido: '{message_text}' de {from_number}")
-    print(f"🧾 Estado inicial: {state}")
     try:
         data = await request.json()
-        entry = data.get("entry", [{}])[0]
-        changes = entry.get("changes", [{}])[0]
-        value = changes.get("value", {})
-        messages = value.get("messages", [])
+        telefono = data.get("telefono")
+        mensaje = data.get("mensaje", "").strip().lower()
+        cliente_id = data.get("cliente_id", "default")
 
-        if not messages:
-            return JSONResponse(content={"status": "no messages"}, status_code=200)
-
-        from_number = messages[0]["from"]
-        message_text = messages[0]["text"]["body"].strip().lower()
-        phone_number_id = value.get("metadata", {}).get("phone_number_id")
-
-        tenant = db.query(Tenant).filter_by(phone_number_id=phone_number_id).first()
+        # Busca el tenant por cliente_id (ajusta según tu modelo)
+        tenant = db.query(Tenant).filter_by(id=cliente_id).first()
         if not tenant:
-            return JSONResponse(content={"error": "Cliente no encontrado"}, status_code=404)
+            return JSONResponse(content={"mensaje": "⚠️ Cliente no encontrado."})
 
         now = time.time()
-        state = get_user_state(from_number)
+        state = get_user_state(telefono)
         if not state or now - state.get("last_interaction", 0) > SESSION_TTL:
             state = {"step": "welcome", "last_interaction": now, "mode": "bot"}
         else:
             state["last_interaction"] = now
-        set_user_state(from_number, state)
+        set_user_state(telefono, state)
 
+        # Lógica de flujo (igual que antes, pero en vez de enviar mensaje, solo devuelve el texto)
         if state.get("mode") == "human":
-            if message_text in ["bot", "volver","Bot"]:
+            if mensaje in ["bot", "volver", "Bot"]:
                 state["mode"] = "bot"
                 state["step"] = "welcome"
-                set_user_state(from_number, state)
-                await enviar_mensaje_venom(cliente_id=tenant.id, telefono=from_number, mensaje="🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar.")
-
-                return {"status": "modo bot reactivado"}
+                set_user_state(telefono, state)
+                return {"mensaje": "🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar."}
             else:
-                return JSONResponse(content={"status": "en modo humano"}, status_code=200)
-            
-        if any(x in message_text for x in ["gracias", "chau", "chao", "nos vemos"]):
+                return {"mensaje": "🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"}
 
-            await enviar_mensaje_venom(cliente_id=tenant.id, telefono=from_number, mensaje="😊 ¡Gracias por tu mensaje! Que tengas un buen día!")
-            return {"status": "respuesta de despedida"}
+        if any(x in mensaje for x in ["gracias", "chau", "chao", "nos vemos"]):
+            return {"mensaje": "😊 ¡Gracias por tu mensaje! Que tengas un buen día!"}
 
-        if "ayuda" in message_text:
+        if "ayuda" in mensaje:
             state["mode"] = "human"
-            set_user_state(from_number, state)
+            set_user_state(telefono, state)
+            return {"mensaje": "🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"}
 
-            await enviar_mensaje_venom(
-                cliente_id=tenant.id,
-                telefono=from_number,
-                mensaje="🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"
-            )
-
-            return {"status": "modo humano activado"}
-                # --- BLOQUE DE CANCELACIÓN ---
-        
-        if re.match(r"^cancelar\s+\w+", message_text):
-            partes = message_text.strip().split(maxsplit=1)
+        if re.match(r"^cancelar\s+\w+", mensaje):
+            partes = mensaje.strip().split(maxsplit=1)
             if len(partes) < 2:
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje="❌ Debes escribir: cancelar + código"
-                )
-                
-                return {"status": "cancelación sin id"}
+                return {"mensaje": "❌ Debes escribir: cancelar + código"}
             fake_id = partes[1].strip().upper()
             try:
                 reserva = db.query(Reserva).filter_by(fake_id=fake_id).first()
                 if not reserva:
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje="❌ No se encontró la reserva. Verifica el código."
-                    )
-                    return {"status": "cancelación fallida"}
+                    return {"mensaje": "❌ No se encontró la reserva. Verifica el código."}
                 exito = cancelar_evento_google(
                     calendar_id=reserva.empleado_calendar_id,
                     reserva_id=reserva.event_id,
                     service_account_info=GOOGLE_CREDENTIALS_JSON
-                    )
+                )
                 if exito:
                     reserva.estado = "cancelado"
                     db.commit()
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje="✅ Tu turno fue cancelado correctamente."
-                    )
                     state.clear()
-                    set_user_state(from_number, state)
-                    return {"status": "turno cancelado"}
+                    set_user_state(telefono, state)
+                    return {"mensaje": "✅ Tu turno fue cancelado correctamente."}
                 else:
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje="❌ No se pudo cancelar el turno. Intenta más tarde."
-                    )
-                    return {"status": "cancelación fallida"}
+                    return {"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."}
             except Exception as e:
                 print("❌ Error al cancelar turno:", e)
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje="❌ No se pudo cancelar el turno. Intenta más tarde."
-                    )
-                return {"status": "cancelación fallida"}
-            except Exception as e:
-                print("❌ Error al cancelar turno:", e)
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje="❌ Error interno al cancelar el turno."
-                )
-                    
-                return {"status": "error cancelación"}
-        
+                return {"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."}
+
         if state.get("step") == "welcome":
-            if "turno" in message_text:
-                print("🟢 Entrando en flujo de turnos desde estado 'welcome'")
+            if "turno" in mensaje:
                 servicios = tenant.servicios
                 if not servicios:
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje="⚠️ No hay servicios disponibles."
-                    )
-                    return {"status": "sin servicios"}
+                    return {"mensaje": "⚠️ No hay servicios disponibles."}
                 msg = "¿Qué servicio deseas reservar?\n"
                 for i, s in enumerate(servicios, 1):
                     msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                 msg += "\nResponde con el número del servicio."
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje=msg
-                )
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
-                set_user_state(from_number, state)
-                return {"status": "servicios enviados"}
+                set_user_state(telefono, state)
+                return {"mensaje": msg}
             else:
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje=f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor."
-                )
                 state["step"] = "waiting_turno"
-                set_user_state(from_number, state)
-                return {"status": "mensaje bienvenida enviado"}
+                set_user_state(telefono, state)
+                return {"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor."}
 
-        if state.get("step") == "waiting_turno" and "turno" in message_text:
+        if state.get("step") == "waiting_turno" and "turno" in mensaje:
             servicios = tenant.servicios
             if not servicios:
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje="⚠️ No hay servicios disponibles."
-                )
-                return {"status": "sin servicios"}
+                return {"mensaje": "⚠️ No hay servicios disponibles."}
             msg = "¿Qué servicio deseas reservar?\n"
             for i, s in enumerate(servicios, 1):
                 msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
             msg += "\nResponde con el número del servicio."
-            await enviar_mensaje_venom(
-                cliente_id=tenant.id,
-                telefono=from_number,
-                mensaje=msg
-            )
             state["step"] = "waiting_servicio"
             state["servicios"] = [s.id for s in servicios]
-            set_user_state(from_number, state)
-            return {"status": "servicios enviados"}
+            set_user_state(telefono, state)
+            return {"mensaje": msg}
 
         if state.get("step") == "waiting_servicio":
-            if message_text.isdigit():
-                idx = int(message_text) - 1
+            if mensaje.isdigit():
+                idx = int(mensaje) - 1
                 servicios_ids = state.get("servicios", [])
                 if 0 <= idx < len(servicios_ids):
                     servicio_id = servicios_ids[idx]
                     servicio = db.query(Servicio).get(servicio_id)
                     empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                     if not empleados:
-                        await enviar_mensaje_venom(
-                            cliente_id=tenant.id,
-                            telefono=from_number,
-                            mensaje="⚠️ No hay empleados disponibles."
-                        )
-                        return {"status": "sin empleados"}
+                        return {"mensaje": "⚠️ No hay empleados disponibles."}
                     msg = f"¿Con qué empleado?\n"
                     for i, e in enumerate(empleados, 1):
                         msg += f"🔹{i}. {e.nombre}\n"
                     msg += "\nResponde con el número del empleado."
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje=msg
-                    )
                     state["step"] = "waiting_empleado"
                     state["servicio_id"] = servicio_id
                     state["empleados"] = [e.id for e in empleados]
-                    set_user_state(from_number, state)
-                    return {"status": "empleados enviados"}
+                    set_user_state(telefono, state)
+                    return {"mensaje": msg}
                 else:
-                    # Resetea el estado y vuelve a mostrar los servicios
                     servicios = tenant.servicios
                     msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
                     for i, s in enumerate(servicios, 1):
                         msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                     msg += "\nResponde con el número del servicio."
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje=msg
-                    )
                     state["step"] = "waiting_servicio"
                     state["servicios"] = [s.id for s in servicios]
-                    set_user_state(from_number, state)
-                    return {"status": "servicio inválido"}
+                    set_user_state(telefono, state)
+                    return {"mensaje": msg}
             else:
-                # Mensaje no numérico, vuelve a mostrar los servicios
                 servicios = tenant.servicios
                 msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
                 for i, s in enumerate(servicios, 1):
                     msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                 msg += "\nResponde con el número del servicio."
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje=msg
-                )
                 state["step"] = "waiting_servicio"
                 state["servicios"] = [s.id for s in servicios]
-                set_user_state(from_number, state)
-                return {"status": "servicio inválido"}
+                set_user_state(telefono, state)
+                return {"mensaje": msg}
 
         if state.get("step") == "waiting_empleado":
-            if message_text.isdigit():
-                idx = int(message_text) - 1
+            if mensaje.isdigit():
+                idx = int(mensaje) - 1
                 empleados_ids = state.get("empleados", [])
                 if 0 <= idx < len(empleados_ids):
                     empleado_id = empleados_ids[idx]
@@ -334,137 +207,91 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     max_turnos = 25
                     slots_mostrar = slots_futuros[:max_turnos]
                     if not slots_mostrar:
-                        await enviar_mensaje_venom(
-                            cliente_id=tenant.id,
-                            telefono=from_number,
-                            mensaje="⚠️ No hay turnos disponibles para este empleado."
-                        )
-                        return {"status": "sin turnos"}
+                        return {"mensaje": "⚠️ No hay turnos disponibles para este empleado."}
                     msg = "📅 Estos son los próximos turnos disponibles:\n"
                     for i, slot in enumerate(slots_mostrar, 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                     msg += "\nResponde con el número del turno."
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje=msg
-                    )
                     state["step"] = "waiting_turno_final"
                     state["empleado_id"] = empleado_id
-                    # Convertir slots a string antes de guardar
                     state["slots"] = [s.isoformat() for s in slots_mostrar]
-                    set_user_state(from_number, state)
-                    return {"status": "turnos enviados"}
+                    set_user_state(telefono, state)
+                    return {"mensaje": msg}
                 else:
-                    # Opción inválida, vuelve a mostrar la lista de empleados
                     empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                     msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
                     for i, e in enumerate(empleados, 1):
                         msg += f"🔹{i}. {e.nombre}\n"
                     msg += "\nResponde con el número del empleado."
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje=msg
-                    )
                     state["step"] = "waiting_empleado"
                     state["empleados"] = [e.id for e in empleados]
-                    set_user_state(from_number, state)
-                    return {"status": "empleado inválido"}
+                    set_user_state(telefono, state)
+                    return {"mensaje": msg}
             else:
-                # Mensaje no numérico, vuelve a mostrar la lista de empleados
                 empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                 msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
                 for i, e in enumerate(empleados, 1):
                     msg += f"🔹{i}. {e.nombre}\n"
                 msg += "\nResponde con el número del empleado."
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje=msg
-                )
                 state["step"] = "waiting_empleado"
                 state["empleados"] = [e.id for e in empleados]
-                set_user_state(from_number, state)
-                return {"status": "empleado inválido"}
-        
+                set_user_state(telefono, state)
+                return {"mensaje": msg}
+
         if state.get("step") == "waiting_turno_final":
-            if message_text.isdigit():
-                idx = int(message_text) - 1
-                # Convertir los slots de string a datetime antes de usarlos
+            if mensaje.isdigit():
+                idx = int(mensaje) - 1
                 slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
                 if 0 <= idx < len(slots):
                     slot = slots[idx]
                     empleado = db.query(Empleado).get(state["empleado_id"])
                     servicio = db.query(Servicio).get(state["servicio_id"])
-                    # Guardar datos temporales en el estado
-                    state["slot"] = slot.isoformat()  # Guardar como string
+                    state["slot"] = slot.isoformat()
                     state["empleado_id"] = empleado.id
                     state["servicio_id"] = servicio.id
                     state["step"] = "waiting_nombre"
-                    set_user_state(from_number, state)
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje="Por favor, escribe tu nombre y apellido para confirmar la reserva."
-                    )
-                    return {"status": "pidiendo nombre"}
+                    set_user_state(telefono, state)
+                    return {"mensaje": "Por favor, escribe tu nombre y apellido para confirmar la reserva."}
                 else:
                     slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
                     msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
                     for i, slot in enumerate(slots, 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                     msg += "\nResponde con el número del turno."
-                    await enviar_mensaje_venom(
-                        cliente_id=tenant.id,
-                        telefono=from_number,
-                        mensaje=msg
-                    )
                     state["step"] = "waiting_turno_final"
-                    set_user_state(from_number, state)
-                    return {"status": "turno inválido"}
+                    set_user_state(telefono, state)
+                    return {"mensaje": msg}
             else:
                 slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
                 msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
                 for i, slot in enumerate(slots, 1):
                     msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje=msg
-                )
                 state["step"] = "waiting_turno_final"
-                set_user_state(from_number, state)
-                return {"status": "turno inválido"}
-        
-        elif state.get("step") == "waiting_nombre":
-            from datetime import timedelta
-            from api.utils.calendar_utils import build_service  
+                set_user_state(telefono, state)
+                return {"mensaje": msg}
 
-            nombre_apellido = message_text.strip().title()
-            # Recuperar slot como datetime
+        elif state.get("step") == "waiting_nombre":
+            nombre_apellido = mensaje.strip().title()
             slot = state.get("slot")
             if isinstance(slot, str):
                 slot = datetime.fromisoformat(slot)
             empleado = db.query(Empleado).get(state["empleado_id"])
             servicio = db.query(Servicio).get(state["servicio_id"])
-            
-            # --- Verificación precisa de disponibilidad del slot elegido ---
+
+            # Verifica disponibilidad
+            from api.utils.calendar_utils import build_service
             service = build_service(GOOGLE_CREDENTIALS_JSON)
             start_time = slot.isoformat()
             end_time = (slot + timedelta(minutes=servicio.duracion)).isoformat()
-            
             events_result = service.events().list(
                 calendarId=empleado.calendar_id,
                 timeMin=start_time,
                 timeMax=end_time,
                 singleEvents=True
-                ).execute()
+            ).execute()
             events = events_result.get('items', [])
-            
             if events:
-                # Turno ya ocupado, obtener slots nuevamente
                 slots_actuales = get_available_slots(
                     calendar_id=empleado.calendar_id,
                     credentials_json=GOOGLE_CREDENTIALS_JSON,
@@ -472,34 +299,25 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     service_duration=servicio.duracion,
                     intervalo_entre_turnos=20,
                     max_turnos=10
-                    )
-                
+                )
                 msg = "❌ El turno seleccionado ya no está disponible. Por favor, elige otro:\n"
                 for i, s in enumerate(slots_actuales, 1):
                     msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
-
-                await enviar_mensaje_venom(
-                    cliente_id=tenant.id,
-                    telefono=from_number,
-                    mensaje=msg
-                )
-                
                 state["step"] = "waiting_turno_final"
-                state["slots"] = slots_actuales
-                set_user_state(from_number, state)
-                return {"status": "turno ya ocupado"}
-            # Crear evento directamente en Google Calendar
-            
+                state["slots"] = [s.isoformat() for s in slots_actuales]
+                set_user_state(telefono, state)
+                return {"mensaje": msg}
+
+            # Crear evento en Google Calendar
             event_id = create_event(
                 calendar_id=empleado.calendar_id,
                 slot_dt=slot,
-                user_phone=from_number,
+                user_phone=telefono,
                 service_account_info=GOOGLE_CREDENTIALS_JSON,
                 duration_minutes=servicio.duracion,
-                client_service=f"Cliente: {nombre_apellido} - Tel: {from_number} - Servicio: {servicio.nombre}"
+                client_service=f"Cliente: {nombre_apellido} - Tel: {telefono} - Servicio: {servicio.nombre}"
             )
-            
             fake_id = generar_fake_id()
             reserva = Reserva(
                 fake_id=fake_id,
@@ -509,55 +327,37 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 empleado_nombre=empleado.nombre,
                 empleado_calendar_id=empleado.calendar_id,
                 cliente_nombre=nombre_apellido,
-                cliente_telefono=from_number,
+                cliente_telefono=telefono,
                 servicio=servicio.nombre,
                 estado="activo"
             )
             db.add(reserva)
             db.commit()
-
-            await enviar_mensaje_venom(
-                cliente_id=tenant.id,
-                telefono=from_number,
-                mensaje=(
-                    f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')} con {empleado.nombre}.\n"
-                    f"\nServicio: {servicio.nombre}\n"
-                    f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
-                    f"\nSi querés cancelar, escribí: cancelar {fake_id}"
-                ),
-            )
             state.clear()
-            set_user_state(from_number, state)
-            return {"status": "turno reservado", "fake_id": fake_id}
-        
+            set_user_state(telefono, state)
+            return {"mensaje": (
+                f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')} con {empleado.nombre}.\n"
+                f"\nServicio: {servicio.nombre}\n"
+                f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
+                f"\nSi querés cancelar, escribí: cancelar {fake_id}"
+            )}
+
         # Mensaje genérico por defecto
-        await enviar_mensaje_venom(
-            cliente_id=tenant.id,
-            telefono=from_number,
-            mensaje="❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con una persona."
-        )
-        return JSONResponse(content={"status": "mensaje no reconocido"})
+        return {"mensaje": "❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con una persona."}
 
     except Exception as e:
         import traceback as tb
         error_text = tb.format_exc()
-        # Guardar en la base
         log = ErrorLog(
             cliente=tenant.comercio if 'tenant' in locals() and tenant else None,
-            telefono=from_number if 'from_number' in locals() else None,
-            mensaje=message_text if 'message_text' in locals() else None,
+            telefono=telefono if 'telefono' in locals() else None,
+            mensaje=mensaje if 'mensaje' in locals() else None,
             error=error_text
-            )
+        )
         db.add(log)
         db.commit()
         print("❌ Error general procesando mensaje:", e)
-        traceback.print_exc()
         if not state.get("error_sent"):
-            await enviar_mensaje_venom(
-                cliente_id=tenant.id,
-                telefono=from_number,
-                mensaje="❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde."
-            )
             state["error_sent"] = True
-            set_user_state(from_number, state)
-        return JSONResponse(content={"error": "Error interno"}, status_code=500)
+            set_user_state(telefono, state)
+        return {"mensaje": "❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde."}
