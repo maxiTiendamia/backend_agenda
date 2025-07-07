@@ -12,13 +12,10 @@ import os
 import requests
 import threading
 
-print("✅ Servicio:", Servicio.tenant.property.back_populates)
-
 VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
-
 basic_auth = BasicAuth()
 
-# ⬇️ Nueva función para generar QR en segundo plano
+# 🚀 Función para llamar a Venom
 def llamar_a_venom_async(cliente_id):
     try:
         venom_url = f"{VENOM_URL}/iniciar/{cliente_id}"
@@ -31,7 +28,7 @@ def llamar_a_venom_async(cliente_id):
     except Exception as e:
         print(f"❌ [Async] Error al contactar a Venom: {e}")
 
-
+# 🟠 Estado sesión con botón de reinicio
 def obtener_estado_sesion(cliente_id):
     try:
         res = requests.get(f"{VENOM_URL}/estado-sesiones", timeout=10)
@@ -46,17 +43,22 @@ def obtener_estado_sesion(cliente_id):
                     "TIMEOUT": ("🟠", "#fff3cd", "#856404")
                 }
                 icono, fondo, color = estilos.get(estado, ("⚪", "#eeeeee", "#333333"))
+                boton = f'''
+                <a href="/admin/reiniciar/{cliente_id}" class="btn btn-sm btn-warning" style="margin-top: 6px;"
+                   onclick="return confirm('¿Seguro que querés reiniciar la sesión de WhatsApp para este cliente?')">
+                   Reiniciar
+                </a>
+                '''
                 return Markup(
-                    f'<div style="background-color:{fondo}; color:{color}; padding:6px 10px; border-radius:5px; display:inline-block;">{icono} {estado}</div><br>'
-                    f'<a href="/admin/reiniciar/{cliente_id}" class="btn btn-sm btn-warning" style="margin-top: 4px;" onclick="return confirm(\'¿Seguro que deseas reiniciar esta sesión?\');">Reiniciar</a>'
+                    f'<div style="background-color:{fondo}; color:{color}; padding:6px 10px; border-radius:5px; display:inline-block;">'
+                    f'{icono} {estado}</div>{boton}'
                 )
 
         return Markup('<span style="background:#e0e0e0; padding:4px 8px; border-radius:5px;">⚪ No iniciada</span>')
-    except Exception as e:
-        print(f"❌ Error obteniendo estado de sesión para {cliente_id}: {e}")
+    except Exception:
         return Markup('<span style="background:#ccc; padding:4px 8px; border-radius:5px;">⚠️ Error</span>')
 
-
+# ✅ Acceso protegido
 class SecureModelView(ModelView):
     def is_accessible(self):
         return basic_auth.authenticate()
@@ -64,7 +66,7 @@ class SecureModelView(ModelView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
-
+# 📝 Errores
 class ErrorLogModelView(SecureModelView):    
     can_create = False
     can_edit = False
@@ -76,7 +78,7 @@ class ErrorLogModelView(SecureModelView):
     form_columns = ('cliente', 'telefono', 'mensaje', 'error', 'fecha')
     column_default_sort = ('fecha', True)
 
-
+# 🕒 Horarios laborales personalizados
 class WorkingHoursWidget:
     def __call__(self, field, **kwargs):
         days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -94,7 +96,6 @@ class WorkingHoursWidget:
             html += f" a <input type='time' name='{field.name}_{day}_end' value='{end}'></div>"
         html += "</div>"
         return html
-
 
 class WorkingHoursField(Field):
     widget = WorkingHoursWidget()
@@ -117,7 +118,7 @@ class WorkingHoursField(Field):
     def process_data(self, value):
         self.data = value
 
-
+# 🧾 Clientes
 class TenantModelView(SecureModelView):
     form_overrides = {'working_hours': WorkingHoursField}
     inline_models = [
@@ -135,21 +136,19 @@ class TenantModelView(SecureModelView):
     column_formatters = {
         'qr_code': lambda v, c, m, p: Markup(
             f"<img src='data:image/png;base64,{m.qr_code}' style='height:150px;'>"
-            ) if m.qr_code and not m.qr_code.startswith("http") and not m.qr_code.startswith("data:image") else (
-                Markup(f"<img src='{m.qr_code}' style='height:150px;'>")
-                ) if m.qr_code else Markup("<span style='color: gray;'>⏳ Esperando QR...</span>"),
+        ) if m.qr_code and not m.qr_code.startswith("http") else (
+            Markup(f"<img src='{m.qr_code}' style='height:150px;'>")
+        ) if m.qr_code else Markup("<span style='color: gray;'>⏳ Esperando QR...</span>"),
         'estado_wa': lambda v, c, m, p: obtener_estado_sesion(m.id)
     }
 
     def on_model_change(self, form, model, is_created):
         try:
             super().on_model_change(form, model, is_created)
-
-            if is_created and not model.qr_code:
-                db.session.flush()  # Para obtener el ID del modelo
+            if is_created:
+                db.session.flush()
                 threading.Thread(target=llamar_a_venom_async, args=(model.id,)).start()
                 flash("🔄 Solicitud enviada a Venom en segundo plano para generar el QR.", "info")
-
         except IntegrityError as e:
             db.session.rollback()
             if 'tenants_telefono_key' in str(e):
@@ -158,7 +157,7 @@ class TenantModelView(SecureModelView):
                 flash(f'⚠️ Error inesperado: {e}', 'error')
             raise
 
-
+# 🏠 Vista personalizada del dashboard
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
     def index(self):
@@ -172,12 +171,11 @@ class SecureAdminIndexView(AdminIndexView):
         estados_reservas = list(counter.keys())
         cantidad_por_estado = list(counter.values())
 
-        # Consulta al venom-service para estados de sesión
         try:
             respuesta = requests.get(f"{VENOM_URL}/estado-sesiones", timeout=10)
             estado_sesiones = respuesta.json()
         except Exception as e:
-            estado_sesiones = {"error": str(e)}
+            estado_sesiones = []
 
         return self.render('admin/custom_index.html',
                            total_clientes=total_clientes,
@@ -194,14 +192,14 @@ class SecureAdminIndexView(AdminIndexView):
 
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
-
+    
     @expose('/reiniciar/<int:cliente_id>')
     def reiniciar_cliente(self, cliente_id):
         threading.Thread(target=llamar_a_venom_async, args=(cliente_id,)).start()
         flash(f"🔁 Reinicio de sesión solicitado para cliente {cliente_id}.", "info")
         return redirect(request.referrer or url_for('admin.index'))
 
-
+# 📅 Reservas
 class ReservaModelView(SecureModelView):
     can_create = False
     can_edit = False
@@ -212,7 +210,7 @@ class ReservaModelView(SecureModelView):
     column_list = ('id', 'fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
     form_columns = ('fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
 
-
+# 🚀 Inicializador
 def init_admin(app, db):
     basic_auth.init_app(app)
     admin = Admin(
