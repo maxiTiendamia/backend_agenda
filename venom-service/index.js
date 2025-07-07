@@ -27,6 +27,25 @@ pool
     console.error("❌ Error al conectar con la base de datos:", err);
   });
 
+// 🧠 Crea una sesión pero con timeout controlado (por si se cuelga)
+function crearSesionConTimeout(clienteId, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("⏱ Tiempo de espera agotado para crear sesión"));
+    }, timeoutMs);
+
+    crearSesion(clienteId)
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 async function crearSesion(clienteId) {
   const sessionId = String(clienteId);
 
@@ -50,7 +69,7 @@ async function crearSesion(clienteId) {
       multidevice: true,
       disableWelcome: true,
       sessionFolder: sessionDir,
-      autoClose: false,
+      autoClose: 180000, // 🕒 cierra después de 3 min sin escanear QR
       useChrome: true,
       browserArgs: ["--no-sandbox", "--disable-setuid-sandbox"],
       puppeteerOptions: {
@@ -117,11 +136,28 @@ app.get("/iniciar/:clienteId", async (req, res) => {
   const { clienteId } = req.params;
 
   try {
-    await crearSesion(clienteId);
+    await crearSesionConTimeout(clienteId, 30000); // ⏱ máximo 30s
     res.send(`✅ Sesión iniciada para ${clienteId}. Escaneá el QR en /qr/${clienteId}`);
   } catch (error) {
     console.error("❌ Error al iniciar sesión:", error);
     res.status(500).send("Error al iniciar sesión");
+  }
+});
+
+// 🔹 POST desde admin
+app.post("/crear_sesion", async (req, res) => {
+  const { cliente_id } = req.body;
+
+  if (!cliente_id) {
+    return res.status(400).json({ error: "Falta cliente_id" });
+  }
+
+  try {
+    await crearSesionConTimeout(cliente_id, 30000);
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("❌ Error creando sesión desde POST:", err);
+    res.status(500).json({ error: "Error generando QR" });
   }
 });
 

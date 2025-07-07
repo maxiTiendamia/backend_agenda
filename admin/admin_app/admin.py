@@ -10,12 +10,26 @@ from sqlalchemy.exc import IntegrityError
 from collections import Counter
 import os
 import requests
+import threading  # ⬅️ nuevo
 
 print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
 VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
 
 basic_auth = BasicAuth()
+
+# ⬇️ Nueva función para generar QR en segundo plano
+def llamar_a_venom_async(cliente_id):
+    try:
+        venom_url = f"{VENOM_URL}/iniciar/{cliente_id}"
+        print(f"🛠️ [Async] Enviando solicitud a Venom para generar QR del cliente {cliente_id}")
+        response = requests.get(venom_url, timeout=10)
+        if response.ok:
+            print("✅ [Async] Venom generó QR correctamente")
+        else:
+            print(f"⚠️ [Async] Venom no respondió correctamente: {response.status_code}")
+    except Exception as e:
+        print(f"❌ [Async] Error al contactar a Venom: {e}")
 
 class SecureModelView(ModelView):
     def is_accessible(self):
@@ -101,19 +115,9 @@ class TenantModelView(SecureModelView):
             super().on_model_change(form, model, is_created)
 
             if is_created:
-                db.session.flush()  # Nos aseguramos de tener model.id
-
-                try:
-                    venom_url = f"{VENOM_URL}/iniciar/{model.id}"
-                    print(f"🛠️ Enviando solicitud a Venom para generar QR de cliente {model.id}")
-                    response = requests.get(venom_url)
-
-                    if response.ok:
-                        flash("✅ Solicitud enviada a Venom para generar QR.", "success")
-                    else:
-                        flash("⚠️ Venom no respondió correctamente al generar el QR.", "warning")
-                except Exception as e:
-                    flash(f"❌ Error al comunicarse con Venom: {str(e)}", "danger")
+                db.session.flush()  # Para obtener el ID del modelo
+                threading.Thread(target=llamar_a_venom_async, args=(model.id,)).start()
+                flash("🔄 Solicitud enviada a Venom en segundo plano para generar el QR.", "info")
 
         except IntegrityError as e:
             db.session.rollback()
@@ -122,7 +126,6 @@ class TenantModelView(SecureModelView):
             else:
                 flash(f'⚠️ Error inesperado: {e}', 'error')
             raise
-
 
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
