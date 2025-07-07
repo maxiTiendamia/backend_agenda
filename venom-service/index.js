@@ -340,6 +340,22 @@ async function restaurarSesiones() {
     }
     
     console.log("✅ Proceso de restauración completado");
+    
+    // Verificar clientes activos que NO tienen carpetas de sesión
+    console.log("🔍 Verificando clientes activos sin carpetas de sesión...");
+    const carpetasExistentes = sessionFolders.map(sf => typeof sf === 'string' ? sf : sf.id);
+    const clientesSinCarpetas = clientesActivos.filter(id => !carpetasExistentes.includes(id));
+    
+    if (clientesSinCarpetas.length > 0) {
+      console.log(`📋 Clientes sin carpetas de sesión:`, clientesSinCarpetas);
+      console.log(`💡 Para crear sesiones nuevas, usa: /iniciar/{clienteId}`);
+      console.log(`📱 Ejemplos:`);
+      clientesSinCarpetas.forEach(id => {
+        console.log(`  - /iniciar/${id} (luego escanear QR en /qr/${id})`);
+      });
+    } else {
+      console.log("✅ Todos los clientes activos tienen carpetas de sesión");
+    }
   } catch (err) {
     console.error("❌ Error restaurando sesiones previas:", err);
   }
@@ -547,6 +563,114 @@ app.get("/debug/carpetas", (req, res) => {
     existeRuta: fs.existsSync("/app/tokens"),
     carpetas: carpetas
   });
+});
+
+app.post("/admin/limpiar-carpetas-huerfanas", async (req, res) => {
+  try {
+    // Obtener clientes activos de la DB
+    const result = await pool.query("SELECT id FROM tenants");
+    const clientesActivos = result.rows.map(row => String(row.id));
+    
+    if (!fs.existsSync("/app/tokens")) {
+      return res.json({ mensaje: "No existe la carpeta /app/tokens", carpetasEliminadas: [] });
+    }
+    
+    // Encontrar carpetas huérfanas
+    const folders = fs.readdirSync("/app/tokens").filter(item => {
+      const itemPath = path.join("/app/tokens", item);
+      return fs.statSync(itemPath).isDirectory() && !isNaN(item);
+    });
+    
+    const carpetasHuerfanas = folders.filter(folder => !clientesActivos.includes(folder));
+    const carpetasEliminadas = [];
+    
+    for (const carpeta of carpetasHuerfanas) {
+      const carpetaPath = path.join("/app/tokens", carpeta);
+      try {
+        // Eliminar recursivamente la carpeta
+        fs.rmSync(carpetaPath, { recursive: true, force: true });
+        carpetasEliminadas.push(carpeta);
+        console.log(`🗑️ Carpeta eliminada: ${carpetaPath}`);
+      } catch (err) {
+        console.error(`❌ Error eliminando carpeta ${carpeta}:`, err.message);
+      }
+    }
+    
+    res.json({
+      mensaje: `Limpieza completada. ${carpetasEliminadas.length} carpetas eliminadas.`,
+      clientesActivos: clientesActivos,
+      carpetasEncontradas: folders,
+      carpetasHuerfanas: carpetasHuerfanas,
+      carpetasEliminadas: carpetasEliminadas
+    });
+  } catch (error) {
+    console.error("❌ Error limpiando carpetas huérfanas:", error);
+    res.status(500).json({ error: "Error limpiando carpetas", details: error.message });
+  }
+});
+
+app.post("/notificar-chat-humano", async (req, res) => {
+  try {
+    const { cliente_id, telefono, mensaje, tipo } = req.body;
+    
+    if (!cliente_id || !telefono) {
+      return res.status(400).json({ error: "cliente_id y telefono son requeridos" });
+    }
+    
+    console.log(`🚨 ==========================================`);
+    console.log(`🚨 ALERTA: ATENCIÓN HUMANA REQUERIDA`);
+    console.log(`🚨 ==========================================`);
+    console.log(`📞 Cliente ID: ${cliente_id}`);
+    console.log(`� Teléfono: ${telefono}`);
+    console.log(`💬 Último mensaje: ${mensaje}`);
+    console.log(`🔔 Tipo: ${tipo || 'solicitud_ayuda'}`);
+    console.log(`⏰ Fecha: ${new Date().toLocaleString('es-AR')}`);
+    console.log(`🚨 ==========================================`);
+    
+    // Buscar información del cliente en la base de datos
+    try {
+      const clienteInfo = await pool.query("SELECT comercio, nombre FROM tenants WHERE id = $1", [cliente_id]);
+      if (clienteInfo.rows.length > 0) {
+        const { comercio, nombre } = clienteInfo.rows[0];
+        console.log(`🏢 Comercio: ${comercio || 'N/A'}`);
+        console.log(`👤 Contacto: ${nombre || 'N/A'}`);
+      }
+    } catch (err) {
+      console.log(`⚠️ No se pudo obtener info del cliente: ${err.message}`);
+    }
+    
+    // Intentar enviar un mensaje de confirmación al teléfono para que aparezca como "sin leer"
+    const session = sessions[String(cliente_id)];
+    if (session) {
+      try {
+        const estado = await session.getConnectionState();
+        if (estado === "CONNECTED") {
+          // Enviar un mensaje de sistema que quede como "sin leer" para el operador
+          await session.sendText(`${telefono}@c.us`, "🔔 *Notificación del sistema*: Se ha registrado tu solicitud de ayuda. Un asesor revisará este chat pronto.");
+          console.log(`✅ Mensaje de notificación enviado a ${telefono}`);
+        } else {
+          console.log(`⚠️ Sesión ${cliente_id} no conectada (${estado}), no se pudo enviar notificación por WhatsApp`);
+        }
+      } catch (err) {
+        console.log(`❌ Error enviando mensaje de notificación: ${err.message}`);
+      }
+    } else {
+      console.log(`⚠️ No hay sesión activa para cliente ${cliente_id}`);
+    }
+    
+    console.log(`🚨 ==========================================`);
+    
+    res.json({ 
+      success: true, 
+      mensaje: "Notificación de chat humano registrada y procesada",
+      cliente_id,
+      telefono,
+      notificacion_enviada: !!session
+    });
+  } catch (error) {
+    console.error("❌ Error procesando notificación de chat humano:", error);
+    res.status(500).json({ error: "Error procesando notificación", details: error.message });
+  }
 });
 
 app.listen(PORT, async () => {

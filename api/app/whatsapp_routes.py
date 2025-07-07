@@ -13,7 +13,7 @@ import pytz
 import redis
 import json
 import httpx
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
@@ -42,6 +42,24 @@ def get_user_state(user_id):
     except Exception as e:
         print(f"⚠️ Error leyendo estado de Redis: {e}")
         return None
+
+async def notificar_chat_humano_simple(cliente_id: int, telefono: str, mensaje: str):
+    """Enviar notificación simple cuando se requiere atención humana"""
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{VENOM_URL}/notificar-chat-humano",
+                json={
+                    "cliente_id": cliente_id,
+                    "telefono": telefono,
+                    "mensaje": mensaje,
+                    "tipo": "solicitud_ayuda"
+                },
+                timeout=5.0
+            )
+        print(f"✅ Notificación enviada - Cliente {cliente_id} solicita ayuda: {telefono}")
+    except Exception as e:
+        print(f"⚠️ Error enviando notificación de ayuda: {e}")
 
 router = APIRouter()
 
@@ -94,6 +112,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 set_user_state(telefono, state)
                 return {"mensaje": "🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar."}
             else:
+                # Solo notificar sin guardar en DB
+                try:
+                    import asyncio
+                    asyncio.create_task(notificar_chat_humano_simple(tenant.id, telefono, mensaje))
+                except Exception as e:
+                    print(f"⚠️ Error enviando notificación: {e}")
                 return {"mensaje": "🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"}
 
         if any(x in mensaje for x in ["gracias", "chau", "chao", "nos vemos"]):
@@ -102,6 +126,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if "ayuda" in mensaje:
             state["mode"] = "human"
             set_user_state(telefono, state)
+            # Solo notificar al venom-service
+            try:
+                import asyncio
+                asyncio.create_task(notificar_chat_humano_simple(tenant.id, telefono, mensaje))
+            except Exception as e:
+                print(f"⚠️ Error enviando notificación: {e}")
             return {"mensaje": "🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"}
 
         if re.match(r"^cancelar\s+\w+", mensaje):
@@ -143,10 +173,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["servicios"] = [s.id for s in servicios]
                 set_user_state(telefono, state)
                 return {"mensaje": msg}
+            elif "informacion" in mensaje or "info" in mensaje:
+                if tenant.informacion_local:
+                    state["step"] = "after_info"
+                    set_user_state(telefono, state)
+                    return {"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+                else:
+                    return {"mensaje": "⚠️ No hay información disponible en este momento."}
             else:
                 state["step"] = "waiting_turno"
                 set_user_state(telefono, state)
-                return {"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\nEscribe \"Turno\" para agendar\n o \"Ayuda\" para hablar con un asesor."}
+                return {"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
 
         if state.get("step") == "waiting_turno" and "turno" in mensaje:
             servicios = tenant.servicios
@@ -160,6 +197,30 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             state["servicios"] = [s.id for s in servicios]
             set_user_state(telefono, state)
             return {"mensaje": msg}
+
+        if state.get("step") == "waiting_turno" and ("informacion" in mensaje or "info" in mensaje):
+            if tenant.informacion_local:
+                state["step"] = "after_info"
+                set_user_state(telefono, state)
+                return {"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+            else:
+                return {"mensaje": "⚠️ No hay información disponible en este momento."}
+
+        if state.get("step") == "after_info":
+            if "turno" in mensaje:
+                servicios = tenant.servicios
+                if not servicios:
+                    return {"mensaje": "⚠️ No hay servicios disponibles."}
+                msg = "¿Qué servicio deseas reservar?\n"
+                for i, s in enumerate(servicios, 1):
+                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                msg += "\nResponde con el número del servicio."
+                state["step"] = "waiting_servicio"
+                state["servicios"] = [s.id for s in servicios]
+                set_user_state(telefono, state)
+                return {"mensaje": msg}
+            else:
+                return {"mensaje": "¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
 
         if state.get("step") == "waiting_servicio":
             if mensaje.isdigit():
@@ -358,7 +419,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             )}
 
         # Mensaje genérico por defecto
-        return {"mensaje": "❓ No entendí tu mensaje. Escribe \"Turno\" para agendar o \"Ayuda\" para hablar con una persona."}
+        if mensaje in ["hola", "hello", "hi", "buenas", "buen dia", "buenas tardes", "buenas noches"]:
+            state["step"] = "welcome"
+            set_user_state(telefono, state)
+            return {"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
+        
+        return {"mensaje": "❓ No entendí tu mensaje.\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"}
 
     except Exception as e:
         import traceback as tb

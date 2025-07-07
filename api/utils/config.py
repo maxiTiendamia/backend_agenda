@@ -7,7 +7,6 @@ ADMIN_USER = os.environ.get("ADMIN_USER", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID", "")
 SECRET_KEY = os.environ.get("SECRET_KEY", "")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "")
 

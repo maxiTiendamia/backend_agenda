@@ -14,7 +14,8 @@ class Tenant(Base):
     telefono = Column(String(20), nullable=True)
     fecha_creada = Column(DateTime, default=datetime.now(timezone.utc))
     direccion = Column(String(200), nullable=True)
-    phone_number_id = Column(String(400), nullable=True)
+    qr_code = Column(Text, nullable=True)
+    informacion_local = Column(Text, nullable=True)  # Nueva columna para información del local
 
     servicios = relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")

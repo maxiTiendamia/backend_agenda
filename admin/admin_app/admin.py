@@ -118,8 +118,41 @@ class WorkingHoursField(Field):
         self.data = value
 
 
+class InformacionLocalWidget:
+    def __call__(self, field, **kwargs):
+        value = field.data or ""
+        html = f"""
+        <div style='margin: 1rem 0;'>
+            <label for='{field.id}' style='font-weight: bold; margin-bottom: 0.5rem; display: block;'>
+                Información del Local
+            </label>
+            <small style='color: #666; display: block; margin-bottom: 0.5rem;'>
+                Este texto se mostrará cuando el cliente solicite información. Puedes incluir:
+                ubicación, horarios, servicios, términos y condiciones, etc.
+            </small>
+            <textarea 
+                id='{field.id}' 
+                name='{field.name}' 
+                class='form-control' 
+                rows='10'
+                style='width: 100%; resize: vertical;'
+                placeholder='Ejemplo:
+📍 UBICACIÓN: Av. Principal 123, Centro
+⏰ HORARIOS: Lun-Vie 9:00-18:00, Sab 9:00-14:00
+🎯 SERVICIOS: Corte, Peinado, Coloración
+📋 TÉRMINOS: Cancelaciones hasta 2hs antes'
+            >{value}</textarea>
+        </div>
+        """
+        return Markup(html)
+
+
+class InformacionLocalField(Field):
+    widget = InformacionLocalWidget()
+
+
 class TenantModelView(SecureModelView):
-    form_overrides = {'working_hours': WorkingHoursField}
+    form_overrides = {'working_hours': WorkingHoursField, 'informacion_local': InformacionLocalField}
     inline_models = [
         (Servicio, dict(form_columns=['id', 'nombre', 'precio', 'duracion'])),
         (Empleado, dict(
@@ -129,7 +162,7 @@ class TenantModelView(SecureModelView):
     ]
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
     form_columns = (
-        'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'phone_number_id'
+        'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'informacion_local'
     )
 
     column_formatters = {
