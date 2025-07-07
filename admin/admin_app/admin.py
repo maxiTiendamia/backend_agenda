@@ -122,16 +122,12 @@ class WorkingHoursField(Field):
 class TenantModelView(SecureModelView):
     form_overrides = {'working_hours': WorkingHoursField}
     inline_models = [
-    (Servicio, dict(
-        form_columns=['id', 'nombre', 'precio', 'duracion'],
-        form_rel_name='servicios'
-    )),
-    (Empleado, dict(
+        ('servicios', dict(form_columns=['id', 'nombre', 'precio', 'duracion'])),
+        ('empleados', dict(
         form_overrides={'working_hours': WorkingHoursField},
-        form_columns=['id', 'nombre', 'calendar_id', 'working_hours'],
-        form_rel_name='empleados'
-    ))
-]
+        form_columns=['id', 'nombre', 'calendar_id', 'working_hours']
+        ))
+    ]
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
     form_columns = (
         'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'phone_number_id'
