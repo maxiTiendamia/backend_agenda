@@ -101,6 +101,22 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
     sessions[sessionId] = client;
 
+    // Manejar reconexión automática
+    client.onStateChange(async (state) => {
+      console.log(`🟠 Estado de la sesión ${sessionId}:`, state);
+      if (
+        ["CONFLICT", "UNPAIRED", "UNLAUNCHED", "DISCONNECTED"].includes(state)
+      ) {
+        console.log(`🔄 Intentando reconectar sesión para ${sessionId}...`);
+        try {
+          await crearSesion(sessionId, false);
+          console.log(`✅ Sesión ${sessionId} reconectada`);
+        } catch (err) {
+          console.error(`❌ Error al reconectar sesión ${sessionId}:`, err);
+        }
+      }
+    });
+
     client.onMessage(async (message) => {
       try {
         const telefono = message.from.replace("@c.us", "");

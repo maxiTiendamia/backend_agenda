@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.orm import Session
-from api.app.models import Tenant, Servicio, Empleado, Reserva, ErrorLog
+from api.app.models import Tenant, Servicio, Empleado, Reserva, ErrorLog, BlockedNumber
 from api.app.deps import get_db
 from api.utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google
 from api.utils.generador_fake_id import generar_fake_id
@@ -19,7 +19,6 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 SESSION_TTL = 300  # segundos
-
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime):
@@ -67,6 +66,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         tenant = db.query(Tenant).filter_by(id=cliente_id).first()
         if not tenant:
             return JSONResponse(content={"mensaje": "⚠️ Cliente no encontrado."})
+
+        # --- BLOQUEO DE NÚMEROS ---
+        empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+        empleados_ids = [e.id for e in empleados]
+        bloqueado = db.query(BlockedNumber).filter(
+            (BlockedNumber.telefono == telefono) &
+            (BlockedNumber.empleado_id.in_(empleados_ids)) &
+            (BlockedNumber.cliente_id == tenant.id)
+        ).first() if empleados_ids else False
+        if bloqueado:
+            return JSONResponse(content={"mensaje": ""}, status_code=200)
 
         now = time.time()
         state = get_user_state(telefono)

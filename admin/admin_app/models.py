@@ -79,3 +79,19 @@ class Empleado(db.Model):
 
     def __repr__(self):
         return f"<Empleado {self.nombre}>"
+
+
+class BlockedNumber(db.Model):
+    __tablename__ = "blocked_numbers"
+    
+    id = db.Column(db.Integer, primary_key=True)
+    empleado_id = db.Column(db.Integer, db.ForeignKey('empleados.id'), nullable=False)
+    cliente_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
+    telefono = db.Column(db.String(30), nullable=False)
+    fecha_bloqueo = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    empleado = db.relationship('Empleado')
+    cliente = db.relationship('Tenant')
+
+    def __repr__(self):
+        return f"<BlockedNumber {self.telefono} - {self.empleado.nombre if self.empleado else 'N/A'}>"

@@ -3,7 +3,7 @@ from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
 from flask import render_template, flash, Markup, redirect, request, url_for
 from wtforms import Field
-from admin_app.models import Tenant, Empleado, Servicio, Reserva, ErrorLog
+from admin_app.models import Tenant, Empleado, Servicio, Reserva, ErrorLog, BlockedNumber
 from admin_app.database import db
 import json
 from sqlalchemy.exc import IntegrityError
@@ -218,6 +218,30 @@ class ReservaModelView(SecureModelView):
     form_columns = ('fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
 
 
+class BlockedNumberModelView(SecureModelView):
+    can_create = True
+    can_edit = True
+    can_delete = True
+    can_view_details = True
+    column_searchable_list = ['telefono']
+    column_filters = ['empleado.nombre', 'cliente.comercio', 'telefono']
+    column_list = ('id', 'telefono', 'empleado.nombre', 'cliente.comercio', 'fecha_bloqueo')
+    column_labels = {
+        'telefono': 'Teléfono',
+        'empleado.nombre': 'Empleado',
+        'cliente.comercio': 'Cliente/Comercio',
+        'fecha_bloqueo': 'Fecha de Bloqueo'
+    }
+    form_columns = ('empleado', 'cliente', 'telefono')
+    
+    def on_model_change(self, form, model, is_created):
+        """Validar que el empleado pertenezca al cliente seleccionado"""
+        if model.empleado and model.cliente:
+            if model.empleado.tenant_id != model.cliente.id:
+                raise ValueError("El empleado seleccionado no pertenece al cliente/comercio seleccionado")
+        super().on_model_change(form, model, is_created)
+
+
 def init_admin(app, db):
     basic_auth.init_app(app)
     admin = Admin(
@@ -229,4 +253,5 @@ def init_admin(app, db):
     admin.add_view(TenantModelView(Tenant, db.session, name="Clientes"))
     admin.add_view(ReservaModelView(Reserva, db.session, name="Reservas"))
     admin.add_view(ErrorLogModelView(ErrorLog, db.session, name="Errores"))
+    admin.add_view(BlockedNumberModelView(BlockedNumber, db.session, name="Números Bloqueados"))
     print("✅ Panel de administración inicializado")

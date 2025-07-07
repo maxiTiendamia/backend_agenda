@@ -65,3 +65,14 @@ class ErrorLog(Base):
     mensaje = Column(Text)
     error = Column(Text)
     fecha = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class BlockedNumber(Base):
+    __tablename__ = "blocked_numbers"
+    id = Column(Integer, primary_key=True)
+    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=False)
+    cliente_id = Column(Integer, ForeignKey('tenants.id'), nullable=False)
+    telefono = Column(String(30), nullable=False)
+    fecha_bloqueo = Column(DateTime, default=datetime.now(timezone.utc))
+
+    empleado = relationship('Empleado')
+    cliente = relationship('Tenant')
