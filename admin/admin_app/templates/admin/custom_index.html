@@ -19,10 +19,11 @@
       <tr>
         <th>Cliente ID</th>
         <th>Estado</th>
+        <th>Acciones</th>
       </tr>
     </thead>
     <tbody>
-      {% for sesion in estado_sesiones %}
+      {% if estado_sesiones is iterable %} {% for sesion in estado_sesiones %}
       <tr>
         <td>{{ sesion.clienteId }}</td>
         <td>
@@ -36,8 +37,19 @@
           <span style="color: gray">⚪ {{ estado }}</span>
           {% endif %}
         </td>
+        <td>
+          <a
+            href="/admin/reiniciar/{{ sesion.clienteId }}"
+            class="btn btn-sm btn-warning"
+            >Reiniciar</a
+          >
+        </td>
       </tr>
-      {% endfor %}
+      {% endfor %} {% else %}
+      <tr>
+        <td colspan="3">⚠️ No se pudieron obtener las sesiones activas.</td>
+      </tr>
+      {% endif %}
     </tbody>
   </table>
 
@@ -171,7 +183,6 @@
     </div>
   </div>
 
-  <!-- Gráfico y exportación CSV de reservas por estado -->
   <div class="row mt-4">
     <div class="col-md-12">
       <div class="card shadow-sm mb-4">
@@ -192,7 +203,6 @@
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-  // Obtén los datos de la tabla filtrada
   function getChartData() {
     const estados = {};
     document.querySelectorAll("table tbody tr").forEach((row) => {
@@ -233,7 +243,6 @@
     });
   }
 
-  // Exportar tabla filtrada a CSV
   document.getElementById("export-btn").onclick = function () {
     let csv = "";
     document.querySelectorAll("table thead tr").forEach((row) => {
@@ -257,9 +266,7 @@
     URL.revokeObjectURL(url);
   };
 
-  // Renderiza la gráfica al cargar y al filtrar
   renderChart();
-  // Observa cambios en la tabla (por filtros)
   const observer = new MutationObserver(renderChart);
   observer.observe(document.querySelector("table tbody"), {
     childList: true,

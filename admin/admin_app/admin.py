@@ -31,13 +31,6 @@ def llamar_a_venom_async(cliente_id):
     except Exception as e:
         print(f"❌ [Async] Error al contactar a Venom: {e}")
 
-# ⬇️ Función para reiniciar sesión manualmente desde el panel
-@expose('/reiniciar/<int:cliente_id>')
-def reiniciar_cliente(cliente_id):
-    threading.Thread(target=llamar_a_venom_async, args=(cliente_id,)).start()
-    flash(f"🔁 Reinicio de sesión solicitado para cliente {cliente_id}.", "info")
-    return redirect(request.referrer or url_for('admin.index'))
-
 
 def obtener_estado_sesion(cliente_id):
     try:
@@ -55,12 +48,14 @@ def obtener_estado_sesion(cliente_id):
                 icono, fondo, color = estilos.get(estado, ("⚪", "#eeeeee", "#333333"))
                 return Markup(
                     f'<div style="background-color:{fondo}; color:{color}; padding:6px 10px; border-radius:5px; display:inline-block;">{icono} {estado}</div><br>'
-                    f'<a href="/admin/reiniciar/{cliente_id}" class="btn btn-sm btn-warning" style="margin-top: 4px;">Reiniciar</a>'
-                    )
+                    f'<a href="/admin/reiniciar/{cliente_id}" class="btn btn-sm btn-warning" style="margin-top: 4px;" onclick="return confirm(\'¿Seguro que deseas reiniciar esta sesión?\');">Reiniciar</a>'
+                )
 
         return Markup('<span style="background:#e0e0e0; padding:4px 8px; border-radius:5px;">⚪ No iniciada</span>')
-    except Exception:
+    except Exception as e:
+        print(f"❌ Error obteniendo estado de sesión para {cliente_id}: {e}")
         return Markup('<span style="background:#ccc; padding:4px 8px; border-radius:5px;">⚠️ Error</span>')
+
 
 class SecureModelView(ModelView):
     def is_accessible(self):
@@ -68,6 +63,7 @@ class SecureModelView(ModelView):
 
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
+
 
 class ErrorLogModelView(SecureModelView):    
     can_create = False
@@ -79,6 +75,7 @@ class ErrorLogModelView(SecureModelView):
     column_list = ('id', 'cliente', 'telefono', 'mensaje', 'error', 'fecha')
     form_columns = ('cliente', 'telefono', 'mensaje', 'error', 'fecha')
     column_default_sort = ('fecha', True)
+
 
 class WorkingHoursWidget:
     def __call__(self, field, **kwargs):
@@ -97,6 +94,7 @@ class WorkingHoursWidget:
             html += f" a <input type='time' name='{field.name}_{day}_end' value='{end}'></div>"
         html += "</div>"
         return html
+
 
 class WorkingHoursField(Field):
     widget = WorkingHoursWidget()
@@ -118,6 +116,7 @@ class WorkingHoursField(Field):
 
     def process_data(self, value):
         self.data = value
+
 
 class TenantModelView(SecureModelView):
     form_overrides = {'working_hours': WorkingHoursField}
@@ -146,7 +145,7 @@ class TenantModelView(SecureModelView):
         try:
             super().on_model_change(form, model, is_created)
 
-            if is_created:
+            if is_created and not model.qr_code:
                 db.session.flush()  # Para obtener el ID del modelo
                 threading.Thread(target=llamar_a_venom_async, args=(model.id,)).start()
                 flash("🔄 Solicitud enviada a Venom en segundo plano para generar el QR.", "info")
@@ -158,6 +157,7 @@ class TenantModelView(SecureModelView):
             else:
                 flash(f'⚠️ Error inesperado: {e}', 'error')
             raise
+
 
 class SecureAdminIndexView(AdminIndexView):
     @expose('/')
@@ -195,6 +195,13 @@ class SecureAdminIndexView(AdminIndexView):
     def inaccessible_callback(self, name, **kwargs):
         return basic_auth.challenge()
 
+    @expose('/reiniciar/<int:cliente_id>')
+    def reiniciar_cliente(self, cliente_id):
+        threading.Thread(target=llamar_a_venom_async, args=(cliente_id,)).start()
+        flash(f"🔁 Reinicio de sesión solicitado para cliente {cliente_id}.", "info")
+        return redirect(request.referrer or url_for('admin.index'))
+
+
 class ReservaModelView(SecureModelView):
     can_create = False
     can_edit = False
@@ -204,6 +211,7 @@ class ReservaModelView(SecureModelView):
     column_filters = ['cliente_nombre', 'empleado_nombre', 'servicio', 'estado']
     column_list = ('id', 'fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
     form_columns = ('fake_id', 'empresa', 'cliente_nombre', 'empleado_nombre', 'servicio', 'fecha_reserva', 'estado')
+
 
 def init_admin(app, db):
     basic_auth.init_app(app)
