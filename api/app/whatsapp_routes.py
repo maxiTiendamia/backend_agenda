@@ -66,6 +66,8 @@ ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
 
 @router.get("/webhook")
 async def verify_webhook(request: Request):
+    print(f"📩 Mensaje recibido: '{message_text}' de {from_number}")
+    print(f"🧾 Estado inicial: {state}")
     params = request.query_params
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
@@ -194,6 +196,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         
         if state.get("step") == "welcome":
             if "turno" in message_text:
+                print("🟢 Entrando en flujo de turnos desde estado 'welcome'")
                 servicios = tenant.servicios
                 if not servicios:
                     await enviar_mensaje_venom(
