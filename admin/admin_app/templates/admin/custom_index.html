@@ -13,22 +13,33 @@
     </div>
   </div>
 
-  <div class="card mt-4 shadow-sm">
-    <div class="card-header">🟢 Estado de sesiones Venom</div>
-    <div class="card-body">
-      {% if estado_sesiones.error %}
-      <p class="text-danger">
-        Error al consultar Venom: {{ estado_sesiones.error }}
-      </p>
-      {% else %}
-      <ul>
-        {% for session_id, estado in estado_sesiones.items() %}
-        <li><strong>Cliente {{ session_id }}:</strong> {{ estado }}</li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-    </div>
-  </div>
+  <h4>📡 Estado de Sesiones Activas</h4>
+  <table class="table table-sm table-bordered">
+    <thead class="thead-light">
+      <tr>
+        <th>Cliente ID</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for sesion in estado_sesiones %}
+      <tr>
+        <td>{{ sesion.clienteId }}</td>
+        <td>
+          {% set estado = sesion.estado %} {% if estado == 'CONNECTED' %}
+          <span style="color: green">🟢 Conectado</span>
+          {% elif estado == 'DISCONNECTED' %}
+          <span style="color: red">🔴 Desconectado</span>
+          {% elif estado == 'TIMEOUT' %}
+          <span style="color: orange">🟠 Timeout</span>
+          {% else %}
+          <span style="color: gray">⚪ {{ estado }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 
   <div class="row mt-4">
     <div class="col-md-12">
