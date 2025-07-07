@@ -24,10 +24,10 @@ pool.connect()
     console.error("❌ Error al conectar con la base de datos:", err);
   });
 
-function crearSesionConTimeout(clienteId, timeoutMs = 60000) {
+function crearSesionConTimeout(clienteId, timeoutMs = 60000, permitirGuardarQR = true) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("⏱ Tiempo de espera agotado para crear sesión")), timeoutMs);
-    crearSesion(clienteId, false).then((res) => {
+    crearSesion(clienteId, permitirGuardarQR).then((res) => {
       clearTimeout(timer);
       resolve(res);
     }).catch((err) => {
@@ -42,9 +42,17 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
   const qrPath = path.join(sessionDir, `${sessionId}.html`);
 
-  // Si se pide regenerar QR, borra el archivo y el campo en la base
+  // Si se pide regenerar QR, borra el archivo, la sesión en memoria y el campo en la base
   if (permitirGuardarQR) {
     if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
+    if (sessions[sessionId]) {
+      try {
+        await sessions[sessionId].close();
+      } catch (e) {
+        console.log("No se pudo cerrar la sesión anterior:", e);
+      }
+      delete sessions[sessionId];
+    }
     try {
       await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [sessionId]);
     } catch (err) {
@@ -142,7 +150,7 @@ async function restaurarSesiones() {
 app.get("/iniciar/:clienteId", async (req, res) => {
   const { clienteId } = req.params;
   try {
-    await crearSesionConTimeout(clienteId, 60000);
+    await crearSesionConTimeout(clienteId, 60000, true); // <-- true para guardar QR
     res.send(`✅ Sesión iniciada para ${clienteId}. Escaneá el QR en /qr/${clienteId}`);
   } catch (error) {
     console.error("❌ Error al iniciar sesión:", error);
