@@ -27,8 +27,8 @@ pool
     console.error("❌ Error al conectar con la base de datos:", err);
   });
 
-// 🧠 Crea una sesión pero con timeout controlado (por si se cuelga)
-function crearSesionConTimeout(clienteId, timeoutMs = 30000) {
+// Crea una sesión con timeout
+function crearSesionConTimeout(clienteId, timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error("⏱ Tiempo de espera agotado para crear sesión"));
@@ -69,7 +69,7 @@ async function crearSesion(clienteId) {
       multidevice: true,
       disableWelcome: true,
       sessionFolder: sessionDir,
-      autoClose: 180000, // 🕒 cierra después de 3 min sin escanear QR
+      autoClose: 180000, // cierra tras 3 min
       useChrome: true,
       browserArgs: ["--no-sandbox", "--disable-setuid-sandbox"],
       puppeteerOptions: {
@@ -87,14 +87,14 @@ async function crearSesion(clienteId) {
 
         const qrPath = path.join(sessionDir, `${sessionId}.html`);
         fs.writeFileSync(qrPath, html);
-        console.log(`✅ QR guardado en: ${qrPath}`);
+        console.log(`✅ QR guardado en archivo: ${qrPath}`);
 
         try {
-          await pool.query(
+          const result = await pool.query(
             "UPDATE tenants SET qr_code = $1 WHERE id = $2",
             [base64Qr.replace(/^data:image\/\w+;base64,/, ""), sessionId]
           );
-          console.log(`📬 QR guardado en DB para cliente ${sessionId}`);
+          console.log(`📬 QR guardado en DB para cliente ${sessionId}`, result.rowCount);
         } catch (err) {
           console.error("❌ Error guardando QR en DB:", err);
         }
@@ -116,7 +116,6 @@ async function crearSesion(clienteId) {
   }
 }
 
-// 🔁 Restaurar sesiones activas desde la DB al iniciar
 async function restaurarSesiones() {
   try {
     const result = await pool.query("SELECT id FROM tenants WHERE qr_code IS NOT NULL");
@@ -131,12 +130,11 @@ async function restaurarSesiones() {
   }
 }
 
-// 🔹 Iniciar sesión (genera QR)
 app.get("/iniciar/:clienteId", async (req, res) => {
   const { clienteId } = req.params;
 
   try {
-    await crearSesionConTimeout(clienteId, 30000); // ⏱ máximo 30s
+    await crearSesionConTimeout(clienteId, 60000); // ahora 60s
     res.send(`✅ Sesión iniciada para ${clienteId}. Escaneá el QR en /qr/${clienteId}`);
   } catch (error) {
     console.error("❌ Error al iniciar sesión:", error);
@@ -144,7 +142,6 @@ app.get("/iniciar/:clienteId", async (req, res) => {
   }
 });
 
-// 🔹 POST desde admin
 app.post("/crear_sesion", async (req, res) => {
   const { cliente_id } = req.body;
 
@@ -153,7 +150,7 @@ app.post("/crear_sesion", async (req, res) => {
   }
 
   try {
-    await crearSesionConTimeout(cliente_id, 30000);
+    await crearSesionConTimeout(cliente_id, 60000);
     res.status(200).json({ success: true });
   } catch (err) {
     console.error("❌ Error creando sesión desde POST:", err);
@@ -161,7 +158,6 @@ app.post("/crear_sesion", async (req, res) => {
   }
 });
 
-// 🔹 Mostrar QR en HTML
 app.get("/qr/:clienteId", (req, res) => {
   const clienteId = req.params.clienteId;
   const filePath = path.join(__dirname, "sessions", `${clienteId}.html`);
@@ -173,7 +169,6 @@ app.get("/qr/:clienteId", (req, res) => {
   }
 });
 
-// 🔹 Obtener QR en base64 puro
 app.get("/qr_base64/:clienteId", async (req, res) => {
   const { clienteId } = req.params;
 
@@ -191,7 +186,6 @@ app.get("/qr_base64/:clienteId", async (req, res) => {
   }
 });
 
-// 🔹 Enviar mensaje
 app.post("/send", async (req, res) => {
   const { clienteId, to, message } = req.body;
 
