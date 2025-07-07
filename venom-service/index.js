@@ -103,11 +103,11 @@ async function crearSesion(clienteId) {
 
     sessions[sessionId] = client;
 
-    client.onMessage(async (message) => {
-      if (message.body.toLowerCase() === "hola") {
-        await client.sendText(message.from, "¡Hola! ¿En qué puedo ayudarte? 🤖");
-      }
-    });
+    //client.onMessage(async (message) => {
+      //if (message.body.toLowerCase() === "hola") {
+        //await client.sendText(message.from, "¡Hola! ¿En qué puedo ayudarte? 🤖");
+      //}
+    //});
 
     return client;
   } catch (err) {
