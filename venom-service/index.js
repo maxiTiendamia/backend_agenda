@@ -27,14 +27,13 @@ pool
     console.error("❌ Error al conectar con la base de datos:", err);
   });
 
-// Crea una sesión con timeout
 function crearSesionConTimeout(clienteId, timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error("⏱ Tiempo de espera agotado para crear sesión"));
     }, timeoutMs);
 
-    crearSesion(clienteId)
+    crearSesion(clienteId, false)
       .then((res) => {
         clearTimeout(timer);
         resolve(res);
@@ -46,7 +45,7 @@ function crearSesionConTimeout(clienteId, timeoutMs = 60000) {
   });
 }
 
-async function crearSesion(clienteId) {
+async function crearSesion(clienteId, permitirGuardarQR = true) {
   const sessionId = String(clienteId);
 
   if (sessions[sessionId]) {
@@ -69,13 +68,14 @@ async function crearSesion(clienteId) {
       multidevice: true,
       disableWelcome: true,
       sessionFolder: sessionDir,
-      autoClose: 180000, // cierra tras 3 min
+      autoClose: 180000,
       useChrome: true,
       browserArgs: ["--no-sandbox", "--disable-setuid-sandbox"],
       puppeteerOptions: {
         headless: "new",
       },
       catchQR: async (base64Qr) => {
+        if (!permitirGuardarQR) return;
         console.log("🟡 Generando QR para:", sessionId);
 
         const html = `
@@ -102,13 +102,6 @@ async function crearSesion(clienteId) {
     });
 
     sessions[sessionId] = client;
-
-    //client.onMessage(async (message) => {
-      //if (message.body.toLowerCase() === "hola") {
-        //await client.sendText(message.from, "¡Hola! ¿En qué puedo ayudarte? 🤖");
-      //}
-    //});
-
     return client;
   } catch (err) {
     console.error(`❌ Error creando sesión para ${sessionId}:`, err);
@@ -123,7 +116,7 @@ async function restaurarSesiones() {
     for (const row of result.rows) {
       const clienteId = row.id;
       console.log(`🔄 Restaurando sesión previa para cliente ${clienteId}...`);
-      await crearSesion(clienteId);
+      await crearSesion(clienteId, false);
     }
   } catch (err) {
     console.error("❌ Error restaurando sesiones previas:", err);
@@ -134,7 +127,7 @@ app.get("/iniciar/:clienteId", async (req, res) => {
   const { clienteId } = req.params;
 
   try {
-    await crearSesionConTimeout(clienteId, 60000); // ahora 60s
+    await crearSesionConTimeout(clienteId, 60000);
     res.send(`✅ Sesión iniciada para ${clienteId}. Escaneá el QR en /qr/${clienteId}`);
   } catch (error) {
     console.error("❌ Error al iniciar sesión:", error);
@@ -209,15 +202,15 @@ app.post("/enviar-mensaje", async (req, res) => {
 });
 
 app.get("/estado-sesiones", async (req, res) => {
-  const estados = {};
+  const estados = [];
 
   for (const clienteId in sessions) {
     try {
       const estado = await sessions[clienteId].getConnectionState();
-      estados[clienteId] = estado;
+      estados.push({ clienteId, estado });
     } catch (err) {
       console.error(`❌ Error obteniendo estado de sesión ${clienteId}:`, err);
-      estados[clienteId] = "ERROR";
+      estados.push({ clienteId, estado: "ERROR" });
     }
   }
 

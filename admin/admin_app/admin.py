@@ -1,7 +1,7 @@
 from flask_admin import Admin, AdminIndexView, expose
 from flask_admin.contrib.sqla import ModelView
 from flask_basicauth import BasicAuth
-from flask import render_template, flash, Markup
+from flask import render_template, flash, Markup, redirect, request, url_for
 from wtforms import Field
 from admin_app.models import Tenant, Empleado, Servicio, Reserva, ErrorLog
 from admin_app.database import db
@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from collections import Counter
 import os
 import requests
-import threading  # ⬅️ nuevo
+import threading
 
 print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
@@ -30,6 +30,37 @@ def llamar_a_venom_async(cliente_id):
             print(f"⚠️ [Async] Venom no respondió correctamente: {response.status_code}")
     except Exception as e:
         print(f"❌ [Async] Error al contactar a Venom: {e}")
+
+# ⬇️ Función para reiniciar sesión manualmente desde el panel
+@expose('/reiniciar/<int:cliente_id>')
+def reiniciar_cliente(cliente_id):
+    threading.Thread(target=llamar_a_venom_async, args=(cliente_id,)).start()
+    flash(f"🔁 Reinicio de sesión solicitado para cliente {cliente_id}.", "info")
+    return redirect(request.referrer or url_for('admin.index'))
+
+
+def obtener_estado_sesion(cliente_id):
+    try:
+        res = requests.get(f"{VENOM_URL}/estado-sesiones", timeout=10)
+        sesiones = res.json()
+
+        for sesion in sesiones:
+            if str(sesion["clienteId"]) == str(cliente_id):
+                estado = sesion["estado"]
+                estilos = {
+                    "CONNECTED": ("🟢", "#d4edda", "#155724"),
+                    "DISCONNECTED": ("🔴", "#f8d7da", "#721c24"),
+                    "TIMEOUT": ("🟠", "#fff3cd", "#856404")
+                }
+                icono, fondo, color = estilos.get(estado, ("⚪", "#eeeeee", "#333333"))
+                return Markup(
+                    f'<div style="background-color:{fondo}; color:{color}; padding:6px 10px; border-radius:5px; display:inline-block;">{icono} {estado}</div><br>'
+                    f'<a href="/admin/reiniciar/{cliente_id}" class="btn btn-sm btn-warning" style="margin-top: 4px;">Reiniciar</a>'
+                    )
+
+        return Markup('<span style="background:#e0e0e0; padding:4px 8px; border-radius:5px;">⚪ No iniciada</span>')
+    except Exception:
+        return Markup('<span style="background:#ccc; padding:4px 8px; border-radius:5px;">⚠️ Error</span>')
 
 class SecureModelView(ModelView):
     def is_accessible(self):
@@ -97,7 +128,7 @@ class TenantModelView(SecureModelView):
             form_columns=['id', 'nombre', 'calendar_id', 'working_hours']
         ))
     ]
-    column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code')
+    column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
     form_columns = (
         'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'phone_number_id'
     )
@@ -107,8 +138,9 @@ class TenantModelView(SecureModelView):
             f"<img src='data:image/png;base64,{m.qr_code}' style='height:150px;'>"
             ) if m.qr_code and not m.qr_code.startswith("http") and not m.qr_code.startswith("data:image") else (
                 Markup(f"<img src='{m.qr_code}' style='height:150px;'>")
-                ) if m.qr_code else Markup("<span style='color: gray;'>⏳ Esperando QR...</span>")
-        }
+                ) if m.qr_code else Markup("<span style='color: gray;'>⏳ Esperando QR...</span>"),
+        'estado_wa': lambda v, c, m, p: obtener_estado_sesion(m.id)
+    }
 
     def on_model_change(self, form, model, is_created):
         try:
