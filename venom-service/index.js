@@ -101,18 +101,44 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
     sessions[sessionId] = client;
 
-    // Manejar reconexión automática
+    // Manejar reconexión automática con limitador
+    let reconexionIntentos = 0;
+    const maxIntentos = 3;
+    
     client.onStateChange(async (state) => {
       console.log(`🟠 Estado de la sesión ${sessionId}:`, state);
-      if (
-        ["CONFLICT", "UNPAIRED", "UNLAUNCHED", "DISCONNECTED"].includes(state)
-      ) {
-        console.log(`🔄 Intentando reconectar sesión para ${sessionId}...`);
-        try {
-          await crearSesion(sessionId, false);
-          console.log(`✅ Sesión ${sessionId} reconectada`);
-        } catch (err) {
-          console.error(`❌ Error al reconectar sesión ${sessionId}:`, err);
+      
+      if (state === "CONNECTED") {
+        reconexionIntentos = 0; // Reset contador cuando se conecta exitosamente
+        console.log(`✅ Sesión ${sessionId} conectada exitosamente`);
+      }
+      
+      if (["CONFLICT", "UNPAIRED", "UNLAUNCHED", "DISCONNECTED"].includes(state)) {
+        if (reconexionIntentos < maxIntentos) {
+          reconexionIntentos++;
+          console.log(`🔄 Intento ${reconexionIntentos}/${maxIntentos} de reconexión para ${sessionId}...`);
+          
+          // Esperar antes de intentar reconectar
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+          try {
+            // Cerrar sesión actual antes de recrear
+            if (sessions[sessionId]) {
+              await sessions[sessionId].close();
+              delete sessions[sessionId];
+            }
+            
+            await crearSesion(sessionId, false);
+            console.log(`✅ Sesión ${sessionId} reconectada en intento ${reconexionIntentos}`);
+          } catch (err) {
+            console.error(`❌ Error en intento ${reconexionIntentos} de reconexión ${sessionId}:`, err.message);
+            
+            if (reconexionIntentos >= maxIntentos) {
+              console.error(`🚫 Máximo de intentos alcanzado para ${sessionId}, requiere intervención manual`);
+            }
+          }
+        } else {
+          console.error(`🚫 Sesión ${sessionId} desconectada permanentemente, requiere escaneo de QR`);
         }
       }
     });
@@ -150,14 +176,88 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
   }
 }
 
+async function verificarEstadoSesiones() {
+  console.log("🔍 Verificando estado de todas las sesiones...");
+  
+  for (const [sessionId, client] of Object.entries(sessions)) {
+    try {
+      const estado = await client.getConnectionState();
+      console.log(`📊 Sesión ${sessionId}: ${estado}`);
+      
+      if (estado !== "CONNECTED") {
+        console.log(`⚠️ Sesión ${sessionId} no conectada, intentando reconectar...`);
+        try {
+          await client.close();
+          delete sessions[sessionId];
+          await crearSesion(sessionId, false);
+        } catch (err) {
+          console.error(`❌ Error reconectando ${sessionId}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error(`❌ Error verificando estado de ${sessionId}:`, err.message);
+      delete sessions[sessionId];
+    }
+  }
+}
+
+// Verificar sesiones cada 5 minutos
+setInterval(verificarEstadoSesiones, 5 * 60 * 1000);
+
 async function restaurarSesiones() {
   try {
-    const result = await pool.query("SELECT id FROM tenants WHERE qr_code IS NOT NULL");
-    for (const row of result.rows) {
-      const clienteId = row.id;
-      console.log(`🔄 Restaurando sesión previa para cliente ${clienteId}...`);
-      await crearSesion(clienteId, false);
+    console.log("🔄 Iniciando restauración de sesiones...");
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+    
+    // Buscar todos los clientes que tienen carpetas de sesión en el disco
+    if (!fs.existsSync(sessionDir)) {
+      console.log("📁 No existe carpeta de sesiones, creándola...");
+      fs.mkdirSync(sessionDir, { recursive: true });
+      return;
     }
+
+    // Leer todas las carpetas de sesión del disco
+    const sessionFolders = fs.readdirSync(sessionDir).filter(item => {
+      const itemPath = path.join(sessionDir, item);
+      return fs.statSync(itemPath).isDirectory() && !isNaN(item);
+    });
+
+    console.log(`📂 Encontradas ${sessionFolders.length} carpetas de sesión en disco`);
+
+    // Verificar cuáles clientes existen en la base de datos
+    const result = await pool.query("SELECT id, comercio FROM tenants");
+    const clientesActivos = result.rows.map(row => String(row.id));
+    
+    for (const sessionFolder of sessionFolders) {
+      const clienteId = sessionFolder;
+      
+      // Solo restaurar si el cliente existe en la base de datos
+      if (!clientesActivos.includes(clienteId)) {
+        console.log(`⚠️ Cliente ${clienteId} no existe en DB, saltando...`);
+        continue;
+      }
+
+      // Verificar si existe el archivo de datos de WhatsApp Web
+      const sessionPath = path.join(sessionDir, clienteId);
+      const whatsappDataFile = path.join(sessionPath, "Default", "Local Storage", "leveldb");
+      
+      if (fs.existsSync(whatsappDataFile) || fs.existsSync(path.join(sessionPath, "Default"))) {
+        console.log(`🔄 Restaurando sesión para cliente ${clienteId}...`);
+        try {
+          await crearSesion(clienteId, false); // false = no regenerar QR
+          console.log(`✅ Sesión restaurada para cliente ${clienteId}`);
+          
+          // Esperar un poco entre restauraciones para no sobrecargar
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (err) {
+          console.error(`❌ Error restaurando sesión ${clienteId}:`, err.message);
+        }
+      } else {
+        console.log(`⚠️ No hay datos de sesión válidos para cliente ${clienteId}`);
+      }
+    }
+    
+    console.log("✅ Proceso de restauración completado");
   } catch (err) {
     console.error("❌ Error restaurando sesiones previas:", err);
   }
@@ -204,22 +304,96 @@ app.get("/estado-sesiones", async (req, res) => {
   const estados = [];
   try {
     const result = await pool.query("SELECT id, nombre, comercio FROM tenants");
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+    
     for (const cliente of result.rows) {
       const clienteId = String(cliente.id);
+      let estado = "NO_INICIADA";
+      let tieneArchivos = false;
+      
+      // Verificar si tiene archivos de sesión en disco
+      const sessionPath = path.join(sessionDir, clienteId);
+      if (fs.existsSync(sessionPath)) {
+        const defaultPath = path.join(sessionPath, "Default");
+        tieneArchivos = fs.existsSync(defaultPath);
+      }
+      
       if (sessions[clienteId]) {
         try {
-          const estado = await sessions[clienteId].getConnectionState();
-          estados.push({ clienteId, nombre: cliente.nombre, comercio: cliente.comercio, estado });
+          estado = await sessions[clienteId].getConnectionState();
         } catch (err) {
-          estados.push({ clienteId, nombre: cliente.nombre, comercio: cliente.comercio, estado: "ERROR" });
+          estado = "ERROR";
+          console.error(`❌ Error obteniendo estado de ${clienteId}:`, err.message);
         }
-      } else {
-        estados.push({ clienteId, nombre: cliente.nombre, comercio: cliente.comercio, estado: "NO_INICIADA" });
+      } else if (tieneArchivos) {
+        estado = "ARCHIVOS_DISPONIBLES";
       }
+      
+      estados.push({ 
+        clienteId, 
+        nombre: cliente.nombre, 
+        comercio: cliente.comercio, 
+        estado,
+        tieneArchivos,
+        enMemoria: !!sessions[clienteId]
+      });
     }
     res.json(estados);
   } catch (error) {
+    console.error("❌ Error consultando clientes:", error);
     res.status(500).json({ error: "Error consultando clientes" });
+  }
+});
+
+app.get("/restaurar/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  try {
+    console.log(`🔄 Forzando restauración de sesión para cliente ${clienteId}...`);
+    
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "sessions");
+    const sessionPath = path.join(sessionDir, clienteId);
+    
+    if (!fs.existsSync(sessionPath)) {
+      return res.status(404).json({ 
+        error: "No se encontraron archivos de sesión para este cliente",
+        requiereQR: true 
+      });
+    }
+    
+    // Cerrar sesión actual si existe
+    if (sessions[clienteId]) {
+      try {
+        await sessions[clienteId].close();
+      } catch (e) {
+        console.log("No se pudo cerrar la sesión anterior:", e.message);
+      }
+      delete sessions[clienteId];
+    }
+    
+    // Restaurar desde archivos del disco
+    await crearSesion(clienteId, false);
+    
+    // Verificar estado después de restaurar
+    let estado = "UNKNOWN";
+    if (sessions[clienteId]) {
+      try {
+        estado = await sessions[clienteId].getConnectionState();
+      } catch (err) {
+        estado = "ERROR";
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      mensaje: `Sesión restaurada para cliente ${clienteId}`,
+      estado: estado
+    });
+  } catch (error) {
+    console.error("❌ Error restaurando sesión:", error);
+    res.status(500).json({ 
+      error: "Error al restaurar sesión",
+      details: error.message 
+    });
   }
 });
 
