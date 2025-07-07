@@ -34,7 +34,11 @@ pool.connect()
 
 function crearSesionConTimeout(clienteId, timeoutMs = 60000, permitirGuardarQR = true) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("⏱ Tiempo de espera agotado para crear sesión")), timeoutMs);
+    const timer = setTimeout(() => {
+      console.log(`⏱️ Timeout alcanzado para sesión ${clienteId} (${timeoutMs}ms)`);
+      reject(new Error("⏱ Tiempo de espera agotado para crear sesión"));
+    }, timeoutMs);
+    
     crearSesion(clienteId, permitirGuardarQR).then((res) => {
       clearTimeout(timer);
       resolve(res);
@@ -79,6 +83,9 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
     console.log("📁 Carpeta 'sessions' creada");
   }
 
+  // Variable para controlar si ya se guardó el QR (evitar múltiples guardados)
+  let qrGuardado = false;
+
   try {
     const client = await venom.create({
       session: sessionId,
@@ -108,7 +115,9 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       },
       createPathFileToken: true,
       catchQR: async (base64Qr) => {
-        if (!permitirGuardarQR) return;
+        if (!permitirGuardarQR || qrGuardado) return;
+        qrGuardado = true; // Marcar como guardado para evitar duplicados
+        
         const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;"><img src="${base64Qr}" /></body></html>`;
         const qrPath = path.join(sessionDir, `${sessionId}.html`);
         fs.writeFileSync(qrPath, html);
@@ -348,19 +357,30 @@ async function restaurarSesiones() {
     
     if (clientesSinCarpetas.length > 0) {
       console.log(`📋 Clientes sin carpetas de sesión:`, clientesSinCarpetas);
-      console.log(`� Creando sesiones automáticamente...`);
+      console.log(`🚀 Creando sesiones automáticamente...`);
       
       for (const clienteId of clientesSinCarpetas) {
         try {
           console.log(`⚙️ Creando sesión automática para cliente ${clienteId}...`);
-          await crearSesion(clienteId, true); // true = generar QR
+          
+          // Crear sesión con timeout más corto y manejo de errores mejorado
+          await Promise.race([
+            crearSesion(clienteId, true), // true = generar QR
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error("Timeout de 30 segundos alcanzado")), 30000)
+            )
+          ]);
+          
           console.log(`✅ Sesión creada para cliente ${clienteId}. QR disponible en /qr/${clienteId}`);
           
-          // Esperar un poco entre creaciones para no sobrecargar
-          await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (err) {
           console.error(`❌ Error creando sesión automática para ${clienteId}:`, err.message);
+          console.log(`⏭️ Continuando con el siguiente cliente...`);
         }
+        
+        // Esperar un poco entre creaciones para no sobrecargar
+        console.log(`⏱️ Esperando 3 segundos antes del siguiente cliente...`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
       
       console.log(`📱 QR codes disponibles en:`);
@@ -778,4 +798,75 @@ app.listen(PORT, async () => {
   await new Promise(resolve => setTimeout(resolve, 3000));
   
   await restaurarSesiones();
+});
+
+app.post("/crear-sesiones-faltantes", async (req, res) => {
+  try {
+    // Obtener clientes de la DB
+    const result = await pool.query("SELECT id, comercio FROM tenants");
+    const clientesActivos = result.rows.map(row => String(row.id));
+    
+    // Obtener carpetas existentes
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const carpetas = fs.existsSync(sessionDir) ? 
+      fs.readdirSync(sessionDir).filter(item => {
+        const itemPath = path.join(sessionDir, item);
+        return fs.statSync(itemPath).isDirectory() && !isNaN(item);
+      }) : [];
+    
+    const clientesSinCarpetas = clientesActivos.filter(id => !carpetas.includes(id));
+    
+    if (clientesSinCarpetas.length === 0) {
+      return res.json({
+        mensaje: "Todos los clientes ya tienen sesiones creadas",
+        clientes_activos: clientesActivos,
+        carpetas_existentes: carpetas
+      });
+    }
+    
+    console.log(`🚀 API: Creando ${clientesSinCarpetas.length} sesiones faltantes...`);
+    const resultados = [];
+    
+    for (const clienteId of clientesSinCarpetas) {
+      try {
+        console.log(`⚙️ API: Creando sesión para cliente ${clienteId}...`);
+        
+        await Promise.race([
+          crearSesion(clienteId, true),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Timeout de 25 segundos")), 25000)
+          )
+        ]);
+        
+        resultados.push({
+          cliente_id: clienteId,
+          estado: "creado",
+          qr_url: `/qr/${clienteId}`
+        });
+        
+        console.log(`✅ API: Sesión creada para cliente ${clienteId}`);
+        
+        // Esperar entre creaciones
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+      } catch (err) {
+        console.error(`❌ API: Error con cliente ${clienteId}:`, err.message);
+        resultados.push({
+          cliente_id: clienteId,
+          estado: "error",
+          error: err.message
+        });
+      }
+    }
+    
+    res.json({
+      mensaje: `Proceso completado. ${resultados.filter(r => r.estado === 'creado').length} sesiones creadas.`,
+      resultados: resultados,
+      clientes_procesados: clientesSinCarpetas.length
+    });
+    
+  } catch (error) {
+    console.error("❌ Error en crear-sesiones-faltantes:", error);
+    res.status(500).json({ error: "Error creando sesiones", details: error.message });
+  }
 });
