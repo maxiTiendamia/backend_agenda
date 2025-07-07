@@ -18,6 +18,8 @@
     <thead class="thead-light">
       <tr>
         <th>Cliente ID</th>
+        <th>Nombre</th>
+        <th>Comercio</th>
         <th>Estado</th>
         <th>Acciones</th>
       </tr>
@@ -26,6 +28,8 @@
       {% if estado_sesiones is iterable %} {% for sesion in estado_sesiones %}
       <tr>
         <td>{{ sesion.clienteId }}</td>
+        <td>{{ sesion.nombre or "—" }}</td>
+        <td>{{ sesion.comercio or "—" }}</td>
         <td>
           {% set estado = sesion.estado %} {% if estado == 'CONNECTED' %}
           <span style="color: green">🟢 Conectado</span>
@@ -33,6 +37,10 @@
           <span style="color: red">🔴 Desconectado</span>
           {% elif estado == 'TIMEOUT' %}
           <span style="color: orange">🟠 Timeout</span>
+          {% elif estado == 'NO_INICIADA' %}
+          <span style="color: gray">⚪ No iniciada</span>
+          {% elif estado == 'ERROR' %}
+          <span style="color: darkred">⚠️ Error</span>
           {% else %}
           <span style="color: gray">⚪ {{ estado }}</span>
           {% endif %}
@@ -41,13 +49,14 @@
           <a
             href="/admin/reiniciar/{{ sesion.clienteId }}"
             class="btn btn-sm btn-warning"
-            >Reiniciar</a
           >
+            Regenerar QR
+          </a>
         </td>
       </tr>
       {% endfor %} {% else %}
       <tr>
-        <td colspan="3">⚠️ No se pudieron obtener las sesiones activas.</td>
+        <td colspan="5">⚠️ No se pudieron obtener las sesiones activas.</td>
       </tr>
       {% endif %}
     </tbody>

@@ -204,17 +204,46 @@ app.post("/enviar-mensaje", async (req, res) => {
 app.get("/estado-sesiones", async (req, res) => {
   const estados = [];
 
-  for (const clienteId in sessions) {
-    try {
-      const estado = await sessions[clienteId].getConnectionState();
-      estados.push({ clienteId, estado });
-    } catch (err) {
-      console.error(`❌ Error obteniendo estado de sesión ${clienteId}:`, err);
-      estados.push({ clienteId, estado: "ERROR" });
-    }
-  }
+  try {
+    const result = await pool.query("SELECT id, nombre, comercio FROM tenants");
+    const clientes = result.rows;
 
-  res.json(estados);
+    for (const cliente of clientes) {
+      const clienteId = String(cliente.id);
+
+      if (sessions[clienteId]) {
+        try {
+          const estado = await sessions[clienteId].getConnectionState();
+          estados.push({
+            clienteId,
+            nombre: cliente.nombre,
+            comercio: cliente.comercio,
+            estado,
+          });
+        } catch (err) {
+          console.error(`❌ Error obteniendo estado de sesión ${clienteId}:`, err);
+          estados.push({
+            clienteId,
+            nombre: cliente.nombre,
+            comercio: cliente.comercio,
+            estado: "ERROR",
+          });
+        }
+      } else {
+        estados.push({
+          clienteId,
+          nombre: cliente.nombre,
+          comercio: cliente.comercio,
+          estado: "NO_INICIADA",
+        });
+      }
+    }
+
+    res.json(estados);
+  } catch (error) {
+    console.error("❌ Error consultando clientes desde la DB:", error);
+    res.status(500).json({ error: "Error consultando clientes" });
+  }
 });
 
 app.post("/send", async (req, res) => {
