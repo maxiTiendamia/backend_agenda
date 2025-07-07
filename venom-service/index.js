@@ -195,6 +195,11 @@ app.post("/enviar-mensaje", async (req, res) => {
   }
 
   try {
+    const state = await session.getConnectionState();
+    if (state !== "CONNECTED") {
+      return res.status(400).json({ error: `Sesión no conectada (estado: ${state})` });
+    }
+
     await session.sendText(`${telefono}@c.us`, mensaje);
     res.json({ status: "mensaje enviado" });
   } catch (err) {
