@@ -16,7 +16,7 @@ import httpx
 from datetime import datetime, timedelta
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-VENOM_URL = os.getenv("VENOM_URL", "http://venom-service:3000")
+VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 SESSION_TTL = 300  # segundos
 
