@@ -43,6 +43,30 @@ def get_user_state(user_id):
         print(f"⚠️ Error leyendo estado de Redis: {e}")
         return None
 
+def generar_mensaje_bienvenida(tenant):
+    """Generar mensaje de bienvenida personalizado con información del cliente"""
+    mensaje = f"¡Hola! 👋 Bienvenido/a a *{tenant.comercio}*\n\n"
+    
+    # Agregar información del local si está disponible
+    if tenant.informacion_local:
+        mensaje += f"ℹ️ *Acerca de nosotros:*\n{tenant.informacion_local}\n\n"
+    
+    # Agregar dirección si está disponible
+    if tenant.direccion:
+        mensaje += f"📍 *Dirección:* {tenant.direccion}\n\n"
+    
+    # Agregar teléfono de contacto si está disponible
+    if tenant.telefono:
+        mensaje += f"📞 *Teléfono:* {tenant.telefono}\n\n"
+    
+    # Servicios disponibles
+    mensaje += "🎯 *¿Qué deseas hacer?*\n"
+    mensaje += "🔹 Escribe *\"Turno\"* o *\"Reservar\"* para ver nuestros servicios\n"
+    mensaje += "🔹 Escribe *\"Ayuda\"* para hablar con un asesor\n\n"
+    mensaje += "¿En qué podemos ayudarte hoy? 😊"
+    
+    return mensaje
+
 async def notificar_chat_humano_completo(cliente_id: int, telefono: str, mensaje: str):
     """Enviar notificación completa cuando se requiere atención humana"""
     try:
@@ -175,7 +199,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             if state.get("is_first_contact"):
                 state["is_first_contact"] = False  # Marcar que ya no es primer contacto
                 set_user_state(telefono, state)
-                return JSONResponse(content={"mensaje": f"¡Hola! 👋 Bienvenido/a a *{tenant.comercio}*\n\n🕐 *Horarios de atención:*\nLunes a Viernes: 9:00 - 18:00\nSábados: 9:00 - 13:00\n\n📅 Para agendar una cita, escribe:\n• \"Turno\" o \"Reservar\"\n• Tu nombre completo\n• Servicio que necesitas\n• Día y horario preferido\n\n💬 Si necesitas ayuda personalizada, escribe \"Ayuda\"\n\n¿En qué podemos ayudarte hoy?"})
+                return JSONResponse(content={"mensaje": generar_mensaje_bienvenida(tenant)})
             
             # Para contactos posteriores, procesar normalmente
             if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
@@ -444,7 +468,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             state["step"] = "welcome"
             state["is_first_contact"] = True  # Tratar saludos como primer contacto
             set_user_state(telefono, state)
-            return JSONResponse(content={"mensaje": f"¡Hola! 👋 Bienvenido/a a *{tenant.comercio}*\n\n🕐 *Horarios de atención:*\nLunes a Viernes: 9:00 - 18:00\nSábados: 9:00 - 13:00\n\n📅 Para agendar una cita, escribe:\n• \"Turno\" o \"Reservar\"\n• Tu nombre completo\n• Servicio que necesitas\n• Día y horario preferido\n\n💬 Si necesitas ayuda personalizada, escribe \"Ayuda\"\n\n¿En qué podemos ayudarte hoy?"})
+            return JSONResponse(content={"mensaje": generar_mensaje_bienvenida(tenant)})
         
         # Manejar palabras clave básicas en cualquier momento de la conversación
         if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:

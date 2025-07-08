@@ -15,6 +15,71 @@ const pool = new Pool({
 });
 
 const sessions = {};
+const reconnectIntervals = {}; // Para manejar intervalos de reconexión
+
+// Función para verificar el estado de una sesión
+async function verificarEstadoSesion(clienteId) {
+  try {
+    if (sessions[clienteId] && sessions[clienteId].client) {
+      const isConnected = await sessions[clienteId].client.isConnected();
+      return isConnected;
+    }
+    return false;
+  } catch (error) {
+    console.log(`❌ Error verificando sesión ${clienteId}:`, error.message);
+    return false;
+  }
+}
+
+// Función para reconectar sesión automáticamente
+async function reconectarSesion(clienteId) {
+  console.log(`🔄 Intentando reconectar sesión ${clienteId}...`);
+  
+  // Limpiar sesión anterior si existe
+  if (sessions[clienteId]) {
+    try {
+      if (sessions[clienteId].client && typeof sessions[clienteId].client.close === 'function') {
+        await sessions[clienteId].client.close();
+      }
+    } catch (e) {
+      console.log(`⚠️ Error cerrando sesión anterior ${clienteId}:`, e.message);
+    }
+    delete sessions[clienteId];
+  }
+  
+  try {
+    await crearSesionConTimeout(clienteId, 45000, false); // Sin guardar QR en reconexión
+    console.log(`✅ Sesión ${clienteId} reconectada exitosamente`);
+  } catch (error) {
+    console.log(`❌ Error reconectando sesión ${clienteId}:`, error.message);
+    
+    // Programar siguiente intento de reconexión
+    setTimeout(() => {
+      reconectarSesion(clienteId);
+    }, 30000); // Reintentar en 30 segundos
+  }
+}
+
+// Función para monitorear todas las sesiones
+async function monitorearSesiones() {
+  for (const clienteId in sessions) {
+    const estaConectada = await verificarEstadoSesion(clienteId);
+    
+    if (!estaConectada) {
+      console.log(`🔍 Sesión ${clienteId} desconectada, iniciando reconexión...`);
+      
+      // Evitar múltiples reconexiones simultáneas
+      if (!reconnectIntervals[clienteId]) {
+        reconnectIntervals[clienteId] = true;
+        await reconectarSesion(clienteId);
+        delete reconnectIntervals[clienteId];
+      }
+    }
+  }
+}
+
+// Iniciar monitoreo cada 2 minutos
+setInterval(monitorearSesiones, 120000);
 
 pool.connect()
   .then(async (client) => {
@@ -245,64 +310,75 @@ async function restaurarSesiones() {
     console.log("🔄 Iniciando restauración de sesiones...");
     const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
     
-    // Buscar todos los clientes que tienen carpetas de sesión en el disco
-    if (!fs.existsSync(sessionDir)) {
-      console.log("📁 No existe carpeta de sesiones, creándola...");
-      fs.mkdirSync(sessionDir, { recursive: true });
-      return;
-    }
-
-    // Leer todas las carpetas de sesión del disco (priorizar /app/tokens)
-    let sessionFolders = [];
-    
-    // Primero buscar en /app/tokens si existe
-    if (fs.existsSync("/app/tokens")) {
-      console.log("🔍 Buscando carpetas en /app/tokens...");
-      const appTokenFolders = fs.readdirSync("/app/tokens").filter(item => {
-        const itemPath = path.join("/app/tokens", item);
-        return fs.statSync(itemPath).isDirectory() && !isNaN(item);
-      });
-      console.log(`📂 Encontradas ${appTokenFolders.length} carpetas en /app/tokens:`, appTokenFolders);
-      
-      sessionFolders = appTokenFolders.map(folder => ({
-        id: folder,
-        path: path.join("/app/tokens", folder)
-      }));
-    }
-    
-    // Si no hay carpetas en /app/tokens, buscar en sessionDir local
-    if (sessionFolders.length === 0) {
-      const localFolders = fs.readdirSync(sessionDir).filter(item => {
-        const itemPath = path.join(sessionDir, item);
-        return fs.statSync(itemPath).isDirectory() && !isNaN(item);
-      });
-      console.log(`📂 Encontradas ${localFolders.length} carpetas en ${sessionDir}:`, localFolders);
-      
-      sessionFolders = localFolders.map(folder => ({
-        id: folder,
-        path: path.join(sessionDir, folder)
-      }));
-    }
-
-    console.log(`📋 Carpetas de sesión encontradas:`, sessionFolders.map(f => f.id));
-
-    // Verificar cuáles clientes existen en la base de datos
+    // Verificar cuáles clientes existen en la base de datos PRIMERO
     let result;
     try {
-      result = await pool.query("SELECT id, comercio FROM tenants");
-      console.log(`📊 Consultando base de datos... Encontrados ${result.rows.length} clientes`);
+      result = await pool.query("SELECT id, comercio FROM tenants WHERE activo = true ORDER BY id");
+      console.log(`📊 Consultando base de datos... Encontrados ${result.rows.length} clientes activos`);
       if (result.rows.length > 0) {
-        console.log(`👥 Clientes en DB:`, result.rows.map(r => `${r.id}(${r.comercio || 'Sin comercio'})`));
+        console.log(`👥 Clientes activos en DB:`, result.rows.map(r => `${r.id}(${r.comercio || 'Sin comercio'})`));
       } else {
-        console.log("⚠️ No se encontraron clientes en la base de datos");
+        console.log("⚠️ No se encontraron clientes activos en la base de datos");
         return;
       }
     } catch (err) {
       console.error("❌ Error consultando clientes de la base de datos:", err);
-      return;
+      // Si falla la consulta con 'activo', intentar sin esa columna
+      try {
+        result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
+        console.log(`📊 Consultando base de datos (sin filtro activo)... Encontrados ${result.rows.length} clientes`);
+      } catch (err2) {
+        console.error("❌ Error en consulta alternativa:", err2);
+        return;
+      }
     }
     
     const clientesActivos = result.rows.map(row => String(row.id));
+    
+    // Buscar carpetas de sesión existentes
+    if (!fs.existsSync(sessionDir)) {
+      console.log("📁 No existe carpeta de sesiones, creándola...");
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
+    let sessionFolders = [];
+    
+    // Priorizar /app/tokens si existe (para producción)
+    if (fs.existsSync("/app/tokens")) {
+      console.log("🔍 Buscando carpetas en /app/tokens...");
+      try {
+        const appTokenFolders = fs.readdirSync("/app/tokens").filter(item => {
+          const itemPath = path.join("/app/tokens", item);
+          return fs.statSync(itemPath).isDirectory() && !isNaN(item) && clientesActivos.includes(item);
+        });
+        console.log(`📂 Encontradas ${appTokenFolders.length} carpetas válidas en /app/tokens:`, appTokenFolders);
+        
+        sessionFolders = appTokenFolders.map(folder => ({
+          id: folder,
+          path: path.join("/app/tokens", folder)
+        }));
+      } catch (err) {
+        console.error("❌ Error leyendo /app/tokens:", err.message);
+      }
+    }
+    
+    // Si no hay carpetas en /app/tokens, buscar en sessionDir local
+    if (sessionFolders.length === 0) {
+      try {
+        const localFolders = fs.readdirSync(sessionDir).filter(item => {
+          const itemPath = path.join(sessionDir, item);
+          return fs.statSync(itemPath).isDirectory() && !isNaN(item) && clientesActivos.includes(item);
+        });
+        console.log(`📂 Encontradas ${localFolders.length} carpetas válidas en ${sessionDir}:`, localFolders);
+        
+        sessionFolders = localFolders.map(folder => ({
+          id: folder,
+          path: path.join(sessionDir, folder)
+        }));
+      } catch (err) {
+        console.error("❌ Error leyendo carpeta local:", err.message);
+      }
+    }
     console.log(`🔍 Clientes activos en BD (strings): [${clientesActivos.join(', ')}]`);
     
     // Verificar estado de sesiones activas en memoria
@@ -1201,5 +1277,119 @@ app.post("/crear-sesiones-faltantes", async (req, res) => {
   } catch (error) {
     console.error("❌ Error en crear-sesiones-faltantes:", error);
     res.status(500).json({ error: "Error creando sesiones", details: error.message });
+  }
+});
+
+// Endpoint de salud para verificar estado de sesiones
+app.get("/health", async (req, res) => {
+  try {
+    const estadoSesiones = {};
+    
+    for (const clienteId in sessions) {
+      try {
+        const isConnected = await verificarEstadoSesion(clienteId);
+        const state = sessions[clienteId] ? await sessions[clienteId].getConnectionState() : 'NO_SESSION';
+        
+        estadoSesiones[clienteId] = {
+          conectada: isConnected,
+          estado: state,
+          existe: !!sessions[clienteId]
+        };
+      } catch (e) {
+        estadoSesiones[clienteId] = {
+          conectada: false,
+          estado: 'ERROR',
+          existe: !!sessions[clienteId],
+          error: e.message
+        };
+      }
+    }
+    
+    const totalSesiones = Object.keys(sessions).length;
+    const sesionesConectadas = Object.values(estadoSesiones).filter(s => s.conectada).length;
+    
+    res.json({
+      status: "healthy",
+      timestamp: new Date().toISOString(),
+      sesiones: {
+        total: totalSesiones,
+        conectadas: sesionesConectadas,
+        desconectadas: totalSesiones - sesionesConectadas,
+        detalle: estadoSesiones
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "unhealthy",
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Endpoint para reconectar una sesión específica
+app.post("/reconectar/:clienteId", async (req, res) => {
+  const clienteId = req.params.clienteId;
+  
+  try {
+    console.log(`🔄 Solicitud manual de reconexión para sesión ${clienteId}`);
+    
+    // Verificar que el cliente existe en la DB
+    const cliente = await pool.query("SELECT id, comercio FROM tenants WHERE id = $1", [clienteId]);
+    if (cliente.rows.length === 0) {
+      return res.status(404).json({ error: "Cliente no encontrado en la base de datos" });
+    }
+    
+    await reconectarSesion(clienteId);
+    
+    res.json({
+      success: true,
+      message: `Reconexión iniciada para sesión ${clienteId}`,
+      cliente: cliente.rows[0].comercio
+    });
+  } catch (error) {
+    console.error(`❌ Error en reconexión manual ${clienteId}:`, error);
+    res.status(500).json({
+      error: "Error iniciando reconexión",
+      details: error.message
+    });
+  }
+});
+
+// Endpoint para reconectar todas las sesiones desconectadas
+app.post("/reconectar-todas", async (req, res) => {
+  try {
+    console.log(`🔄 Solicitud manual de reconexión para todas las sesiones`);
+    
+    const sesionesDesconectadas = [];
+    const errores = [];
+    
+    for (const clienteId in sessions) {
+      const estaConectada = await verificarEstadoSesion(clienteId);
+      
+      if (!estaConectada) {
+        sesionesDesconectadas.push(clienteId);
+        
+        try {
+          await reconectarSesion(clienteId);
+        } catch (error) {
+          errores.push({ clienteId, error: error.message });
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: "Reconexión masiva iniciada",
+      sesionesDesconectadas,
+      errores,
+      total: sesionesDesconectadas.length
+    });
+  } catch (error) {
+    console.error("❌ Error en reconexión masiva:", error);
+    res.status(500).json({
+      error: "Error iniciando reconexión masiva",
+      details: error.message
+    });
   }
 });
