@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, Depends
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from api.app.models import Tenant, Servicio, Empleado, Reserva, ErrorLog, BlockedNumber
 from api.app.deps import get_db
@@ -7,13 +7,12 @@ from api.utils.calendar_utils import get_available_slots, create_event, cancelar
 from api.utils.generador_fake_id import generar_fake_id
 import time
 import re
-import traceback
 import os
 import pytz
 import redis
 import json
 import httpx
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
@@ -45,7 +44,7 @@ def get_user_state(user_id):
 
 def generar_mensaje_bienvenida(tenant):
     """Generar mensaje de bienvenida personalizado con información del cliente"""
-    mensaje = f"¡Hola! 👋 Bienvenido/a a *{tenant.comercio}*\n\n"
+    mensaje = f"¡Hola! 👋 Soy el asistente virtual de *{tenant.comercio}*\n\n"
     
     # Agregar información del local si está disponible
     if tenant.informacion_local:

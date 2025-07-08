@@ -40,9 +40,22 @@
           {% elif estado == 'NO_INICIADA' %}
           <span style="color: gray">⚪ No iniciada</span>
           {% elif estado == 'ERROR' %}
-          <span style="color: darkred">⚠️ Error</span>
+          <span style="color: darkred">❌ Error</span>
+          {% elif estado == 'ARCHIVOS_DISPONIBLES' %}
+          <span style="color: blue">💾 Archivos disponibles</span>
+          {% elif estado == 'UNPAIRED' %}
+          <span style="color: red">🔴 No emparejado</span>
+          {% elif estado == 'UNLAUNCHED' %}
+          <span style="color: red">🔴 No lanzado</span>
           {% else %}
           <span style="color: gray">⚪ {{ estado }}</span>
+          {% endif %}
+          
+          {% if sesion.enMemoria %}
+          <small style="color: #666;">(En memoria)</small>
+          {% endif %}
+          {% if sesion.tieneArchivos %}
+          <small style="color: #666;">(Con archivos)</small>
           {% endif %}
         </td>
         <td>

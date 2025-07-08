@@ -134,13 +134,27 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
   console.log(`⚙️ Iniciando crearSesion para cliente ${sessionId}, permitirGuardarQR: ${permitirGuardarQR}`);
 
+  // **NUEVO: Limpiar SingletonLock antes de crear la sesión**
+  const searchPaths = [sessionDir, "/app/tokens"];
+  for (const searchPath of searchPaths) {
+    const singletonPath = path.join(searchPath, sessionId, "SingletonLock");
+    if (fs.existsSync(singletonPath)) {
+      try {
+        fs.unlinkSync(singletonPath);
+        console.log(`🔓 Limpiado SingletonLock previo para cliente ${sessionId} en ${searchPath}`);
+      } catch (err) {
+        console.error(`❌ Error limpiando SingletonLock en ${searchPath}:`, err.message);
+      }
+    }
+  }
+
   // Verificar si esta sesión está en bucle de errores
   if (sessionErrors[sessionId] && sessionErrors[sessionId] > 5) {
     console.log(`🚫 Cliente ${sessionId} tiene demasiados errores consecutivos (${sessionErrors[sessionId]}), saltando...`);
     throw new Error(`Cliente ${sessionId} bloqueado por exceso de errores`);
   }
 
-  // Si se pide regenerar QR, borra el archivo, la sesión en memoria y el campo en la base
+  // Si se pide regenerar QR, limpiar COMPLETAMENTE la información anterior
   if (permitirGuardarQR) {
     console.log(`🧹 Limpiando datos previos para cliente ${sessionId}...`);
     
@@ -162,17 +176,24 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       delete sessions[sessionId];
     }
     
-    // Limpiar archivos de bloqueo de Chrome (SingletonLock)
+    // **NUEVO: Limpiar COMPLETAMENTE la carpeta de sesión anterior**
     const sessionPath = path.join(sessionDir, sessionId);
-    const singletonLockPath = path.join(sessionPath, "SingletonLock");
-    if (fs.existsSync(singletonLockPath)) {
-      try {
-        fs.unlinkSync(singletonLockPath);
-        console.log(`🔓 Archivo SingletonLock eliminado para cliente ${sessionId}`);
-      } catch (e) {
-        console.log(`⚠️ Error eliminando SingletonLock: ${e.message}`);
+    const productionPath = `/app/tokens/${sessionId}`;
+    
+    for (const pathToClean of [sessionPath, productionPath]) {
+      if (fs.existsSync(pathToClean)) {
+        try {
+          console.log(`🧹 Limpiando carpeta anterior: ${pathToClean}`);
+          fs.rmSync(pathToClean, { recursive: true, force: true });
+          console.log(`✅ Carpeta anterior eliminada: ${pathToClean}`);
+        } catch (err) {
+          console.error(`❌ Error limpiando carpeta ${pathToClean}:`, err.message);
+        }
       }
     }
+    
+    // Crear carpeta nueva limpia
+    await crearCarpetasAutomaticamente();
     
     try {
       const result = await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [sessionId]);
@@ -277,6 +298,13 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       if (state === "CONNECTED") {
         reconexionIntentos = 0; // Reset contador cuando se conecta exitosamente
         console.log(`✅ Sesión ${sessionId} conectada exitosamente`);
+        
+        // **NUEVO: Guardar información de sesión inmediatamente**
+        try {
+          await guardarInformacionSesion(sessionId, client);
+        } catch (err) {
+          console.error(`❌ Error guardando información de sesión para ${sessionId}:`, err.message);
+        }
       }
       
       if (["CONFLICT", "UNPAIRED", "UNLAUNCHED", "DISCONNECTED"].includes(state)) {
@@ -403,60 +431,29 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
   }
 }
 
-async function verificarEstadoSesiones() {
-  console.log("🔍 Verificando estado de todas las sesiones...");
-  
-  for (const [sessionId, client] of Object.entries(sessions)) {
-    try {
-      const estado = await client.getConnectionState();
-      console.log(`📊 Sesión ${sessionId}: ${estado}`);
-      
-      if (estado !== "CONNECTED") {
-        console.log(`⚠️ Sesión ${sessionId} no conectada, intentando reconectar...`);
-        try {
-          await client.close();
-          delete sessions[sessionId];
-          await crearSesion(sessionId, false);
-        } catch (err) {
-          console.error(`❌ Error reconectando ${sessionId}:`, err.message);
-        }
-      }
-    } catch (err) {
-      console.error(`❌ Error verificando estado de ${sessionId}:`, err.message);
-      delete sessions[sessionId];
-    }
-  }
-}
-
-// Verificar sesiones cada 10 minutos (deshabilitado temporalmente)
-// setInterval(verificarEstadoSesiones, 10 * 60 * 1000);
-
 async function restaurarSesiones() {
   try {
     console.log("🔄 Iniciando restauración de sesiones...");
+    
+    // **NUEVO: Crear carpetas automáticamente ANTES de restaurar**
+    await crearCarpetasAutomaticamente();
+    
     const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
     
-    // Verificar cuáles clientes existen en la base de datos PRIMERO
+    // Verificar cuáles clientes existen en la base de datos
     let result;
     try {
-      result = await pool.query("SELECT id, comercio FROM tenants WHERE activo = true ORDER BY id");
-      console.log(`📊 Consultando base de datos... Encontrados ${result.rows.length} clientes activos`);
+      result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
+      console.log(`📊 Consultando base de datos... Encontrados ${result.rows.length} clientes`);
       if (result.rows.length > 0) {
-        console.log(`👥 Clientes activos en DB:`, result.rows.map(r => `${r.id}(${r.comercio || 'Sin comercio'})`));
+        console.log(`👥 Clientes en DB:`, result.rows.map(r => `${r.id}(${r.comercio || 'Sin comercio'})`));
       } else {
-        console.log("⚠️ No se encontraron clientes activos en la base de datos");
+        console.log("⚠️ No se encontraron clientes en la base de datos");
         return;
       }
     } catch (err) {
       console.error("❌ Error consultando clientes de la base de datos:", err);
-      // Si falla la consulta con 'activo', intentar sin esa columna
-      try {
-        result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
-        console.log(`📊 Consultando base de datos (sin filtro activo)... Encontrados ${result.rows.length} clientes`);
-      } catch (err2) {
-        console.error("❌ Error en consulta alternativa:", err2);
-        return;
-      }
+      return;
     }
     
     const clientesActivos = result.rows.map(row => String(row.id));
@@ -609,6 +606,66 @@ async function restaurarSesiones() {
     
     console.log("✅ Proceso de restauración completado");
     
+    // **NUEVA FUNCIONALIDAD: Limpiar carpetas huérfanas y SingletonLocks**
+    console.log("🧹 Limpiando carpetas huérfanas y archivos de bloqueo...");
+    
+    // Buscar y eliminar carpetas de clientes que ya no están en la BD
+    const searchPaths = [sessionDir, "/app/tokens"];
+    
+    for (const searchPath of searchPaths) {
+      if (!fs.existsSync(searchPath)) continue;
+      
+      try {
+        const allFolders = fs.readdirSync(searchPath).filter(item => {
+          const itemPath = path.join(searchPath, item);
+          return fs.statSync(itemPath).isDirectory() && !isNaN(item); // Solo carpetas numéricas
+        });
+        
+        const huerfanas = allFolders.filter(folder => !clientesActivos.includes(folder));
+        
+        if (huerfanas.length > 0) {
+          console.log(`🗑️ Eliminando ${huerfanas.length} carpetas huérfanas de ${searchPath}:`, huerfanas);
+          
+          for (const huerfana of huerfanas) {
+            const carpetaPath = path.join(searchPath, huerfana);
+            try {
+              // Eliminar archivos SingletonLock específicamente antes de eliminar la carpeta
+              const singletonLockPath = path.join(carpetaPath, "SingletonLock");
+              if (fs.existsSync(singletonLockPath)) {
+                fs.unlinkSync(singletonLockPath);
+                console.log(`🔓 Eliminado SingletonLock de cliente ${huerfana}`);
+              }
+              
+              // Eliminar toda la carpeta
+              fs.rmSync(carpetaPath, { recursive: true, force: true });
+              console.log(`✅ Carpeta huérfana eliminada: ${huerfana}`);
+            } catch (err) {
+              console.error(`❌ Error eliminando carpeta ${huerfana}:`, err.message);
+            }
+          }
+        } else {
+          console.log(`✅ No hay carpetas huérfanas en ${searchPath}`);
+        }
+      } catch (err) {
+        console.error(`❌ Error durante limpieza en ${searchPath}:`, err.message);
+      }
+    }
+    
+    // Limpiar SingletonLocks de clientes activos también (por si acaso)
+    for (const clienteId of clientesActivos) {
+      for (const searchPath of searchPaths) {
+        const singletonPath = path.join(searchPath, clienteId, "SingletonLock");
+        if (fs.existsSync(singletonPath)) {
+          try {
+            fs.unlinkSync(singletonPath);
+            console.log(`🔓 Limpiado SingletonLock para cliente activo ${clienteId}`);
+          } catch (err) {
+            console.error(`❌ Error limpiando SingletonLock ${clienteId}:`, err.message);
+          }
+        }
+      }
+    }
+    
     // Mostrar clientes activos que NO tienen carpetas de sesión (solo informativo)
     console.log("🔍 Verificando clientes activos sin carpetas de sesión...");
     const carpetasExistentes = sessionFolders.map(sf => typeof sf === 'string' ? sf : sf.id);
@@ -626,6 +683,102 @@ async function restaurarSesiones() {
     }
   } catch (err) {
     console.error("❌ Error restaurando sesiones previas:", err);
+  }
+}
+
+// **NUEVA FUNCIÓN: Guardar información esencial de sesión para restauración futura**
+async function guardarInformacionSesion(clienteId, client) {
+  console.log(`💾 Guardando información de sesión para cliente ${clienteId}...`);
+  
+  try {
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const productionPath = "/app/tokens";
+    
+    // Usar la ruta de producción si existe, sino la local
+    const basePath = fs.existsSync(productionPath) ? productionPath : sessionDir;
+    const clientePath = path.join(basePath, clienteId);
+    const defaultPath = path.join(clientePath, "Default");
+    
+    // Asegurar que las carpetas existen
+    if (!fs.existsSync(clientePath)) {
+      fs.mkdirSync(clientePath, { recursive: true });
+    }
+    if (!fs.existsSync(defaultPath)) {
+      fs.mkdirSync(defaultPath, { recursive: true });
+    }
+    
+    // Obtener información del dispositivo/conexión
+    let deviceInfo = {};
+    try {
+      const hostDevice = await client.getHostDevice();
+      deviceInfo = {
+        platform: hostDevice.platform || 'unknown',
+        phone: hostDevice.phone || {},
+        connected: true,
+        lastSeen: new Date().toISOString()
+      };
+      console.log(`📱 Información del dispositivo obtenida para ${clienteId}`);
+    } catch (err) {
+      console.log(`⚠️ No se pudo obtener info del dispositivo para ${clienteId}: ${err.message}`);
+      deviceInfo = {
+        connected: true,
+        lastSeen: new Date().toISOString(),
+        fallback: true
+      };
+    }
+    
+    // Guardar información de sesión en archivo JSON
+    const sessionInfoFile = path.join(defaultPath, "SessionInfo.json");
+    const sessionInfo = {
+      clienteId: clienteId,
+      connectedAt: new Date().toISOString(),
+      deviceInfo: deviceInfo,
+      sessionVersion: "1.0",
+      isReady: true,
+      lastUpdate: new Date().toISOString()
+    };
+    
+    fs.writeFileSync(sessionInfoFile, JSON.stringify(sessionInfo, null, 2));
+    console.log(`💾 Información de sesión guardada: ${sessionInfoFile}`);
+    
+    // Actualizar también las preferencias de Chrome con info actualizada
+    const preferencesFile = path.join(defaultPath, "Preferences");
+    let preferences = {};
+    
+    try {
+      if (fs.existsSync(preferencesFile)) {
+        preferences = JSON.parse(fs.readFileSync(preferencesFile, 'utf8'));
+      }
+    } catch (err) {
+      console.log(`⚠️ Error leyendo preferencias existentes, creando nuevas: ${err.message}`);
+      preferences = {};
+    }
+    
+    // Actualizar preferencias con información de conexión
+    preferences.whatsapp = {
+      ...preferences.whatsapp,
+      client_id: clienteId,
+      last_connected: new Date().toISOString(),
+      device_info: deviceInfo,
+      session_ready: true
+    };
+    
+    preferences.profile = {
+      ...preferences.profile,
+      name: `WhatsApp-${clienteId}`,
+      default_content_setting_values: {
+        notifications: 1
+      }
+    };
+    
+    fs.writeFileSync(preferencesFile, JSON.stringify(preferences, null, 2));
+    console.log(`⚙️ Preferencias actualizadas para cliente ${clienteId}`);
+    
+    console.log(`✅ Información de sesión guardada exitosamente para cliente ${clienteId}`);
+    
+  } catch (err) {
+    console.error(`❌ Error guardando información de sesión para ${clienteId}:`, err);
+    throw err;
   }
 }
 
@@ -747,7 +900,22 @@ app.get("/estado-sesiones", async (req, res) => {
       
       if (sessions[clienteId]) {
         try {
-          estado = await sessions[clienteId].getConnectionState();
+          const estadoRaw = await sessions[clienteId].getConnectionState();
+          const isConnected = await sessions[clienteId].isConnected();
+          
+          // Normalizar estado según lo que espera el admin panel
+          if (estadoRaw === 'CONNECTED' || isConnected === true) {
+            estado = 'CONNECTED';
+          } else if (estadoRaw === 'DISCONNECTED' || estadoRaw === 'UNPAIRED' || estadoRaw === 'UNLAUNCHED') {
+            estado = 'DISCONNECTED';
+          } else if (estadoRaw === 'TIMEOUT') {
+            estado = 'TIMEOUT';
+          } else {
+            // Para cualquier otro estado, mostrar como desconectado pero con el valor real
+            estado = estadoRaw || 'DISCONNECTED';
+          }
+          
+          console.log(`📊 Cliente ${clienteId}: estadoRaw="${estadoRaw}", isConnected=${isConnected}, estadoFinal="${estado}"`);
         } catch (err) {
           estado = "ERROR";
           console.error(`❌ Error obteniendo estado de ${clienteId}:`, err.message);
@@ -974,91 +1142,6 @@ app.get("/debug/cliente/:clienteId", async (req, res) => {
   } catch (error) {
     console.error(`❌ Error en diagnóstico de cliente ${clienteId}:`, error);
     res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/debug/clientes", async (req, res) => {
-  try {
-    const result = await pool.query("SELECT id, nombre, comercio FROM tenants ORDER BY id");
-    res.json({
-      total: result.rows.length,
-      clientes: result.rows
-    });
-  } catch (error) {
-    console.error("❌ Error consultando clientes:", error);
-    res.status(500).json({ error: "Error consultando clientes", details: error.message });
-  }
-});
-
-app.get("/debug/carpetas", (req, res) => {
-  const carpetas = [];
-  
-  if (fs.existsSync("/app/tokens")) {
-    const folders = fs.readdirSync("/app/tokens").filter(item => {
-      const itemPath = path.join("/app/tokens", item);
-      return fs.statSync(itemPath).isDirectory() && !isNaN(item);
-    });
-    
-    folders.forEach(folder => {
-      const folderPath = path.join("/app/tokens", folder);
-      const defaultPath = path.join(folderPath, "Default");
-      carpetas.push({
-        id: folder,
-        ruta: folderPath,
-        tieneDefault: fs.existsSync(defaultPath),
-        archivos: fs.existsSync(folderPath) ? fs.readdirSync(folderPath) : []
-      });
-    });
-  }
-  
-  res.json({
-    rutaTokens: "/app/tokens",
-    existeRuta: fs.existsSync("/app/tokens"),
-    carpetas: carpetas
-  });
-});
-
-app.post("/admin/limpiar-carpetas-huerfanas", async (req, res) => {
-  try {
-    // Obtener clientes activos de la DB
-    const result = await pool.query("SELECT id FROM tenants");
-    const clientesActivos = result.rows.map(row => String(row.id));
-    
-    if (!fs.existsSync("/app/tokens")) {
-      return res.json({ mensaje: "No existe la carpeta /app/tokens", carpetasEliminadas: [] });
-    }
-    
-    // Encontrar carpetas huérfanas
-    const folders = fs.readdirSync("/app/tokens").filter(item => {
-      const itemPath = path.join("/app/tokens", item);
-      return fs.statSync(itemPath).isDirectory() && !isNaN(item);
-    });
-    
-    const carpetasHuerfanas = folders.filter(folder => !clientesActivos.includes(folder));
-    const carpetasEliminadas = [];
-    
-    for (const carpeta of carpetasHuerfanas) {
-      const carpetaPath = path.join("/app/tokens", carpeta);
-      try {
-        // Eliminar recursivamente la carpeta
-        fs.rmSync(carpetaPath, { recursive: true, force: true });
-        carpetasEliminadas.push(carpeta);
-        console.log(`🗑️ Carpeta eliminada: ${carpetaPath}`);
-      } catch (err) {
-        console.error(`❌ Error eliminando carpeta ${carpeta}:`, err.message);
-      }
-    }
-    
-    res.json({
-      mensaje: `Limpieza completada. ${carpetasEliminadas.length} carpetas eliminadas.`,
-      clientesActivos: clientesActivos,
-      carpetasEncontradas: folders,
-      carpetasHuerfanas: carpetasHuerfanas,
-      carpetasEliminadas: carpetasEliminadas
-    });
-  } catch (error) {
-    console.error("❌ Error limpiando carpetas huérfanas:", error);
-    res.status(500).json({ error: "Error limpiando carpetas", details: error.message });
   }
 });
 
@@ -1306,77 +1389,7 @@ app.listen(PORT, async () => {
   await new Promise(resolve => setTimeout(resolve, 3000));
   
   await restaurarSesiones();
-});
-
-app.post("/crear-sesiones-faltantes", async (req, res) => {
-  try {
-    // Obtener clientes de la DB
-    const result = await pool.query("SELECT id, comercio FROM tenants");
-    const clientesActivos = result.rows.map(row => String(row.id));
-    
-    // Obtener carpetas existentes
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const carpetas = fs.existsSync(sessionDir) ? 
-      fs.readdirSync(sessionDir).filter(item => {
-        const itemPath = path.join(sessionDir, item);
-        return fs.statSync(itemPath).isDirectory() && !isNaN(item);
-      }) : [];
-    
-    const clientesSinCarpetas = clientesActivos.filter(id => !carpetas.includes(id));
-    
-    if (clientesSinCarpetas.length === 0) {
-      return res.json({
-        mensaje: "Todos los clientes ya tienen sesiones creadas",
-        clientes_activos: clientesActivos,
-        carpetas_existentes: carpetas
-      });
-    }
-    
-    console.log(`🚀 API: Creando ${clientesSinCarpetas.length} sesiones faltantes...`);
-    const resultados = [];
-    
-    for (const clienteId of clientesSinCarpetas) {
-      try {
-        console.log(`⚙️ API: Creando sesión para cliente ${clienteId}...`);
-        
-        await Promise.race([
-          crearSesion(clienteId, true),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error("Timeout de 25 segundos")), 25000)
-          )
-        ]);
-        
-        resultados.push({
-          cliente_id: clienteId,
-          estado: "creado",
-          qr_url: `/qr/${clienteId}`
-        });
-        
-        console.log(`✅ API: Sesión creada para cliente ${clienteId}`);
-        
-        // Esperar entre creaciones
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-      } catch (err) {
-        console.error(`❌ API: Error con cliente ${clienteId}:`, err.message);
-        resultados.push({
-          cliente_id: clienteId,
-          estado: "error",
-          error: err.message
-        });
-      }
-    }
-    
-    res.json({
-      mensaje: `Proceso completado. ${resultados.filter(r => r.estado === 'creado').length} sesiones creadas.`,
-      resultados: resultados,
-      clientes_procesados: clientesSinCarpetas.length
-    });
-    
-  } catch (error) {
-    console.error("❌ Error en crear-sesiones-faltantes:", error);
-    res.status(500).json({ error: "Error creando sesiones", details: error.message });
-  }
+  await crearCarpetasAutomaticamente();
 });
 
 // Endpoint de salud para verificar estado de sesiones
@@ -1450,44 +1463,6 @@ app.post("/reconectar/:clienteId", async (req, res) => {
     console.error(`❌ Error en reconexión manual ${clienteId}:`, error);
     res.status(500).json({
       error: "Error iniciando reconexión",
-      details: error.message
-    });
-  }
-});
-
-// Endpoint para reconectar todas las sesiones desconectadas
-app.post("/reconectar-todas", async (req, res) => {
-  try {
-    console.log(`🔄 Solicitud manual de reconexión para todas las sesiones`);
-    
-    const sesionesDesconectadas = [];
-    const errores = [];
-    
-    for (const clienteId in sessions) {
-      const estaConectada = await verificarEstadoSesion(clienteId);
-      
-      if (!estaConectada) {
-        sesionesDesconectadas.push(clienteId);
-        
-        try {
-          await reconectarSesion(clienteId);
-        } catch (error) {
-          errores.push({ clienteId, error: error.message });
-        }
-      }
-    }
-    
-    res.json({
-      success: true,
-      message: "Reconexión masiva iniciada",
-      sesionesDesconectadas,
-      errores,
-      total: sesionesDesconectadas.length
-    });
-  } catch (error) {
-    console.error("❌ Error en reconexión masiva:", error);
-    res.status(500).json({
-      error: "Error iniciando reconexión masiva",
       details: error.message
     });
   }
@@ -1687,4 +1662,199 @@ app.get("/debug/errores", (req, res) => {
       .filter(([clienteId, errores]) => errores >= 5)
       .map(([clienteId, errores]) => ({ clienteId, errores }))
   });
+});
+
+// **NUEVO ENDPOINT DE DEBUG DETALLADO**
+app.get("/debug/estados", async (req, res) => {
+  const debug = {
+    sesiones_memoria: {},
+    tenants_bd: [],
+    diagnostico_detallado: []
+  };
+  
+  try {
+    // Información de sesiones en memoria
+    for (const [clienteId, session] of Object.entries(sessions)) {
+      debug.sesiones_memoria[clienteId] = {
+        existe: !!session,
+        tipo: typeof session,
+        es_objeto: session && typeof session === 'object'
+      };
+      
+      if (session) {
+        try {
+          // Probar diferentes métodos para verificar estado
+          const estado = await session.getConnectionState();
+          const isConnected = await session.isConnected();
+          
+          debug.sesiones_memoria[clienteId].estado = estado;
+          debug.sesiones_memoria[clienteId].isConnected = isConnected;
+          debug.sesiones_memoria[clienteId].metodos_disponibles = Object.getOwnPropertyNames(Object.getPrototypeOf(session));
+        } catch (err) {
+          debug.sesiones_memoria[clienteId].error = err.message;
+        }
+      }
+    }
+    
+    // Información de tenants en BD
+    const result = await pool.query("SELECT id, nombre, comercio FROM tenants ORDER BY id");
+    debug.tenants_bd = result.rows;
+    
+    // Diagnóstico detallado por cliente
+    for (const cliente of result.rows) {
+      const clienteId = String(cliente.id);
+      const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+      
+      const diag = {
+        clienteId,
+        nombre: cliente.nombre,
+        comercio: cliente.comercio,
+        sesion_en_memoria: !!sessions[clienteId],
+        archivos_disco: {
+          sessionDir: sessionDir,
+          carpeta_existe: false,
+          default_existe: false,
+          singleton_lock_existe: false
+       
+        },
+        estado_final: "NO_INICIADA"
+      };
+      
+      // Verificar archivos en disco (ruta local)
+      const sessionPath = path.join(sessionDir, clienteId);
+      if (fs.existsSync(sessionPath)) {
+        diag.archivos_disco.carpeta_existe = true;
+        const defaultPath = path.join(sessionPath, "Default");
+        const singletonPath = path.join(sessionPath, "SingletonLock");
+        diag.archivos_disco.default_existe = fs.existsSync(defaultPath);
+        diag.archivos_disco.singleton_lock_existe = fs.existsSync(singletonPath);
+      }
+      
+      // También verificar en /app/tokens
+      const appTokensPath = `/app/tokens/${clienteId}`;
+      if (fs.existsSync(appTokensPath)) {
+        diag.archivos_disco.app_tokens = {
+          carpeta_existe: true,
+          default_existe: fs.existsSync(path.join(appTokensPath, "Default")),
+          singleton_lock_existe: fs.existsSync(path.join(appTokensPath, "SingletonLock"))
+        };
+      }
+      
+      // Determinar estado
+      if (sessions[clienteId]) {
+        try {
+          diag.estado_final = await sessions[clienteId].getConnectionState();
+          diag.is_connected = await sessions[clienteId].isConnected();
+        } catch (err) {
+          diag.estado_final = "ERROR";
+          diag.error_estado = err.message;
+        }
+      } else if (diag.archivos_disco.default_existe || (diag.archivos_disco.app_tokens && diag.archivos_disco.app_tokens.default_existe)) {
+        diag.estado_final = "ARCHIVOS_DISPONIBLES";
+      }
+      
+      debug.diagnostico_detallado.push(diag);
+    }
+    
+    res.json(debug);
+  } catch (error) {
+    console.error("❌ Error en debug de estados:", error);
+    res.status(500).json({ error: error.message, stack: error.stack });
+  }
+});
+
+// **NUEVA FUNCIÓN: Crear carpetas automáticamente para clientes sin sesión**
+async function crearCarpetasAutomaticamente() {
+  console.log("🏗️ Verificando y creando carpetas para clientes sin sesión...");
+  
+  try {
+    // Obtener clientes de la base de datos
+    const result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
+    const clientesActivos = result.rows.map(row => String(row.id));
+    
+    if (clientesActivos.length === 0) {
+      console.log("⚠️ No hay clientes en la base de datos");
+      return;
+    }
+    
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const productionPath = "/app/tokens";
+    
+    // Usar la ruta de producción si existe, sino la local
+    const basePath = fs.existsSync(productionPath) ? productionPath : sessionDir;
+    
+    // Asegurar que la carpeta base existe
+    if (!fs.existsSync(basePath)) {
+      fs.mkdirSync(basePath, { recursive: true });
+      console.log(`📁 Carpeta base creada: ${basePath}`);
+    }
+    
+    let carpetasCreadas = 0;
+    
+    for (const clienteId of clientesActivos) {
+      const carpetaCliente = path.join(basePath, clienteId);
+      
+      if (!fs.existsSync(carpetaCliente)) {
+        try {
+          // Crear carpeta del cliente
+          fs.mkdirSync(carpetaCliente, { recursive: true });
+          
+          // Crear estructura básica de Chrome
+          const defaultPath = path.join(carpetaCliente, "Default");
+          fs.mkdirSync(defaultPath, { recursive: true });
+          
+          // Crear archivo básico de configuración para que Chrome reconozca la sesión
+          const preferencesFile = path.join(defaultPath, "Preferences");
+          const basicPreferences = {
+            "profile": {
+              "name": `WhatsApp-${clienteId}`,
+              "default_content_setting_values": {
+                "notifications": 1
+              }
+            },
+            "whatsapp": {
+              "client_id": clienteId,
+              "created_at": new Date().toISOString()
+            }
+          };
+          
+          fs.writeFileSync(preferencesFile, JSON.stringify(basicPreferences, null, 2));
+          
+          console.log(`📁 Carpeta creada para cliente ${clienteId}: ${carpetaCliente}`);
+          carpetasCreadas++;
+          
+        } catch (err) {
+          console.error(`❌ Error creando carpeta para cliente ${clienteId}:`, err.message);
+        }
+      }
+    }
+    
+    if (carpetasCreadas > 0) {
+      console.log(`✅ Se crearon ${carpetasCreadas} carpetas nuevas`);
+    } else {
+      console.log("✅ Todas las carpetas ya existen");
+    }
+    
+  } catch (err) {
+    console.error("❌ Error creando carpetas automáticamente:", err);
+  }
+}
+
+// Llamar a la función de creación automática de carpetas al iniciar el servidor
+app.listen(PORT, async () => {
+  console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
+  console.log(`📁 Carpeta de sesiones configurada: ${process.env.SESSION_FOLDER || path.join(__dirname, "tokens")}`);
+  console.log(`🔍 Verificando si existe /app/tokens:`, fs.existsSync("/app/tokens"));
+  
+  if (fs.existsSync("/app/tokens")) {
+    const folders = fs.readdirSync("/app/tokens").filter(item => !isNaN(item));
+    console.log(`📂 Carpetas numéricas encontradas en /app/tokens:`, folders);
+  }
+  
+  // Esperar un poco para asegurar que la DB esté lista
+  console.log("⏱️ Esperando conexión estable a la base de datos...");
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
+  await restaurarSesiones();
+  await crearCarpetasAutomaticamente();
 });

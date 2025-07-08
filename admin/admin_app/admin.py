@@ -57,11 +57,24 @@ def obtener_estado_sesion(cliente_id):
                 estilos = {
                     "CONNECTED": ("🟢", "#d4edda", "#155724"),
                     "DISCONNECTED": ("🔴", "#f8d7da", "#721c24"),
-                    "TIMEOUT": ("🟠", "#fff3cd", "#856404")
+                    "TIMEOUT": ("🟠", "#fff3cd", "#856404"),
+                    "ERROR": ("❌", "#f8d7da", "#721c24"),
+                    "ARCHIVOS_DISPONIBLES": ("💾", "#e7f3ff", "#004085"),
+                    "NO_INICIADA": ("⚪", "#f8f9fa", "#6c757d"),
+                    "UNPAIRED": ("🔴", "#f8d7da", "#721c24"),
+                    "UNLAUNCHED": ("🔴", "#f8d7da", "#721c24")
                 }
                 icono, fondo, color = estilos.get(estado, ("⚪", "#eeeeee", "#333333"))
+                
+                # Mostrar información adicional si está disponible
+                info_extra = ""
+                if "enMemoria" in sesion and sesion["enMemoria"]:
+                    info_extra += " (En memoria)"
+                if "tieneArchivos" in sesion and sesion["tieneArchivos"]:
+                    info_extra += " (Con archivos)"
+                
                 return Markup(
-                    f'<div style="background-color:{fondo}; color:{color}; padding:6px 10px; border-radius:5px; display:inline-block;">{icono} {estado}</div><br>'
+                    f'<div style="background-color:{fondo}; color:{color}; padding:6px 10px; border-radius:5px; display:inline-block;">{icono} {estado}{info_extra}</div><br>'
                     f'<a href="/admin/reiniciar/{cliente_id}" class="btn btn-sm btn-warning" style="margin-top: 4px;" onclick="return confirm(\'¿Seguro que deseas reiniciar esta sesión?\');">Reiniciar</a>'
                 )
 
