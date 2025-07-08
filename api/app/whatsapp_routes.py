@@ -43,8 +43,8 @@ def get_user_state(user_id):
         print(f"⚠️ Error leyendo estado de Redis: {e}")
         return None
 
-async def notificar_chat_humano_simple(cliente_id: int, telefono: str, mensaje: str):
-    """Enviar notificación simple cuando se requiere atención humana"""
+async def notificar_chat_humano_completo(cliente_id: int, telefono: str, mensaje: str):
+    """Enviar notificación completa cuando se requiere atención humana"""
     try:
         async with httpx.AsyncClient() as client:
             await client.post(
@@ -98,8 +98,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
         now = time.time()
         state = get_user_state(telefono)
+        
+        # Si no hay estado previo o es muy antiguo, crear estado inicial
         if not state or now - state.get("last_interaction", 0) > SESSION_TTL:
-            state = {"step": "welcome", "last_interaction": now, "mode": "bot"}
+            state = {"step": "welcome", "last_interaction": now, "mode": "bot", "is_first_contact": True}
         else:
             state["last_interaction"] = now
 
@@ -115,7 +117,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 # Usuario sigue en modo humano, reenviar mensaje al asesor
                 try:
                     import asyncio
-                    asyncio.create_task(notificar_chat_humano_simple(tenant.id, telefono, mensaje))
+                    asyncio.create_task(notificar_chat_humano_completo(tenant.id, telefono, mensaje))
                 except Exception as e:
                     print(f"⚠️ Error enviando notificación: {e}")
                 # NO actualizar estado aquí para mantener el modo humano
@@ -130,7 +132,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             # Solo notificar al venom-service
             try:
                 import asyncio
-                asyncio.create_task(notificar_chat_humano_simple(tenant.id, telefono, mensaje))
+                asyncio.create_task(notificar_chat_humano_completo(tenant.id, telefono, mensaje))
             except Exception as e:
                 print(f"⚠️ Error enviando notificación: {e}")
             return JSONResponse(content={"mensaje": "🚪 Un asesor te responderá a la brevedad. Puedes escribir \"Bot\" y volveré a ayudarte 😊"})
@@ -169,7 +171,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return JSONResponse(content={"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."})
 
         if state.get("step") == "welcome":
-            if "turno" in mensaje:
+            # Si es primer contacto, siempre enviar mensaje inicial sin importar qué escriba
+            if state.get("is_first_contact"):
+                state["is_first_contact"] = False  # Marcar que ya no es primer contacto
+                set_user_state(telefono, state)
+                return JSONResponse(content={"mensaje": f"¡Hola! 👋 Bienvenido/a a *{tenant.comercio}*\n\n🕐 *Horarios de atención:*\nLunes a Viernes: 9:00 - 18:00\nSábados: 9:00 - 13:00\n\n📅 Para agendar una cita, escribe:\n• \"Turno\" o \"Reservar\"\n• Tu nombre completo\n• Servicio que necesitas\n• Día y horario preferido\n\n💬 Si necesitas ayuda personalizada, escribe \"Ayuda\"\n\n¿En qué podemos ayudarte hoy?"})
+            
+            # Para contactos posteriores, procesar normalmente
+            if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
                 servicios = tenant.servicios
                 if not servicios:
                     return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
@@ -189,30 +198,34 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 else:
                     return JSONResponse(content={"mensaje": "⚠️ No hay información disponible en este momento."})
             else:
-                state["step"] = "waiting_turno"
-                set_user_state(telefono, state)
-                return JSONResponse(content={"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
+                # Usuario escribió algo que no entendemos en el paso welcome
+                return JSONResponse(content={"mensaje": "🤔 No entiendo lo que necesitas.\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar una cita\n🔹 Escribe \"Información\" para conocer más\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
 
-        if state.get("step") == "waiting_turno" and "turno" in mensaje:
-            servicios = tenant.servicios
-            if not servicios:
-                return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
-            msg = "¿Qué servicio deseas reservar?\n"
-            for i, s in enumerate(servicios, 1):
-                msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-            msg += "\nResponde con el número del servicio."
-            state["step"] = "waiting_servicio"
-            state["servicios"] = [s.id for s in servicios]
-            set_user_state(telefono, state)
-            return JSONResponse(content={"mensaje": msg})
-
-        if state.get("step") == "waiting_turno" and ("informacion" in mensaje or "info" in mensaje):
-            if tenant.informacion_local:
-                state["step"] = "after_info"
+        # --- MANEJO DE USUARIOS EN CONVERSACIÓN ---
+        # Si el usuario ya recibió la bienvenida pero escribe algo que no entendemos
+        if state.get("step") == "welcome" and not state.get("is_first_contact"):
+            if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
+                servicios = tenant.servicios
+                if not servicios:
+                    return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
+                msg = "¿Qué servicio deseas reservar?\n"
+                for i, s in enumerate(servicios, 1):
+                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                msg += "\nResponde con el número del servicio."
+                state["step"] = "waiting_servicio"
+                state["servicios"] = [s.id for s in servicios]
                 set_user_state(telefono, state)
-                return JSONResponse(content={"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
+                return JSONResponse(content={"mensaje": msg})
+            elif "informacion" in mensaje or "info" in mensaje:
+                if tenant.informacion_local:
+                    state["step"] = "after_info"
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
+                else:
+                    return JSONResponse(content={"mensaje": "⚠️ No hay información disponible en este momento."})
             else:
-                return JSONResponse(content={"mensaje": "⚠️ No hay información disponible en este momento."})
+                # Usuario en conversación escribió algo que no entendemos
+                return JSONResponse(content={"mensaje": "🤔 No entiendo lo que necesitas.\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar una cita\n🔹 Escribe \"Información\" para conocer más\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
 
         if state.get("step") == "after_info":
             if "turno" in mensaje:
@@ -426,11 +439,34 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 f"\nSi querés cancelar, escribí: cancelar {fake_id}"
             )})
 
-        # Mensaje genérico por defecto
+        # Mensaje genérico por defecto - manejar saludos
         if mensaje in ["hola", "hello", "hi", "buenas", "buen dia", "buenas tardes", "buenas noches"]:
             state["step"] = "welcome"
+            state["is_first_contact"] = True  # Tratar saludos como primer contacto
             set_user_state(telefono, state)
-            return JSONResponse(content={"mensaje": f"✋ Hola! Soy el asistente virtual de *{tenant.comercio}*\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
+            return JSONResponse(content={"mensaje": f"¡Hola! 👋 Bienvenido/a a *{tenant.comercio}*\n\n🕐 *Horarios de atención:*\nLunes a Viernes: 9:00 - 18:00\nSábados: 9:00 - 13:00\n\n📅 Para agendar una cita, escribe:\n• \"Turno\" o \"Reservar\"\n• Tu nombre completo\n• Servicio que necesitas\n• Día y horario preferido\n\n💬 Si necesitas ayuda personalizada, escribe \"Ayuda\"\n\n¿En qué podemos ayudarte hoy?"})
+        
+        # Manejar palabras clave básicas en cualquier momento de la conversación
+        if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
+            servicios = tenant.servicios
+            if not servicios:
+                return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
+            msg = "¿Qué servicio deseas reservar?\n"
+            for i, s in enumerate(servicios, 1):
+                msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+            msg += "\nResponde con el número del servicio."
+            state["step"] = "waiting_servicio"
+            state["servicios"] = [s.id for s in servicios]
+            set_user_state(telefono, state)
+            return JSONResponse(content={"mensaje": msg})
+        
+        if "informacion" in mensaje or "info" in mensaje:
+            if tenant.informacion_local:
+                state["step"] = "after_info"
+                set_user_state(telefono, state)
+                return JSONResponse(content={"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
+            else:
+                return JSONResponse(content={"mensaje": "⚠️ No hay información disponible en este momento."})
         
         return JSONResponse(content={"mensaje": "❓ No entendí tu mensaje.\n\n¿Qué necesitas?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Información\" para conocer más sobre nosotros\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
 

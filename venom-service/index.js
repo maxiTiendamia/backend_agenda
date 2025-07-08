@@ -1038,12 +1038,15 @@ app.post("/notificar-chat-humano", async (req, res) => {
     console.log(`⏰ Fecha: ${new Date().toLocaleString('es-AR')}`);
     
     // Buscar información del cliente en la base de datos
+    let comercio = 'N/A';
+    let nombre = 'N/A';
     try {
       const clienteInfo = await pool.query("SELECT comercio, nombre FROM tenants WHERE id = $1", [cliente_id]);
       if (clienteInfo.rows.length > 0) {
-        const { comercio, nombre } = clienteInfo.rows[0];
-        console.log(`🏢 Comercio: ${comercio || 'N/A'}`);
-        console.log(`👤 Contacto: ${nombre || 'N/A'}`);
+        comercio = clienteInfo.rows[0].comercio || 'N/A';
+        nombre = clienteInfo.rows[0].nombre || 'N/A';
+        console.log(`🏢 Comercio: ${comercio}`);
+        console.log(`👤 Contacto: ${nombre}`);
       }
     } catch (err) {
       console.log(`⚠️ No se pudo obtener info del cliente: ${err.message}`);
@@ -1053,13 +1056,59 @@ app.post("/notificar-chat-humano", async (req, res) => {
     console.log(`💡 El usuario puede escribir "Bot" para volver al asistente virtual`);
     console.log(`🚨 ==========================================`);
     
-    // NO enviar mensaje por WhatsApp - solo registrar la notificación
+    // Enviar mensaje de notificación al propio número del bot/propietario
+    let mensajeEnviado = false;
+    let errorEnvio = null;
+    
+    const session = sessions[String(cliente_id)];
+    if (session) {
+      try {
+        // Verificar que la sesión esté conectada
+        const state = await session.getConnectionState();
+        if (state === "CONNECTED") {
+          // Crear mensaje de notificación
+          const mensajeNotificacion = `🚨 *SOLICITUD DE AYUDA HUMANA* 🚨
+
+👤 *Cliente:* ${nombre}
+🏢 *Comercio:* ${comercio}
+📱 *Teléfono:* ${telefono}
+💬 *Último mensaje:* ${mensaje}
+⏰ *Fecha:* ${new Date().toLocaleString('es-AR')}
+
+ℹ️ El cliente solicita atención humana. Responde normalmente a este chat.
+💡 El cliente puede escribir "Bot" para volver al asistente virtual.`;
+
+          // Obtener el número propio del bot para enviar la autonotificación
+          const hostDevice = await session.getHostDevice();
+          const numeroPropio = hostDevice.id.user; // Número del propietario del WhatsApp
+          
+          await session.sendText(`${numeroPropio}@c.us`, mensajeNotificacion);
+          mensajeEnviado = true;
+          
+          console.log(`📨 Autonotificación enviada al número propio: ${numeroPropio}`);
+        } else {
+          errorEnvio = `Sesión no conectada (estado: ${state})`;
+          console.log(`⚠️ No se pudo enviar autonotificación: ${errorEnvio}`);
+        }
+      } catch (err) {
+        errorEnvio = err.message;
+        console.error("❌ Error enviando autonotificación:", err);
+      }
+    } else {
+      errorEnvio = "Sesión no encontrada";
+      console.log(`⚠️ No se pudo enviar autonotificación: ${errorEnvio}`);
+    }
+    
     res.json({ 
       success: true, 
       mensaje: "Notificación de chat humano registrada",
       cliente_id,
       telefono,
-      action: "logged_only"
+      action: "logged_and_notified",
+      autonotificacion: {
+        enviada: mensajeEnviado,
+        error: errorEnvio
+      }
     });
   } catch (error) {
     console.error("❌ Error procesando notificación de chat humano:", error);
