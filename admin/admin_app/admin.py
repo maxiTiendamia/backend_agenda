@@ -167,24 +167,10 @@ class TenantModelView(SecureModelView):
 
     column_formatters = {
         'qr_code': lambda v, c, m, p: Markup(
-            f"<div style='text-align:center;'>"
-            f"<img src='data:image/png;base64,{m.qr_code}' style='height:150px; border: 1px solid #ddd; border-radius: 5px;'><br>"
-            f"<small style='color: green;'>✅ QR Activo</small>"
-            f"</div>"
+            f"<img src='data:image/png;base64,{m.qr_code}' style='height:150px;'>"
             ) if m.qr_code and not m.qr_code.startswith("http") and not m.qr_code.startswith("data:image") else (
-                Markup(
-                    f"<div style='text-align:center;'>"
-                    f"<img src='{m.qr_code}' style='height:150px; border: 1px solid #ddd; border-radius: 5px;'><br>"
-                    f"<small style='color: green;'>✅ QR Activo</small>"
-                    f"</div>"
-                ) if m.qr_code else Markup(
-                    f"<div style='text-align:center; padding: 20px; border: 2px dashed #ccc; border-radius: 5px;'>"
-                    f"<span style='color: orange; font-size: 14px;'>⏳ Generando QR...</span><br>"
-                    f"<small style='color: gray;'>Refresca la página en unos segundos</small><br>"
-                    f"<a href='/admin/tenant/reiniciar/{m.id}' style='color: blue; text-decoration: none;'>🔄 Forzar regeneración</a>"
-                    f"</div>"
-                )
-            ),
+                Markup(f"<img src='{m.qr_code}' style='height:150px;'>")
+                ) if m.qr_code else Markup("<span style='color: gray;'>⏳ Esperando QR...</span>"),
         'estado_wa': lambda v, c, m, p: obtener_estado_sesion(m.id)
     }
 
