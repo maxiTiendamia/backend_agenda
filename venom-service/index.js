@@ -122,19 +122,35 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
   // Si se pide regenerar QR, borra el archivo, la sesión en memoria y el campo en la base
   if (permitirGuardarQR) {
-    if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
+    console.log(`🧹 Limpiando datos previos para cliente ${sessionId}...`);
+    
+    // Limpiar archivo QR HTML
+    if (fs.existsSync(qrPath)) {
+      fs.unlinkSync(qrPath);
+      console.log(`🗑️ Archivo QR HTML eliminado: ${qrPath}`);
+    }
+    
+    // Cerrar sesión en memoria si existe
     if (sessions[sessionId]) {
       try {
         await sessions[sessionId].close();
+        console.log(`🔒 Sesión en memoria cerrada para ${sessionId}`);
       } catch (e) {
-        console.log("No se pudo cerrar la sesión anterior:", e);
+        console.log(`⚠️ Error cerrando sesión anterior: ${e.message}`);
       }
       delete sessions[sessionId];
     }
+    
+    // Limpiar QR en base de datos
     try {
-      await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [sessionId]);
+      const result = await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [sessionId]);
+      console.log(`🧹 QR limpiado en DB para cliente ${sessionId}, filas afectadas: ${result.rowCount}`);
+      
+      if (result.rowCount === 0) {
+        console.log(`⚠️ Cliente ${sessionId} no encontrado en DB para limpiar QR`);
+      }
     } catch (err) {
-      console.error("❌ Error limpiando QR en DB:", err);
+      console.error(`❌ Error limpiando QR en DB para ${sessionId}:`, err);
     }
   }
 
@@ -181,21 +197,74 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       },
       createPathFileToken: true,
       catchQR: async (base64Qr) => {
-        if (!permitirGuardarQR || qrGuardado) return;
+        console.log(`🔍 QR generado para cliente ${sessionId}, permitirGuardarQR: ${permitirGuardarQR}, qrGuardado: ${qrGuardado}`);
+        
+        if (!permitirGuardarQR) {
+          console.log(`⚠️ No se guarda QR para cliente ${sessionId} (permitirGuardarQR = false)`);
+          return;
+        }
+        
+        if (qrGuardado) {
+          console.log(`⚠️ QR ya guardado para cliente ${sessionId}, saltando duplicado`);
+          return;
+        }
+        
         qrGuardado = true; // Marcar como guardado para evitar duplicados
         
+        console.log(`💾 Iniciando guardado de QR para cliente ${sessionId}...`);
+        
+        // Guardar HTML del QR
         const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;"><img src="${base64Qr}" /></body></html>`;
         const qrPath = path.join(sessionDir, `${sessionId}.html`);
-        fs.writeFileSync(qrPath, html);
-
         try {
+          fs.writeFileSync(qrPath, html);
+          console.log(`📄 QR HTML guardado en: ${qrPath}`);
+        } catch (err) {
+          console.error(`❌ Error guardando QR HTML para ${sessionId}:`, err);
+        }
+
+        // Guardar en base de datos con manejo mejorado del base64
+        try {
+          let base64Clean = base64Qr;
+          
+          // Limpiar prefijos comunes de base64
+          const prefijos = [
+            'data:image/png;base64,',
+            'data:image/jpeg;base64,',
+            'data:image/jpg;base64,',
+            'data:image/webp;base64,',
+            'data:image/gif;base64,'
+          ];
+          
+          for (const prefijo of prefijos) {
+            if (base64Clean.startsWith(prefijo)) {
+              base64Clean = base64Clean.substring(prefijo.length);
+              break;
+            }
+          }
+          
+          console.log(`🔍 Base64 original length: ${base64Qr.length}, limpio length: ${base64Clean.length}`);
+          
           const result = await pool.query(
             "UPDATE tenants SET qr_code = $1 WHERE id = $2",
-            [base64Qr.replace(/^data:image\/\w+;base64,/, ""), sessionId]
+            [base64Clean, sessionId]
           );
-          console.log(`📬 QR guardado en DB para cliente ${sessionId}`, result.rowCount);
+          
+          console.log(`📬 QR guardado en DB para cliente ${sessionId}, filas afectadas: ${result.rowCount}`);
+          
+          if (result.rowCount === 0) {
+            console.error(`⚠️ No se encontró cliente ${sessionId} en la base de datos para actualizar QR`);
+          } else {
+            console.log(`✅ QR persistido exitosamente en DB para cliente ${sessionId}`);
+          }
+          
         } catch (err) {
-          console.error("❌ Error guardando QR en DB:", err);
+          console.error(`❌ Error guardando QR en DB para cliente ${sessionId}:`, err);
+          console.error(`🔍 Detalles del error:`, {
+            message: err.message,
+            code: err.code,
+            detail: err.detail
+          });
         }
       },
     });
@@ -1391,5 +1460,299 @@ app.post("/reconectar-todas", async (req, res) => {
       error: "Error iniciando reconexión masiva",
       details: error.message
     });
+  }
+});
+
+// Endpoint específico para regenerar QR de un cliente
+app.post("/regenerar-qr/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🔄 ===== REGENERACIÓN QR CLIENTE ${clienteId} =====`);
+    console.log(`⏰ Timestamp: ${new Date().toISOString()}`);
+    
+    // 1. Verificar que el cliente existe en la base de datos
+    let clienteInfo = null;
+    try {
+      const result = await pool.query("SELECT id, comercio, qr_code FROM tenants WHERE id = $1", [clienteId]);
+      if (result.rows.length === 0) {
+        console.log(`❌ Cliente ${clienteId} no existe en la base de datos`);
+        return res.status(404).json({ 
+          error: `Cliente ${clienteId} no existe en la base de datos`,
+          action: "verificar_cliente"
+        });
+      }
+      clienteInfo = result.rows[0];
+      console.log(`✅ Cliente encontrado: ${clienteInfo.comercio}`);
+      console.log(`📊 QR actual en DB: ${clienteInfo.qr_code ? 'SÍ' : 'NO'} (length: ${clienteInfo.qr_code?.length || 0})`);
+    } catch (dbError) {
+      console.error(`❌ Error verificando cliente en BD: ${dbError.message}`);
+      return res.status(500).json({ error: "Error verificando cliente en base de datos" });
+    }
+    
+    // 2. Cerrar sesión existente completamente
+    if (sessions[clienteId]) {
+      console.log(`🔒 Cerrando sesión existente en memoria...`);
+      try {
+        await sessions[clienteId].close();
+        console.log(`✅ Sesión cerrada correctamente`);
+      } catch (closeError) {
+        console.log(`⚠️ Error cerrando sesión: ${closeError.message}`);
+      }
+      delete sessions[clienteId];
+      console.log(`🗑️ Sesión eliminada de memoria`);
+    } else {
+      console.log(`ℹ️ No había sesión activa en memoria`);
+    }
+    
+    // 3. Limpiar todos los archivos de sesión
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const rutasLimpiar = [
+      path.join(sessionDir, clienteId),
+      `/app/tokens/${clienteId}`,
+      path.join(sessionDir, `${clienteId}.html`)
+    ];
+    
+    for (const rutaLimpiar of rutasLimpiar) {
+      if (fs.existsSync(rutaLimpiar)) {
+        console.log(`🗑️ Eliminando: ${rutaLimpiar}`);
+        try {
+          if (fs.statSync(rutaLimpiar).isDirectory()) {
+            fs.rmSync(rutaLimpiar, { recursive: true, force: true });
+          } else {
+            fs.unlinkSync(rutaLimpiar);
+          }
+          console.log(`✅ Eliminado: ${rutaLimpiar}`);
+        } catch (deleteError) {
+          console.log(`⚠️ Error eliminando ${rutaLimpiar}: ${deleteError.message}`);
+        }
+      } else {
+        console.log(`ℹ️ No existe: ${rutaLimpiar}`);
+      }
+    }
+    
+    // 4. Limpiar QR en base de datos forzadamente
+    try {
+      const cleanResult = await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [clienteId]);
+      console.log(`🧹 QR limpiado en DB, filas afectadas: ${cleanResult.rowCount}`);
+    } catch (dbError) {
+      console.log(`⚠️ Error limpiando QR en BD: ${dbError.message}`);
+    }
+    
+    // 5. Crear nueva sesión con logs detallados
+    console.log(`🚀 Creando nueva sesión con QR...`);
+    
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("Timeout de 45 segundos para generar QR")), 45000)
+    );
+    
+    try {
+      await Promise.race([
+        crearSesionConTimeout(clienteId, 40000, true), // 40 segundos para crear sesión + QR
+        timeoutPromise
+      ]);
+      
+      // 6. Verificar que el QR se guardó correctamente
+      console.log(`🔍 Verificando que el QR se guardó en la base de datos...`);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Esperar 2 segundos
+      
+      const verificacionResult = await pool.query("SELECT qr_code FROM tenants WHERE id = $1", [clienteId]);
+      const qrEnDB = verificacionResult.rows[0]?.qr_code;
+      
+      const response = {
+        success: true,
+        mensaje: `QR regenerado exitosamente para cliente ${clienteId}`,
+        cliente: clienteInfo.comercio,
+        qr_url: `/qr/${clienteId}`,
+        qr_guardado_en_db: !!qrEnDB,
+        qr_length: qrEnDB?.length || 0,
+        timestamp: new Date().toISOString()
+      };
+      
+      if (qrEnDB) {
+        console.log(`✅ QR verificado en DB exitosamente (length: ${qrEnDB.length})`);
+      } else {
+        console.log(`⚠️ QR no encontrado en DB después de la regeneración`);
+        response.warning = "QR generado pero no verificado en base de datos";
+      }
+      
+      console.log(`🎉 ===== REGENERACIÓN COMPLETADA PARA CLIENTE ${clienteId} =====`);
+      res.json(response);
+      
+    } catch (createError) {
+      console.error(`❌ Error creando nueva sesión: ${createError.message}`);
+      console.log(`🔍 Stack trace:`, createError.stack);
+      
+      res.status(500).json({
+        error: "Error regenerando QR",
+        details: createError.message,
+        action: "reintentar",
+        qr_url: `/qr/${clienteId}`,
+        cliente: clienteInfo.comercio
+      });
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error general en regenerar-qr para ${clienteId}:`, error);
+    res.status(500).json({ 
+      error: "Error interno del servidor",
+      details: error.message 
+    });
+  }
+});
+
+// Endpoint para diagnosticar problemas específicos de QR
+app.get("/debug/qr/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🔍 ===== DIAGNÓSTICO QR CLIENTE ${clienteId} =====`);
+    
+    const diagnostico = {
+      clienteId,
+      timestamp: new Date().toISOString(),
+      baseDatos: {},
+      archivos: {},
+      sesion: {},
+      configuracion: {}
+    };
+    
+    // 1. Verificar en base de datos
+    try {
+      const result = await pool.query("SELECT id, comercio, qr_code FROM tenants WHERE id = $1", [clienteId]);
+      if (result.rows.length > 0) {
+        const cliente = result.rows[0];
+        diagnostico.baseDatos = {
+          existe: true,
+          comercio: cliente.comercio,
+          tiene_qr: !!cliente.qr_code,
+          qr_length: cliente.qr_code?.length || 0,
+          qr_preview: cliente.qr_code ? cliente.qr_code.substring(0, 50) + '...' : null
+        };
+      } else {
+        diagnostico.baseDatos = { existe: false };
+      }
+    } catch (err) {
+      diagnostico.baseDatos = { error: err.message };
+    }
+    
+    // 2. Verificar archivos de sesión
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const rutasVerificar = [
+      { nombre: 'sessionDir', ruta: path.join(sessionDir, clienteId) },
+      { nombre: 'appTokens', ruta: `/app/tokens/${clienteId}` },
+      { nombre: 'qrHtml', ruta: path.join(sessionDir, `${clienteId}.html`) }
+    ];
+    
+    diagnostico.archivos.rutas = {};
+    for (const { nombre, ruta } of rutasVerificar) {
+      const existe = fs.existsSync(ruta);
+      diagnostico.archivos.rutas[nombre] = {
+        ruta,
+        existe,
+        tipo: existe ? (fs.statSync(ruta).isDirectory() ? 'directorio' : 'archivo') : null
+      };
+      
+      if (existe && fs.statSync(ruta).isDirectory()) {
+        diagnostico.archivos.rutas[nombre].contenido = fs.readdirSync(ruta);
+        
+        // Verificar Default folder si es un directorio de sesión
+        const defaultPath = path.join(ruta, 'Default');
+        if (fs.existsSync(defaultPath)) {
+          diagnostico.archivos.rutas[nombre].defaultFolder = {
+            existe: true,
+            archivos: fs.readdirSync(defaultPath).slice(0, 10) // Primeros 10 archivos
+          };
+        }
+      }
+      
+      if (existe && !fs.statSync(ruta).isDirectory() && nombre === 'qrHtml') {
+        // Para el archivo HTML del QR, verificar su contenido
+        try {
+          const content = fs.readFileSync(ruta, 'utf8');
+          diagnostico.archivos.rutas[nombre].contentLength = content.length;
+          diagnostico.archivos.rutas[nombre].isValidHTML = content.includes('<img src="data:image');
+        } catch (e) {
+          diagnostico.archivos.rutas[nombre].readError = e.message;
+        }
+      }
+    }
+    
+    // 3. Verificar sesión en memoria
+    diagnostico.sesion = {
+      existe: !!sessions[clienteId],
+      tipo: sessions[clienteId] ? typeof sessions[clienteId] : null
+    };
+    
+    if (sessions[clienteId]) {
+      try {
+        const estado = await sessions[clienteId].getConnectionState();
+        diagnostico.sesion.estado = estado;
+        
+        const isConnected = await sessions[clienteId].isConnected();
+        diagnostico.sesion.conectado = isConnected;
+        
+        // Verificar métodos disponibles
+        diagnostico.sesion.metodos = {
+          getConnectionState: typeof sessions[clienteId].getConnectionState === 'function',
+          isConnected: typeof sessions[clienteId].isConnected === 'function',
+          sendText: typeof sessions[clienteId].sendText === 'function',
+          close: typeof sessions[clienteId].close === 'function'
+        };
+        
+      } catch (err) {
+        diagnostico.sesion.error = err.message;
+      }
+    }
+    
+    // 4. Configuración relevante
+    diagnostico.configuracion = {
+      SESSION_FOLDER: process.env.SESSION_FOLDER || 'default',
+      sessionDirCalculado: sessionDir,
+      nodeVersion: process.version,
+      platform: process.platform
+    };
+    
+    // 5. Recomendaciones
+    diagnostico.recomendaciones = [];
+    
+    if (!diagnostico.baseDatos.existe) {
+      diagnostico.recomendaciones.push("❌ Cliente no existe en base de datos");
+    }
+    
+    if (diagnostico.baseDatos.existe && !diagnostico.baseDatos.tiene_qr) {
+      diagnostico.recomendaciones.push("⚠️ Cliente existe pero no tiene QR en BD");
+    }
+    
+    if (!diagnostico.archivos.rutas.qrHtml.existe) {
+      diagnostico.recomendaciones.push("⚠️ No existe archivo HTML del QR");
+    }
+    
+    if (!diagnostico.sesion.existe) {
+      diagnostico.recomendaciones.push("ℹ️ No hay sesión activa en memoria - usar /regenerar-qr para crear");
+    } else if (diagnostico.sesion.estado !== 'CONNECTED') {
+      diagnostico.recomendaciones.push("⚠️ Sesión existe pero no está conectada");
+    }
+    
+    const carpetasDisponibles = Object.values(diagnostico.archivos.rutas)
+      .filter(r => r.existe && r.tipo === 'directorio').length;
+    
+    if (carpetasDisponibles === 0) {
+      diagnostico.recomendaciones.push("🆕 No hay datos de sesión - requiere escaneo de QR desde cero");
+    } else {
+      diagnostico.recomendaciones.push(`ℹ️ ${carpetasDisponibles} carpeta(s) de sesión disponible(s) - posible restauración`);
+    }
+    
+    if (diagnostico.recomendaciones.length === 0) {
+      diagnostico.recomendaciones.push("✅ Todo parece estar en orden");
+    }
+    
+    console.log(`📋 Diagnóstico QR completo para cliente ${clienteId}:`, JSON.stringify(diagnostico, null, 2));
+    
+    res.json(diagnostico);
+    
+  } catch (error) {
+    console.error(`❌ Error en diagnóstico QR de cliente ${clienteId}:`, error);
+    res.status(500).json({ error: error.message });
   }
 });
