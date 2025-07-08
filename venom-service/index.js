@@ -120,21 +120,32 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
   const qrPath = path.join(sessionDir, `${sessionId}.html`);
 
+  console.log(`⚙️ Iniciando crearSesion para cliente ${sessionId}, permitirGuardarQR: ${permitirGuardarQR}`);
+
   // Si se pide regenerar QR, borra el archivo, la sesión en memoria y el campo en la base
   if (permitirGuardarQR) {
-    if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
+    console.log(`🧹 Limpiando datos previos para cliente ${sessionId}...`);
+    
+    if (fs.existsSync(qrPath)) {
+      fs.unlinkSync(qrPath);
+      console.log(`🗑️ Archivo QR HTML eliminado: ${qrPath}`);
+    }
+    
     if (sessions[sessionId]) {
       try {
         await sessions[sessionId].close();
+        console.log(`🔒 Sesión anterior cerrada para cliente ${sessionId}`);
       } catch (e) {
-        console.log("No se pudo cerrar la sesión anterior:", e);
+        console.log(`⚠️ Error cerrando sesión anterior para ${sessionId}:`, e.message);
       }
       delete sessions[sessionId];
     }
+    
     try {
-      await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [sessionId]);
+      const result = await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [sessionId]);
+      console.log(`🧹 QR limpiado en DB para cliente ${sessionId}, filas afectadas: ${result.rowCount}`);
     } catch (err) {
-      console.error("❌ Error limpiando QR en DB:", err);
+      console.error(`❌ Error limpiando QR en DB para cliente ${sessionId}:`, err);
     }
   }
 
@@ -143,7 +154,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
     return sessions[sessionId];
   }
 
-  console.log(`⚙️ Iniciando sesión para ${sessionId}...`);
+  console.log(`⚙️ Iniciando nueva sesión venom para ${sessionId}...`);
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir);
     console.log("📁 Carpeta 'sessions' creada");
@@ -181,21 +192,39 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       },
       createPathFileToken: true,
       catchQR: async (base64Qr) => {
-        if (!permitirGuardarQR || qrGuardado) return;
-        qrGuardado = true; // Marcar como guardado para evitar duplicados
+        if (!permitirGuardarQR) return;
         
-        const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;"><img src="${base64Qr}" /></body></html>`;
-        const qrPath = path.join(sessionDir, `${sessionId}.html`);
-        fs.writeFileSync(qrPath, html);
-
+        // Evitar múltiples guardados del mismo QR (comparando el contenido)
+        if (qrGuardado) {
+          console.log(`⚠️ QR ya fue guardado previamente para cliente ${sessionId}, saltando...`);
+          return;
+        }
+        
+        console.log(`📱 Generando y guardando nuevo QR para cliente ${sessionId}...`);
+        
         try {
+          // Guardar archivo HTML del QR
+          const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;"><img src="${base64Qr}" /></body></html>`;
+          const qrPath = path.join(sessionDir, `${sessionId}.html`);
+          fs.writeFileSync(qrPath, html);
+          console.log(`📄 Archivo QR HTML guardado: ${qrPath}`);
+
+          // Guardar QR en base de datos
+          const qrCodeData = base64Qr.replace(/^data:image\/\w+;base64,/, "");
           const result = await pool.query(
             "UPDATE tenants SET qr_code = $1 WHERE id = $2",
-            [base64Qr.replace(/^data:image\/\w+;base64,/, ""), sessionId]
+            [qrCodeData, sessionId]
           );
-          console.log(`📬 QR guardado en DB para cliente ${sessionId}`, result.rowCount);
+          
+          if (result.rowCount > 0) {
+            console.log(`📬 QR guardado exitosamente en DB para cliente ${sessionId}`);
+            qrGuardado = true; // Solo marcar como guardado si todo fue exitoso
+          } else {
+            console.error(`❌ No se pudo actualizar QR en DB para cliente ${sessionId} - Cliente no encontrado`);
+          }
         } catch (err) {
-          console.error("❌ Error guardando QR en DB:", err);
+          console.error(`❌ Error guardando QR para cliente ${sessionId}:`, err);
+          // NO marcar como guardado si hubo error, para permitir reintento
         }
       },
     });
@@ -269,6 +298,38 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
         console.error("❌ Error reenviando mensaje a backend o enviando respuesta:", err);
       }
     });
+
+    console.log(`✅ Cliente venom creado para ${sessionId}`);
+    
+    // Si se solicitó guardar QR, verificar que se haya generado después de un tiempo
+    if (permitirGuardarQR) {
+      console.log(`⏳ Esperando generación de QR para cliente ${sessionId}...`);
+      
+      // Esperar hasta 15 segundos para que se genere el QR
+      let tiempoEspera = 0;
+      const maxEspera = 15000; // 15 segundos
+      const intervalo = 1000; // 1 segundo
+      
+      while (tiempoEspera < maxEspera && !qrGuardado) {
+        await new Promise(resolve => setTimeout(resolve, intervalo));
+        tiempoEspera += intervalo;
+        
+        // Verificar si el archivo QR existe
+        if (fs.existsSync(qrPath)) {
+          console.log(`📱 Archivo QR detectado para cliente ${sessionId} después de ${tiempoEspera}ms`);
+          break;
+        }
+      }
+      
+      // Verificar estado final del QR
+      if (qrGuardado) {
+        console.log(`✅ QR generado y guardado exitosamente para cliente ${sessionId}`);
+      } else if (fs.existsSync(qrPath)) {
+        console.log(`⚠️ Archivo QR existe pero no se confirmó guardado en DB para cliente ${sessionId}`);
+      } else {
+        console.error(`❌ No se pudo generar QR para cliente ${sessionId} después de ${maxEspera}ms`);
+      }
+    }
 
     return client;
   } catch (err) {
@@ -531,11 +592,23 @@ async function restaurarSesiones() {
 app.get("/iniciar/:clienteId", async (req, res) => {
   const { clienteId } = req.params;
   try {
-    await crearSesionConTimeout(clienteId, 60000, true); // <-- true para guardar QR
-    res.send(`✅ Sesión iniciada para ${clienteId}. Escaneá el QR en /qr/${clienteId}`);
+    console.log(`🚀 Iniciando sesión para cliente ${clienteId}...`);
+    await crearSesionConTimeout(clienteId, 60000, true); // true para guardar QR
+    
+    // Verificar que el QR se haya generado
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const qrPath = path.join(sessionDir, `${clienteId}.html`);
+    
+    if (fs.existsSync(qrPath)) {
+      console.log(`✅ QR generado para cliente ${clienteId}`);
+      res.send(`✅ Sesión iniciada para ${clienteId}. Escaneá el QR en /qr/${clienteId}`);
+    } else {
+      console.log(`⚠️ Sesión creada pero QR no encontrado para cliente ${clienteId}`);
+      res.send(`⚠️ Sesión iniciada para ${clienteId}, pero QR aún no disponible. Reintenta en /qr/${clienteId} en unos segundos.`);
+    }
   } catch (error) {
-    console.error("❌ Error al iniciar sesión:", error);
-    res.status(500).send("Error al iniciar sesión");
+    console.error(`❌ Error al iniciar sesión para cliente ${clienteId}:`, error);
+    res.status(500).send(`Error al iniciar sesión: ${error.message}`);
   }
 });
 
@@ -1064,14 +1137,43 @@ app.post("/forzar-nueva-sesion/:clienteId", async (req, res) => {
     console.log(`🚀 Creando nueva sesión desde cero para cliente ${clienteId}...`);
     
     try {
-      await crearSesionConTimeout(clienteId, 30000, true); // 30 segundos timeout, generar QR
+      await crearSesionConTimeout(clienteId, 45000, true); // 45 segundos timeout, generar QR
+      
+      // Verificar que el QR se haya generado
+      const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+      const qrPath = path.join(sessionDir, `${clienteId}.html`);
+      
+      let qrGenerado = false;
+      let qrEnDB = false;
+      
+      // Verificar archivo QR
+      if (fs.existsSync(qrPath)) {
+        qrGenerado = true;
+        console.log(`✅ Archivo QR generado para cliente ${clienteId}`);
+      }
+      
+      // Verificar QR en base de datos
+      try {
+        const qrCheck = await pool.query("SELECT qr_code FROM tenants WHERE id = $1", [clienteId]);
+        if (qrCheck.rows.length > 0 && qrCheck.rows[0].qr_code) {
+          qrEnDB = true;
+          console.log(`✅ QR guardado en base de datos para cliente ${clienteId}`);
+        }
+      } catch (dbError) {
+        console.log(`⚠️ Error verificando QR en DB: ${dbError.message}`);
+      }
       
       const response = {
         success: true,
         mensaje: `Nueva sesión creada para cliente ${clienteId}`,
         accion: "escanear_qr",
         qr_url: `/qr/${clienteId}`,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        verificacion: {
+          qr_archivo_generado: qrGenerado,
+          qr_guardado_en_db: qrEnDB,
+          ruta_qr: qrPath
+        }
       };
       
       console.log(`✅ Nueva sesión creada exitosamente para cliente ${clienteId}`);
