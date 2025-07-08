@@ -32,6 +32,20 @@ def llamar_a_venom_async(cliente_id):
         print(f"❌ [Async] Error al contactar a Venom: {e}")
 
 
+# ⬇️ Nueva función para regenerar QR manualmente
+def regenerar_qr_venom_async(cliente_id):
+    try:
+        venom_url = f"{VENOM_URL}/generar-qr/{cliente_id}"
+        print(f"🔄 [Async] Regenerando QR para el cliente {cliente_id}")
+        response = requests.post(venom_url, timeout=10)
+        if response.ok:
+            print("✅ [Async] QR regenerado correctamente")
+        else:
+            print(f"⚠️ [Async] Error al regenerar QR: {response.status_code}")
+    except Exception as e:
+        print(f"❌ [Async] Error al regenerar QR: {e}")
+
+
 def obtener_estado_sesion(cliente_id):
     try:
         res = requests.get(f"{VENOM_URL}/estado-sesiones", timeout=10)
@@ -212,6 +226,19 @@ class SecureAdminIndexView(AdminIndexView):
         except Exception as e:
             estado_sesiones = {"error": str(e)}
 
+        # Consulta información de errores de sesión
+        errores_sesion = {}
+        try:
+            respuesta_errores = requests.get(f"{VENOM_URL}/debug/errores", timeout=10)
+            if respuesta_errores.ok:
+                errores_sesion = respuesta_errores.json()
+                print(f"✅ Errores de sesión obtenidos: {len(errores_sesion.get('session_errors', {}))} clientes con errores")
+            else:
+                print(f"⚠️ Error obteniendo errores de sesión: {respuesta_errores.status_code}")
+        except Exception as e:
+            print(f"⚠️ No se pudieron obtener errores de sesión: {e}")
+            errores_sesion = {}
+
         return self.render('admin/custom_index.html',
                            total_clientes=total_clientes,
                            ultimos_clientes=ultimos_clientes,
@@ -220,7 +247,8 @@ class SecureAdminIndexView(AdminIndexView):
                            cantidad_por_estado=cantidad_por_estado,
                            errores=errores,
                            total_errores=total_errores,
-                           estado_sesiones=estado_sesiones)
+                           estado_sesiones=estado_sesiones,
+                           errores_sesion=errores_sesion)
 
     def is_accessible(self):
         return basic_auth.authenticate()
@@ -235,8 +263,21 @@ class SecureAdminIndexView(AdminIndexView):
         if tenant:
             tenant.qr_code = None
             db.session.commit()
-        threading.Thread(target=llamar_a_venom_async, args=(cliente_id,)).start()
-        flash(f"🔁 Reinicio de sesión solicitado para cliente {cliente_id}.", "info")
+        threading.Thread(target=regenerar_qr_venom_async, args=(cliente_id,)).start()
+        flash(f"🔁 Regeneración de QR solicitada para cliente {cliente_id}.", "info")
+        return redirect(request.referrer or url_for('admin.index'))
+
+    @expose('/reset-errores/<int:cliente_id>')
+    def reset_errores_cliente(self, cliente_id):
+        try:
+            venom_url = f"{VENOM_URL}/reset-errores/{cliente_id}"
+            response = requests.post(venom_url, timeout=10)
+            if response.ok:
+                flash(f"✅ Errores reseteados para cliente {cliente_id}.", "success")
+            else:
+                flash(f"⚠️ No se pudieron resetear los errores: {response.status_code}", "warning")
+        except Exception as e:
+            flash(f"❌ Error al resetear errores: {e}", "error")
         return redirect(request.referrer or url_for('admin.index'))
 
 

@@ -48,10 +48,20 @@
         <td>
           <a
             href="/admin/reiniciar/{{ sesion.clienteId }}"
-            class="btn btn-sm btn-warning"
+            class="btn btn-sm btn-warning me-1"
+            title="Regenerar QR manualmente"
           >
-            Regenerar QR
+            🔄 Regenerar QR
           </a>
+          {% if sesion.estado == 'ERROR' %}
+          <a
+            href="/admin/reset-errores/{{ sesion.clienteId }}"
+            class="btn btn-sm btn-danger"
+            title="Resetear contador de errores"
+          >
+            🔧 Reset Errores
+          </a>
+          {% endif %}
         </td>
       </tr>
       {% endfor %} {% else %}
@@ -209,6 +219,76 @@
       </div>
     </div>
   </div>
+
+  <!-- Nueva sección para mostrar información de errores de sesión -->
+  {% if errores_sesion and errores_sesion.session_errors %}
+  <div class="row mt-4">
+    <div class="col-md-12">
+      <div class="card shadow-sm border-warning">
+        <div class="card-header bg-warning text-dark">
+          ⚠️ Información de errores de sesión ({{ errores_sesion.total_clientes_con_errores }} clientes)
+        </div>
+        <div class="card-body">
+          <div class="table-responsive">
+            <table class="table table-sm">
+              <thead>
+                <tr>
+                  <th>Cliente ID</th>
+                  <th>Errores consecutivos</th>
+                  <th>Estado</th>
+                  <th>Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for cliente_id, count in errores_sesion.session_errors.items() %}
+                <tr>
+                  <td>{{ cliente_id }}</td>
+                  <td>
+                    <span class="badge {% if count >= 5 %}bg-danger{% elif count >= 3 %}bg-warning{% else %}bg-secondary{% endif %}">
+                      {{ count }}
+                    </span>
+                  </td>
+                  <td>
+                    {% if count >= 5 %}
+                    <span class="text-danger">🚫 Bloqueado</span>
+                    {% else %}
+                    <span class="text-success">✅ Activo</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if count >= 3 %}
+                    <a
+                      href="/admin/reset-errores/{{ cliente_id }}"
+                      class="btn btn-sm btn-outline-danger"
+                      title="Resetear contador de errores"
+                    >
+                      🔧 Reset
+                    </a>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% if errores_sesion.clientes_bloqueados %}
+          <div class="mt-3">
+            <h6 class="text-danger">🚫 Clientes bloqueados:</h6>
+            <ul class="list-unstyled">
+              {% for cliente in errores_sesion.clientes_bloqueados %}
+              <li class="text-danger">
+                Cliente {{ cliente.clienteId }}: {{ cliente.errores }} errores consecutivos
+                <a href="/admin/reset-errores/{{ cliente.clienteId }}" class="btn btn-sm btn-outline-danger ms-2">🔧 Reset</a>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
