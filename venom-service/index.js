@@ -36,6 +36,12 @@ async function verificarEstadoSesion(clienteId) {
 async function reconectarSesion(clienteId) {
   console.log(`🔄 Intentando reconectar sesión ${clienteId}...`);
   
+  // Verificar si está bloqueado por errores ANTES de intentar reconectar
+  if (sessionErrors[clienteId] && sessionErrors[clienteId] >= 5) {
+    console.log(`🚫 Cliente ${clienteId} bloqueado por errores (${sessionErrors[clienteId]}), cancelando reconexión automática`);
+    return; // No programar más reintentos
+  }
+  
   // Limpiar sesión anterior si existe
   if (sessions[clienteId]) {
     try {
@@ -54,10 +60,15 @@ async function reconectarSesion(clienteId) {
   } catch (error) {
     console.log(`❌ Error reconectando sesión ${clienteId}:`, error.message);
     
-    // Programar siguiente intento de reconexión
-    setTimeout(() => {
-      reconectarSesion(clienteId);
-    }, 30000); // Reintentar en 30 segundos
+    // Solo programar reintento si NO está bloqueado por errores
+    if (!sessionErrors[clienteId] || sessionErrors[clienteId] < 5) {
+      console.log(`⏳ Programando reintento de reconexión para ${clienteId} en 30 segundos...`);
+      setTimeout(() => {
+        reconectarSesion(clienteId);
+      }, 30000); // Reintentar en 30 segundos
+    } else {
+      console.log(`🚫 No se programará más reintentos para ${clienteId} (bloqueado por errores)`);
+    }
   }
 }
 
@@ -149,6 +160,18 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
         console.log(`⚠️ Error cerrando sesión anterior para ${sessionId}:`, e.message);
       }
       delete sessions[sessionId];
+    }
+    
+    // Limpiar archivos de bloqueo de Chrome (SingletonLock)
+    const sessionPath = path.join(sessionDir, sessionId);
+    const singletonLockPath = path.join(sessionPath, "SingletonLock");
+    if (fs.existsSync(singletonLockPath)) {
+      try {
+        fs.unlinkSync(singletonLockPath);
+        console.log(`🔓 Archivo SingletonLock eliminado para cliente ${sessionId}`);
+      } catch (e) {
+        console.log(`⚠️ Error eliminando SingletonLock: ${e.message}`);
+      }
     }
     
     try {
@@ -1251,59 +1274,16 @@ app.post("/notificar-chat-humano", async (req, res) => {
     console.log(`💡 El usuario puede escribir "Bot" para volver al asistente virtual`);
     console.log(`🚨 ==========================================`);
     
-    // Enviar mensaje de notificación al propio número del bot/propietario
-    let mensajeEnviado = false;
-    let errorEnvio = null;
-    
-    const session = sessions[String(cliente_id)];
-    if (session) {
-      try {
-        // Verificar que la sesión esté conectada
-        const state = await session.getConnectionState();
-        if (state === "CONNECTED") {
-          // Crear mensaje de notificación
-          const mensajeNotificacion = `🚨 *SOLICITUD DE AYUDA HUMANA* 🚨
-
-👤 *Cliente:* ${nombre}
-🏢 *Comercio:* ${comercio}
-📱 *Teléfono:* ${telefono}
-💬 *Último mensaje:* ${mensaje}
-⏰ *Fecha:* ${new Date().toLocaleString('es-AR')}
-
-ℹ️ El cliente solicita atención humana. Responde normalmente a este chat.
-💡 El cliente puede escribir "Bot" para volver al asistente virtual.`;
-
-          // Obtener el número propio del bot para enviar la autonotificación
-          const hostDevice = await session.getHostDevice();
-          const numeroPropio = hostDevice.id.user; // Número del propietario del WhatsApp
-          
-          await session.sendText(`${numeroPropio}@c.us`, mensajeNotificacion);
-          mensajeEnviado = true;
-          
-          console.log(`📨 Autonotificación enviada al número propio: ${numeroPropio}`);
-        } else {
-          errorEnvio = `Sesión no conectada (estado: ${state})`;
-          console.log(`⚠️ No se pudo enviar autonotificación: ${errorEnvio}`);
-        }
-      } catch (err) {
-        errorEnvio = err.message;
-        console.error("❌ Error enviando autonotificación:", err);
-      }
-    } else {
-      errorEnvio = "Sesión no encontrada";
-      console.log(`⚠️ No se pudo enviar autonotificación: ${errorEnvio}`);
-    }
+    // Nota: Autonotificación removida como se solicitó
+    console.log(`ℹ️ Notificación registrada. El administrador debe monitorear manualmente las solicitudes de ayuda.`);
     
     res.json({ 
       success: true, 
       mensaje: "Notificación de chat humano registrada",
       cliente_id,
       telefono,
-      action: "logged_and_notified",
-      autonotificacion: {
-        enviada: mensajeEnviado,
-        error: errorEnvio
-      }
+      action: "logged_only",
+      nota: "Autonotificación deshabilitada"
     });
   } catch (error) {
     console.error("❌ Error procesando notificación de chat humano:", error);
@@ -1640,6 +1620,60 @@ app.post("/reset-errores/:clienteId", async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Error reseteando contador de errores",
+      details: error.message
+    });
+  }
+});
+
+app.post("/limpiar-locks/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🧹 Limpiando archivos de bloqueo para cliente ${clienteId}...`);
+    
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const sessionPath = path.join(sessionDir, clienteId);
+    const singletonLockPath = path.join(sessionPath, "SingletonLock");
+    
+    let archivosLimpiados = [];
+    
+    // Limpiar SingletonLock
+    if (fs.existsSync(singletonLockPath)) {
+      try {
+        fs.unlinkSync(singletonLockPath);
+        archivosLimpiados.push("SingletonLock");
+        console.log(`🔓 Archivo SingletonLock eliminado para cliente ${clienteId}`);
+      } catch (e) {
+        console.log(`⚠️ Error eliminando SingletonLock: ${e.message}`);
+      }
+    }
+    
+    // También buscar en /app/tokens si es diferente
+    if (fs.existsSync(`/app/tokens/${clienteId}`)) {
+      const altSingletonPath = path.join(`/app/tokens/${clienteId}`, "SingletonLock");
+      if (fs.existsSync(altSingletonPath)) {
+        try {
+          fs.unlinkSync(altSingletonPath);
+          archivosLimpiados.push("SingletonLock (alternativo)");
+          console.log(`🔓 Archivo SingletonLock alternativo eliminado para cliente ${clienteId}`);
+        } catch (e) {
+          console.log(`⚠️ Error eliminando SingletonLock alternativo: ${e.message}`);
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      mensaje: `Archivos de bloqueo limpiados para cliente ${clienteId}`,
+      archivos_limpiados: archivosLimpiados,
+      cliente_id: clienteId
+    });
+    
+  } catch (error) {
+    console.error(`❌ Error limpiando locks para ${clienteId}:`, error);
+    res.status(500).json({
+      success: false,
+      error: "Error limpiando archivos de bloqueo",
       details: error.message
     });
   }

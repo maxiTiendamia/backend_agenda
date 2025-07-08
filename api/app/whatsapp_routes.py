@@ -49,7 +49,7 @@ def generar_mensaje_bienvenida(tenant):
     
     # Agregar información del local si está disponible
     if tenant.informacion_local:
-        mensaje += f"ℹ️ *Acerca de nosotros:*\n{tenant.informacion_local}\n\n"
+        mensaje += f"ℹ️ *Acerca de nosotros:*\n\n{tenant.informacion_local}\n\n"
     
     # Agregar dirección si está disponible
     if tenant.direccion:
@@ -60,15 +60,14 @@ def generar_mensaje_bienvenida(tenant):
         mensaje += f"📞 *Teléfono:* {tenant.telefono}\n\n"
     
     # Servicios disponibles
-    mensaje += "🎯 *¿Qué deseas hacer?*\n"
-    mensaje += "🔹 Escribe *\"Turno\"* o *\"Reservar\"* para ver nuestros servicios\n"
+    mensaje += "🎯 *¿Qué deseas hacer?*\n\n"
+    mensaje += "🔹 Escribe *\"Turno\"* o *\"Reservar\"* para reservar nuestros servicios\n"
     mensaje += "🔹 Escribe *\"Ayuda\"* para hablar con un asesor\n\n"
-    mensaje += "¿En qué podemos ayudarte hoy? 😊"
     
     return mensaje
 
 async def notificar_chat_humano_completo(cliente_id: int, telefono: str, mensaje: str):
-    """Enviar notificación completa cuando se requiere atención humana"""
+    """Registrar solicitud de atención humana (sin autonotificación)"""
     try:
         async with httpx.AsyncClient() as client:
             await client.post(
@@ -81,9 +80,9 @@ async def notificar_chat_humano_completo(cliente_id: int, telefono: str, mensaje
                 },
                 timeout=5.0
             )
-        print(f"✅ Notificación enviada - Cliente {cliente_id} solicita ayuda: {telefono}")
+        print(f"✅ Solicitud de ayuda registrada - Cliente {cliente_id}: {telefono}")
     except Exception as e:
-        print(f"⚠️ Error enviando notificación de ayuda: {e}")
+        print(f"⚠️ Error registrando solicitud de ayuda: {e}")
 
 router = APIRouter()
 
