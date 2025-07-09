@@ -17,6 +17,8 @@ const pool = new Pool({
 const sessions = {};
 const reconnectIntervals = {}; // Para manejar intervalos de reconexión
 const sessionErrors = {}; // Para rastrear errores por sesión y evitar bucles infinitos
+const sessionErrorTimestamps = {}; // Para detectar bucles infinitos de errores
+const maxErrorsPerMinute = 5; // Máximo 5 errores por minuto antes de bloquear
 
 // Función para verificar el estado de una sesión
 async function verificarEstadoSesion(clienteId) {
@@ -59,6 +61,13 @@ async function reconectarSesion(clienteId) {
     console.log(`✅ Sesión ${clienteId} reconectada exitosamente`);
   } catch (error) {
     console.log(`❌ Error reconectando sesión ${clienteId}:`, error.message);
+    
+    // Detectar bucle infinito en reconexiones
+    const esBucleInfinito = detectarBucleInfinito(clienteId);
+    if (esBucleInfinito) {
+      console.log(`🚨 BUCLE INFINITO en reconexión: Cliente ${clienteId} bloqueado automáticamente`);
+      return; // Salir sin programar más reintentos
+    }
     
     // Solo programar reintento si NO está bloqueado por errores
     if (!sessionErrors[clienteId] || sessionErrors[clienteId] < 5) {
@@ -125,6 +134,76 @@ function crearSesionConTimeout(clienteId, timeoutMs = 60000, permitirGuardarQR =
       reject(err);
     });
   });
+}
+
+// Función para detectar bucles infinitos de errores
+function detectarBucleInfinito(clienteId) {
+  const ahora = Date.now();
+  const unMinutoAtras = ahora - 60000; // 1 minuto
+  
+  if (!sessionErrorTimestamps[clienteId]) {
+    sessionErrorTimestamps[clienteId] = [];
+  }
+  
+  // Agregar timestamp actual
+  sessionErrorTimestamps[clienteId].push(ahora);
+  
+  // Limpiar timestamps antiguos (más de 1 minuto)
+  sessionErrorTimestamps[clienteId] = sessionErrorTimestamps[clienteId].filter(
+    timestamp => timestamp > unMinutoAtras
+  );
+  
+  const erroresEnUltimoMinuto = sessionErrorTimestamps[clienteId].length;
+  
+  console.log(`📊 Cliente ${clienteId}: ${erroresEnUltimoMinuto} errores en último minuto`);
+  
+  if (erroresEnUltimoMinuto >= maxErrorsPerMinute) {
+    console.log(`🚨 BUCLE INFINITO DETECTADO: Cliente ${clienteId} ha tenido ${erroresEnUltimoMinuto} errores en 1 minuto`);
+    
+    // Marcar como bloqueado
+    sessionErrors[clienteId] = 999; // Número alto para bloquear completamente
+    
+    // Cerrar sesión si existe
+    if (sessions[clienteId]) {
+      try {
+        console.log(`🔌 Cerrando sesión problemática ${clienteId}...`);
+        sessions[clienteId].close();
+        delete sessions[clienteId];
+      } catch (e) {
+        console.error(`⚠️ Error cerrando sesión ${clienteId}:`, e.message);
+      }
+    }
+    
+    // Limpiar carpetas automáticamente
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const pathsToClean = [
+      path.join(sessionDir, clienteId),
+      path.join("/app/tokens", clienteId)
+    ];
+    
+    for (const pathToClean of pathsToClean) {
+      if (fs.existsSync(pathToClean)) {
+        try {
+          console.log(`🗑️ AUTO-LIMPIEZA: Eliminando ${pathToClean}`);
+          fs.rmSync(pathToClean, { recursive: true, force: true });
+          console.log(`✅ AUTO-LIMPIEZA: Carpeta eliminada ${pathToClean}`);
+        } catch (cleanErr) {
+          console.error(`❌ Error en auto-limpieza ${pathToClean}:`, cleanErr.message);
+        }
+      }
+    }
+    
+    // Programar reset del bloqueo en 10 minutos
+    setTimeout(() => {
+      console.log(`🔄 RESET: Desbloqueando cliente ${clienteId} después de bucle infinito`);
+      sessionErrors[clienteId] = 0;
+      sessionErrorTimestamps[clienteId] = [];
+    }, 10 * 60 * 1000);
+    
+    return true; // Es un bucle infinito
+  }
+  
+  return false; // No es un bucle infinito
 }
 
 async function crearSesion(clienteId, permitirGuardarQR = true) {
@@ -559,6 +638,14 @@ async function restaurarSesiones() {
       const sessionPath = typeof sessionFolder === 'string' ? 
         path.join(sessionDir, sessionFolder) : sessionFolder.path;
       
+      console.log(`\n🔄 Procesando cliente ${clienteId}...`);
+      
+      // Verificar si el cliente está bloqueado por errores repetidos
+      if (sessionErrors[clienteId] && sessionErrors[clienteId] >= 2) {
+        console.log(`🚫 Cliente ${clienteId} está bloqueado por errores repetidos (${sessionErrors[clienteId]} errores), saltando...`);
+        continue;
+      }
+      
       // Solo restaurar si el cliente existe en la base de datos
       if (!clientesActivos.includes(clienteId)) {
         console.log(`⚠️ Cliente ${clienteId} no existe en DB (Clientes válidos: ${clientesActivos.join(', ')}), saltando...`);
@@ -567,20 +654,51 @@ async function restaurarSesiones() {
 
       // Verificar si existe el archivo de datos de WhatsApp Web
       const defaultPath = path.join(sessionPath, "Default");
-      const whatsappDataFile = path.join(sessionPath, "Default", "Local Storage");
       
       console.log(`🔍 Verificando archivos para cliente ${clienteId}:`);
       console.log(`  - Ruta sesión: ${sessionPath}`);
       console.log(`  - Carpeta Default: ${fs.existsSync(defaultPath) ? '✅' : '❌'}`);
-      console.log(`  - Local Storage: ${fs.existsSync(whatsappDataFile) ? '✅' : '❌'}`);
       
-      if (fs.existsSync(defaultPath) || fs.existsSync(whatsappDataFile)) {
+      // Buscar cualquier archivo que indique que es una sesión válida
+      let tieneArchivosDeSession = false;
+      if (fs.existsSync(defaultPath)) {
+        const archivosDefault = fs.readdirSync(defaultPath);
+        console.log(`  - Archivos en Default: [${archivosDefault.join(', ')}]`);
+        
+        // Verificar si tiene archivos típicos de WhatsApp Web
+        const archivosEsenciales = [
+          'Local Storage',
+          'Session Storage', 
+          'IndexedDB',
+          'Preferences',
+          'cookies',
+          'Cookies'
+        ];
+        
+        tieneArchivosDeSession = archivosEsenciales.some(archivo => 
+          archivosDefault.some(archivoReal => 
+            archivoReal.toLowerCase().includes(archivo.toLowerCase())
+          )
+        );
+        
+        if (!tieneArchivosDeSession && archivosDefault.length > 0) {
+          // Si no tiene archivos típicos pero tiene algo, asumir que es válida
+          tieneArchivosDeSession = true;
+          console.log(`  - Asumiendo sesión válida por tener archivos en Default`);
+        }
+      }
+      
+      console.log(`  - Tiene archivos de sesión: ${tieneArchivosDeSession ? '✅' : '❌'}`);
+      
+      if (fs.existsSync(defaultPath) && tieneArchivosDeSession) {
         console.log(`🔄 Restaurando sesión para cliente ${clienteId}...`);
         console.log(`📁 Usando ruta: ${sessionPath}`);
         try {
           // Configurar la variable de entorno para esta sesión específica
           const originalSessionFolder = process.env.SESSION_FOLDER;
           process.env.SESSION_FOLDER = path.dirname(sessionPath);
+          
+          console.log(`🔧 Configurando SESSION_FOLDER para ${clienteId}: ${path.dirname(sessionPath)}`);
           
           await crearSesion(clienteId, false); // false = no regenerar QR
           console.log(`✅ Sesión restaurada para cliente ${clienteId}`);
@@ -595,12 +713,86 @@ async function restaurarSesiones() {
           // Esperar un poco entre restauraciones para no sobrecargar
           await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (err) {
-          console.error(`❌ Error restaurando sesión ${clienteId}:`, err.message);
-          console.error(`🔍 Stack trace:`, err.stack);
+          console.error(`❌ Error restaurando sesión ${clienteId}:`, err?.message || 'Error desconocido');
+          
+          // Manejo específico para diferentes tipos de errores
+          if (err === undefined || err === null) {
+            console.error(`🔍 Error is ${err}, tipo: ${typeof err}`);
+            console.error(`🔍 Probablemente es un error interno de venom-bot`);
+            sessionErrors[clienteId] = (sessionErrors[clienteId] || 0) + 1;
+          } else if (typeof err === 'object') {
+            console.error(`🔍 Error objeto:`, JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+            console.error(`🔍 Stack trace:`, err?.stack || 'No stack disponible');
+          } else {
+            console.error(`🔍 Error primitivo (${typeof err}):`, err);
+          }
+          
+          // Detectar patrones de errores problemáticos de venom-bot
+          const isVenomError = (
+            err === undefined || 
+            err === null ||
+            (err?.message && (
+              err.message.includes('Unknown error') || 
+              err.message.includes('Unknow error') ||
+              err.message.includes('Error: undefined') ||
+              err.message === ''
+            )) ||
+            (typeof err === 'string' && (
+              err.includes('Unknown error') ||
+              err.includes('Unknow error')
+            ))
+          );
+          
+          if (isVenomError) {
+            console.log(`🚫 Detectado error problemático de venom-bot para cliente ${clienteId}`);
+            
+            // Detectar bucle infinito ANTES de incrementar contadores
+            const esBucleInfinito = detectarBucleInfinito(clienteId);
+            if (esBucleInfinito) {
+              console.log(`🚨 BUCLE INFINITO: Cliente ${clienteId} bloqueado automáticamente`);
+              continue; // Saltar al siguiente cliente
+            }
+            
+            sessionErrors[clienteId] = (sessionErrors[clienteId] || 0) + 1;
+            console.log(`📊 Errores acumulados para cliente ${clienteId}: ${sessionErrors[clienteId]}`);
+            
+            if (sessionErrors[clienteId] >= 2) { // Reducir threshold a 2
+              console.log(`🚫 Cliente ${clienteId} bloqueado por errores repetidos (${sessionErrors[clienteId]} errores)`);
+              
+              // Limpiar inmediatamente la carpeta problemática 
+              const searchPaths = [sessionPath, path.join("/app/tokens", clienteId)];
+              for (const pathToClean of searchPaths) {
+                if (fs.existsSync(pathToClean)) {
+                  try {
+                    console.log(`🗑️ Eliminando carpeta problemática: ${pathToClean}`);
+                    fs.rmSync(pathToClean, { recursive: true, force: true });
+                    console.log(`✅ Carpeta eliminada exitosamente: ${pathToClean}`);
+                  } catch (cleanErr) {
+                    console.error(`❌ Error limpiando carpeta ${pathToClean}:`, cleanErr.message);
+                  }
+                }
+              }
+              
+              // Resetear contador después de limpiar
+              setTimeout(() => {
+                console.log(`🔄 Reseteando contador de errores para cliente ${clienteId}`);
+                sessionErrors[clienteId] = 0;
+              }, 3 * 60 * 1000); // 3 minutos para permitir reintento más rápido
+            }
+          } else {
+            console.log(`⚠️ Error normal (no venom), continuando con siguiente cliente...`);
+          }
         }
       } else {
         console.log(`⚠️ No hay datos de sesión válidos para cliente ${clienteId} en ${sessionPath}`);
-        console.log(`🔍 Archivos en la carpeta:`, fs.existsSync(sessionPath) ? fs.readdirSync(sessionPath) : "Carpeta no existe");
+        console.log(`🔍 Razones posibles:`);
+        console.log(`   - Carpeta Default existe: ${fs.existsSync(defaultPath)}`);
+        console.log(`   - Tiene archivos de sesión: ${tieneArchivosDeSession || 'false'}`);
+        if (fs.existsSync(sessionPath)) {
+          console.log(`   - Archivos en carpeta raíz: [${fs.readdirSync(sessionPath).join(', ')}]`);
+        } else {
+          console.log(`   - Carpeta de sesión no existe`);
+        }
       }
     }
     
