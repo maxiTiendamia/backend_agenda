@@ -1374,24 +1374,6 @@ app.post("/notificar-chat-humano", async (req, res) => {
   }
 });
 
-app.listen(PORT, async () => {
-  console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
-  console.log(`📁 Carpeta de sesiones configurada: ${process.env.SESSION_FOLDER || path.join(__dirname, "tokens")}`);
-  console.log(`🔍 Verificando si existe /app/tokens:`, fs.existsSync("/app/tokens"));
-  
-  if (fs.existsSync("/app/tokens")) {
-    const folders = fs.readdirSync("/app/tokens").filter(item => !isNaN(item));
-    console.log(`📂 Carpetas numéricas encontradas en /app/tokens:`, folders);
-  }
-  
-  // Esperar un poco para asegurar que la DB esté lista
-  console.log("⏱️ Esperando conexión estable a la base de datos...");
-  await new Promise(resolve => setTimeout(resolve, 3000));
-  
-  await restaurarSesiones();
-  await crearCarpetasAutomaticamente();
-});
-
 // Endpoint de salud para verificar estado de sesiones
 app.get("/health", async (req, res) => {
   try {
@@ -1840,21 +1822,53 @@ async function crearCarpetasAutomaticamente() {
   }
 }
 
-// Llamar a la función de creación automática de carpetas al iniciar el servidor
-app.listen(PORT, async () => {
-  console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
-  console.log(`📁 Carpeta de sesiones configurada: ${process.env.SESSION_FOLDER || path.join(__dirname, "tokens")}`);
-  console.log(`🔍 Verificando si existe /app/tokens:`, fs.existsSync("/app/tokens"));
-  
-  if (fs.existsSync("/app/tokens")) {
-    const folders = fs.readdirSync("/app/tokens").filter(item => !isNaN(item));
-    console.log(`📂 Carpetas numéricas encontradas en /app/tokens:`, folders);
+// Función para inicializar la aplicación
+async function inicializarAplicacion() {
+  try {
+    console.log(`📁 Carpeta de sesiones configurada: ${process.env.SESSION_FOLDER || path.join(__dirname, "tokens")}`);
+    console.log(`🔍 Verificando si existe /app/tokens:`, fs.existsSync("/app/tokens"));
+    
+    if (fs.existsSync("/app/tokens")) {
+      const folders = fs.readdirSync("/app/tokens").filter(item => !isNaN(item));
+      console.log(`📂 Carpetas numéricas encontradas en /app/tokens:`, folders);
+    }
+    
+    // Esperar un poco para asegurar que la DB esté lista
+    console.log("⏱️ Esperando conexión estable a la base de datos...");
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    await restaurarSesiones();
+    await crearCarpetasAutomaticamente();
+    
+    console.log("🎉 Aplicación inicializada correctamente");
+  } catch (error) {
+    console.error("❌ Error durante la inicialización:", error);
   }
-  
-  // Esperar un poco para asegurar que la DB esté lista
-  console.log("⏱️ Esperando conexión estable a la base de datos...");
-  await new Promise(resolve => setTimeout(resolve, 3000));
-  
-  await restaurarSesiones();
-  await crearCarpetasAutomaticamente();
-});
+}
+
+// Intentar iniciar el servidor con manejo de errores
+const server = app.listen(PORT)
+  .on('listening', async () => {
+    console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
+    await inicializarAplicacion();
+  })
+  .on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`❌ Puerto ${PORT} ya está en uso. Intentando puerto alternativo...`);
+      
+      // Intentar con puerto aleatorio
+      const server2 = app.listen(0)
+        .on('listening', async () => {
+          const actualPort = server2.address().port;
+          console.log(`✅ Venom-service corriendo en puerto alternativo ${actualPort}`);
+          await inicializarAplicacion();
+        })
+        .on('error', (err) => {
+          console.error(`❌ Error fatal iniciando servidor:`, err);
+          process.exit(1);
+        });
+    } else {
+      console.error(`❌ Error iniciando servidor:`, error);
+      process.exit(1);
+    }
+  });
