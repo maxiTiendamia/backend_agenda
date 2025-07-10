@@ -91,19 +91,32 @@ async function reconectarSesion(clienteId) {
     return; // No programar más reintentos
   }
   
-  // Limpiar sesión anterior si existe
-  if (sessions[clienteId]) {
-    try {
-      if (sessions[clienteId].client && typeof sessions[clienteId].client.close === 'function') {
-        await sessions[clienteId].client.close();
-      }
-    } catch (e) {
-      console.log(`⚠️ Error cerrando sesión anterior ${clienteId}:`, e.message);
-    }
-    delete sessions[clienteId];
+  // **NUEVO: Verificar si ya hay una reconexión en progreso**
+  if (reconnectIntervals[clienteId]) {
+    console.log(`⏳ Ya hay una reconexión en progreso para ${clienteId}, saltando...`);
+    return;
   }
   
+  // Marcar como en progreso
+  reconnectIntervals[clienteId] = true;
+  
   try {
+    // Limpiar sesión anterior si existe
+    if (sessions[clienteId]) {
+      try {
+        if (sessions[clienteId].client && typeof sessions[clienteId].client.close === 'function') {
+          await sessions[clienteId].client.close();
+        }
+      } catch (e) {
+        console.log(`⚠️ Error cerrando sesión anterior ${clienteId}:`, e.message);
+      }
+      delete sessions[clienteId];
+    }
+    
+    // **NUEVO: Esperar antes de crear nueva sesión para evitar conflictos**
+    console.log(`⏳ Esperando 5 segundos antes de crear nueva sesión ${clienteId}...`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
     await crearSesionConTimeout(clienteId, 45000, false); // Sin guardar QR en reconexión
     console.log(`✅ Sesión ${clienteId} reconectada exitosamente`);
   } catch (error) {
@@ -118,12 +131,23 @@ async function reconectarSesion(clienteId) {
     } else {
       console.log(`🚫 No se programará más reintentos para ${clienteId} (bloqueado por errores)`);
     }
+  } finally {
+    // Limpiar marca de progreso
+    delete reconnectIntervals[clienteId];
   }
 }
 
 // Función para monitorear todas las sesiones
 async function monitorearSesiones() {
+  console.log(`🔍 Monitoreando ${Object.keys(sessions).length} sesiones activas...`);
+  
   for (const clienteId in sessions) {
+    // **NUEVO: Saltear si ya hay una reconexión en progreso**
+    if (reconnectIntervals[clienteId]) {
+      console.log(`⏳ Saltando monitoreo de ${clienteId} (reconexión en progreso)`);
+      continue;
+    }
+    
     const estaConectada = await verificarEstadoSesion(clienteId);
     
     if (!estaConectada) {
@@ -131,9 +155,16 @@ async function monitorearSesiones() {
       
       // Evitar múltiples reconexiones simultáneas
       if (!reconnectIntervals[clienteId]) {
-        reconnectIntervals[clienteId] = true;
-        await reconectarSesion(clienteId);
-        delete reconnectIntervals[clienteId];
+        // **NUEVO: Verificar si el cliente está bloqueado antes de intentar reconectar**
+        if (sessionErrors[clienteId] && sessionErrors[clienteId] >= 3) {
+          console.log(`🚫 Cliente ${clienteId} bloqueado por errores, saltando reconexión automática`);
+          continue;
+        }
+        
+        // No esperar la reconexión para no bloquear otras sesiones
+        reconectarSesion(clienteId).catch(err => {
+          console.error(`❌ Error en reconexión automática ${clienteId}:`, err.message);
+        });
       }
     }
   }
@@ -183,19 +214,8 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
   console.log(`⚙️ Iniciando crearSesion para cliente ${sessionId}, permitirGuardarQR: ${permitirGuardarQR}`);
 
-  // **NUEVO: Limpiar SingletonLock antes de crear la sesión**
-  const searchPaths = [sessionDir, "/app/tokens"];
-  for (const searchPath of searchPaths) {
-    const singletonPath = path.join(searchPath, sessionId, "SingletonLock");
-    if (fs.existsSync(singletonPath)) {
-      try {
-        fs.unlinkSync(singletonPath);
-        console.log(`🔓 Limpiado SingletonLock previo para cliente ${sessionId} en ${searchPath}`);
-      } catch (err) {
-        console.error(`❌ Error limpiando SingletonLock en ${searchPath}:`, err.message);
-      }
-    }
-  }
+  // **NUEVO: Limpieza más agresiva de SingletonLock**
+  await limpiarSingletonLock(sessionId);
 
   // Verificar si esta sesión está en bucle de errores (reducido a 3 intentos)
   if (sessionErrors[sessionId] && sessionErrors[sessionId] >= 3) {
@@ -297,6 +317,11 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       sessionFolder: sessionDir,
       autoClose: 180000,
       useChrome: true,
+      // **NUEVO: Configuración más estricta para evitar múltiples instancias**
+      logQR: false,
+      disableSpins: true,
+      disableWelcome: true,
+      updatesLog: false,
       browserArgs: [
         "--no-sandbox", 
         "--disable-setuid-sandbox",
@@ -307,13 +332,28 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
         "--disable-gpu",
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding"
+        "--disable-renderer-backgrounding",
+        "--disable-features=TranslateUI",
+        "--disable-web-security",
+        "--disable-features=VizDisplayCompositor",
+        // **NUEVO: Prevenir múltiples instancias**
+        "--single-process",
+        "--no-default-browser-check",
+        "--disable-default-apps",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--disable-translate",
+        "--disable-plugins",
+        "--disable-extensions",
+        "--disable-popup-blocking"
       ],
       puppeteerOptions: { 
         headless: "new",
         args: [
           "--no-sandbox",
-          "--disable-setuid-sandbox"
+          "--disable-setuid-sandbox",
+          "--single-process",
+          "--disable-dev-shm-usage"
         ]
       },
       createPathFileToken: true,
@@ -400,11 +440,20 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
         
         console.log(`⚠️ Error ${sessionErrors[sessionId]}/3 para sesión ${sessionId}: ${state}`);
         
+        // **NUEVO: Evitar reconexiones si ya hay una en progreso**
+        if (reconnectIntervals[sessionId]) {
+          console.log(`⏳ Reconexión ya en progreso para ${sessionId}, evitando duplicado`);
+          return;
+        }
+        
         // Solo intentar reconexión automática si NO se está generando QR explícitamente
         // Y no se ha alcanzado el límite de errores globales
         if (!permitirGuardarQR && reconexionIntentos < maxIntentos && sessionErrors[sessionId] < 3) {
           reconexionIntentos++;
           console.log(`🔄 Intento ${reconexionIntentos}/${maxIntentos} de reconexión automática para ${sessionId} (error global: ${sessionErrors[sessionId]}/3)...`);
+          
+          // **NUEVO: Marcar como en progreso para evitar múltiples reconexiones**
+          reconnectIntervals[sessionId] = true;
           
           // Esperar antes de intentar reconectar (tiempo progresivo)
           const tiempoEspera = 5000 * reconexionIntentos; // 5s, 10s, 15s
@@ -416,6 +465,9 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
               await sessions[sessionId].close();
               delete sessions[sessionId];
             }
+            
+            // **NUEVO: Limpiar SingletonLock antes de recrear**
+            await limpiarSingletonLock(sessionId);
             
             await crearSesion(sessionId, false); // false = NO generar QR en reconexión automática
             console.log(`✅ Sesión ${sessionId} reconectada automáticamente en intento ${reconexionIntentos}`);
@@ -432,6 +484,9 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
                 reconexionIntentos = 0;
               }, 30 * 60 * 1000);
             }
+          } finally {
+            // **NUEVO: Limpiar marca de progreso**
+            delete reconnectIntervals[sessionId];
           }
         } else if (permitirGuardarQR) {
           console.log(`🔍 Sesión ${sessionId} desconectada pero está en proceso de generación de QR, no se reintenta automáticamente`);
@@ -907,6 +962,34 @@ async function restaurarSesiones() {
   }
 }
 
+// Refuerzo: Limpieza agresiva de archivos SingletonLock y carpetas antes de crear/restaurar sesión
+async function limpiarSingletonLock(clienteId) {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const searchPaths = [
+    path.join(sessionDir, clienteId),
+    `/app/tokens/${clienteId}`,
+    `/tmp/puppeteer_dev_chrome_profile-${clienteId}`,
+    `/tmp/.org.chromium.Chromium.${clienteId}`
+  ];
+  for (const searchPath of searchPaths) {
+    const singletonPath = path.join(searchPath, "SingletonLock");
+    if (fs.existsSync(singletonPath)) {
+      try { fs.unlinkSync(singletonPath); } catch {}
+    }
+    // Limpia otros archivos de lock
+    if (fs.existsSync(searchPath)) {
+      try {
+        const files = fs.readdirSync(searchPath);
+        files.filter(f => f.includes('Lock') || f.includes('lockfile') || f.includes('.lock'))
+          .forEach(lockFile => {
+            try { fs.unlinkSync(path.join(searchPath, lockFile)); } catch {}
+          });
+      } catch {}
+    }
+  }
+  await new Promise(resolve => setTimeout(resolve, 500));
+}
+
 // **NUEVA FUNCIÓN: Guardar información esencial de sesión para restauración futura**
 async function guardarInformacionSesion(clienteId, client) {
   console.log(`💾 Guardando información de sesión para cliente ${clienteId}...`);
@@ -1000,1244 +1083,6 @@ async function guardarInformacionSesion(clienteId, client) {
   } catch (err) {
     console.error(`❌ Error guardando información de sesión para ${clienteId}:`, err);
     throw err;
-  }
-}
-
-app.get("/iniciar/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  try {
-    console.log(`🚀 Iniciando sesión para cliente ${clienteId}...`);
-    await crearSesionConTimeout(clienteId, 60000, true); // true para guardar QR
-    
-    // Verificar que el QR se haya generado
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const qrPath = path.join(sessionDir, `${clienteId}.html`);
-    
-    if (fs.existsSync(qrPath)) {
-      console.log(`✅ QR generado para cliente ${clienteId}`);
-      res.send(`✅ Sesión iniciada para ${clienteId}. Escaneá el QR en /qr/${clienteId}`);
-    } else {
-      console.log(`⚠️ Sesión creada pero QR no encontrado para cliente ${clienteId}`);
-      res.send(`⚠️ Sesión iniciada para ${clienteId}, pero QR aún no disponible. Reintenta en /qr/${clienteId} en unos segundos.`);
-    }
-  } catch (error) {
-    console.error(`❌ Error al iniciar sesión para cliente ${clienteId}:`, error);
-    res.status(500).send(`Error al iniciar sesión: ${error.message}`);
-  }
-});
-
-app.get("/qr/:clienteId", (req, res) => {
-  const clienteId = req.params.clienteId;
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-  const filePath = path.join(sessionDir, `${clienteId}.html`);
-  if (fs.existsSync(filePath)) {
-    res.sendFile(filePath);
-  } else {
-    res.status(404).send(`<h2>⚠️ Aún no se generó un QR para el cliente: ${clienteId}</h2>`);
-  }
-});
-
-app.get("/debug/sesiones", async (req, res) => {
-  try {
-    const diagnostico = {
-      timestamp: new Date().toISOString(),
-      sesiones_activas: Object.keys(sessions).length,
-      backend_disponible: await verificarConectividadBackend(),
-      sesiones: {}
-    };
-    
-    for (const [clienteId, session] of Object.entries(sessions)) {
-      try {
-        const isConnected = await session.isConnected();
-        const connectionState = await session.getConnectionState();
-        
-        diagnostico.sesiones[clienteId] = {
-          conectado: isConnected,
-          estado: connectionState,
-          errores_acumulados: sessionErrors[clienteId] || 0,
-          bloqueado: (sessionErrors[clienteId] || 0) >= 3,
-          tipo_sesion: typeof session,
-          tiene_onMessage: typeof session.onMessage === 'function'
-        };
-        
-        // Verificar si puede obtener información del dispositivo
-        try {
-          const hostDevice = await session.getHostDevice();
-          diagnostico.sesiones[clienteId].dispositivo = {
-            platform: hostDevice.platform,
-            phone: hostDevice.phone,
-            connected: hostDevice.connected
-          };
-        } catch (deviceErr) {
-          diagnostico.sesiones[clienteId].dispositivo = `Error: ${deviceErr.message}`;
-        }
-        
-      } catch (err) {
-        diagnostico.sesiones[clienteId] = {
-          error: err.message,
-          tipo_error: err.name
-        };
-      }
-    }
-    
-    res.json(diagnostico);
-  } catch (err) {
-    console.error("❌ Error en diagnóstico de sesiones:", err);
-    res.status(500).json({ error: "Error interno", details: err.message });
-  }
-});
-
-app.get("/diagnostico/:clienteId?", async (req, res) => {
-  const { clienteId } = req.params;
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-  
-  try {
-    const diagnostico = {
-      timestamp: new Date().toISOString(),
-      session_folder: sessionDir,
-      clientes_solicitados: clienteId ? [clienteId] : 'todos'
-    };
-
-    // Si se especifica un cliente, hacer diagnóstico detallado
-    if (clienteId) {
-      const sessionPath = path.join(sessionDir, clienteId);
-      const defaultPath = path.join(sessionPath, "Default");
-      
-      diagnostico.cliente = {
-        id: clienteId,
-        carpeta_existe: fs.existsSync(sessionPath),
-        carpeta_default_existe: fs.existsSync(defaultPath),
-        sesion_activa: !!sessions[clienteId],
-        errores_acumulados: sessionErrors[clienteId] || 0,
-        bloqueado: (sessionErrors[clienteId] || 0) >= 3
-      };
-      
-      if (fs.existsSync(defaultPath)) {
-        const archivos = fs.readdirSync(defaultPath);
-        const archivosCriticos = ['Local Storage', 'Preferences', 'IndexedDB', 'Session Storage'];
-        
-        diagnostico.cliente.archivos = {
-          total_archivos: archivos.length,
-          archivos_encontrados: archivos,
-          archivos_criticos: {}
-        };
-        
-        archivosCriticos.forEach(archivo => {
-          const existe = archivos.some(a => a.toLowerCase().includes(archivo.toLowerCase()));
-          diagnostico.cliente.archivos.archivos_criticos[archivo] = existe;
-        });
-        
-        // Evaluar si es restaurable
-        const tieneLocalStorage = archivos.some(a => a.toLowerCase().includes('local storage'));
-        const tieneOtros = archivos.some(a => a.toLowerCase().includes('preferences') || a.toLowerCase().includes('indexeddb'));
-        diagnostico.cliente.es_restaurable = tieneLocalStorage && tieneOtros;
-      } else {
-        diagnostico.cliente.es_restaurable = false;
-        diagnostico.cliente.razon = "Carpeta Default no existe";
-      }
-      
-      // Estado de conexión si está activa
-      if (sessions[clienteId]) {
-        try {
-          const isConnected = await sessions[clienteId].isConnected();
-          diagnostico.cliente.estado_conexion = isConnected ? 'CONNECTED' : 'DISCONNECTED';
-        } catch (err) {
-          diagnostico.cliente.estado_conexion = 'ERROR';
-          diagnostico.cliente.error_conexion = err.message;
-        }
-      } else {
-        diagnostico.cliente.estado_conexion = 'NO_ACTIVE';
-      }
-      
-    } else {
-      // Diagnóstico general de todos los clientes
-      const result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
-      diagnostico.resumen = {
-        clientes_db: result.rows.length,
-        sesiones_activas: Object.keys(sessions).length,
-        sesiones_con_errores: Object.keys(sessionErrors).filter(id => sessionErrors[id] > 0).length,
-        sesiones_bloqueadas: Object.keys(sessionErrors).filter(id => sessionErrors[id] >= 3).length
-      };
-      
-      diagnostico.clientes = [];
-      
-      for (const row of result.rows) {
-        const id = String(row.id);
-        const sessionPath = path.join(sessionDir, id);
-        const defaultPath = path.join(sessionPath, "Default");
-        
-        const clienteInfo = {
-          id: id,
-          comercio: row.comercio,
-          carpeta_existe: fs.existsSync(sessionPath),
-          carpeta_default_existe: fs.existsSync(defaultPath),
-          sesion_activa: !!sessions[id],
-          errores_acumulados: sessionErrors[id] || 0,
-          bloqueado: (sessionErrors[id] || 0) >= 3,
-          es_restaurable: false
-        };
-        
-        if (fs.existsSync(defaultPath)) {
-          const archivos = fs.readdirSync(defaultPath);
-          const tieneLocalStorage = archivos.some(a => a.toLowerCase().includes('local storage'));
-          const tieneOtros = archivos.some(a => a.toLowerCase().includes('preferences') || a.toLowerCase().includes('indexeddb'));
-          clienteInfo.es_restaurable = tieneLocalStorage && tieneOtros;
-          clienteInfo.total_archivos = archivos.length;
-        }
-        
-        diagnostico.clientes.push(clienteInfo);
-      }
-    }
-    
-    res.json(diagnostico);
-  } catch (err) {
-    console.error("❌ Error en diagnóstico:", err);
-    res.status(500).json({ error: "Error generando diagnóstico", details: err.message });
-  }
-});
-
-app.post("/enviar-mensaje", async (req, res) => {
-  const { cliente_id, telefono, mensaje } = req.body;
-  const session = sessions[String(cliente_id)];
-  if (!session) return res.status(404).json({ error: "Sesión no encontrada para este cliente" });
-
-  try {
-    const state = await session.getConnectionState();
-    if (state !== "CONNECTED") return res.status(400).json({ error: `Sesión no conectada (estado: ${state})` });
-    await session.sendText(`${telefono}@c.us`, mensaje);
-    res.json({ status: "mensaje enviado" });
-  } catch (err) {
-    console.error("❌ Error enviando mensaje:", err);
-    res.status(500).json({ error: "Error al enviar mensaje" });
-  }
-});
-
-app.get("/estado-sesiones", async (req, res) => {
-  const estados = [];
-  try {
-    const result = await pool.query("SELECT id, nombre, comercio FROM tenants");
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    
-    for (const cliente of result.rows) {
-      const clienteId = String(cliente.id);
-      let estado = "NO_INICIADA";
-      let tieneArchivos = false;
-      
-      // Verificar si tiene archivos de sesión en disco
-      const sessionPath = path.join(sessionDir, clienteId);
-      if (fs.existsSync(sessionPath)) {
-        const defaultPath = path.join(sessionPath, "Default");
-        tieneArchivos = fs.existsSync(defaultPath);
-      }
-      
-      // También verificar en /app/tokens si no se encuentra en la ruta local
-      if (!tieneArchivos && fs.existsSync(`/app/tokens/${clienteId}`)) {
-        const defaultPath = path.join(`/app/tokens/${clienteId}`, "Default");
-        tieneArchivos = fs.existsSync(defaultPath);
-      }
-      
-      if (sessions[clienteId]) {
-        try {
-          const estadoRaw = await sessions[clienteId].getConnectionState();
-          const isConnected = await sessions[clienteId].isConnected();
-          
-          // Normalizar estado según lo que espera el admin panel
-          if (estadoRaw === 'CONNECTED' || isConnected === true) {
-            estado = 'CONNECTED';
-          } else if (estadoRaw === 'DISCONNECTED' || estadoRaw === 'UNPAIRED' || estadoRaw === 'UNLAUNCHED') {
-            estado = 'DISCONNECTED';
-          } else if (estadoRaw === 'TIMEOUT') {
-            estado = 'TIMEOUT';
-          } else {
-            // Para cualquier otro estado, mostrar como desconectado pero con el valor real
-            estado = estadoRaw || 'DISCONNECTED';
-          }
-          
-          console.log(`📊 Cliente ${clienteId}: estadoRaw="${estadoRaw}", isConnected=${isConnected}, estadoFinal="${estado}"`);
-        } catch (err) {
-          estado = "ERROR";
-          console.error(`❌ Error obteniendo estado de ${clienteId}:`, err.message);
-        }
-      } else if (tieneArchivos) {
-        estado = "ARCHIVOS_DISPONIBLES";
-      }
-      
-      estados.push({ 
-        clienteId, 
-        nombre: cliente.nombre, 
-        comercio: cliente.comercio, 
-        estado,
-        tieneArchivos,
-        enMemoria: !!sessions[clienteId]
-      });
-    }
-    res.json(estados);
-  } catch (error) {
-    console.error("❌ Error consultando clientes:", error);
-    res.status(500).json({ error: "Error consultando clientes" });
-  }
-});
-
-app.get("/restaurar/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  try {
-    console.log(`🔄 Forzando restauración de sesión para cliente ${clienteId}...`);
-    
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    let sessionPath = path.join(sessionDir, clienteId);
-    
-    // Si no existe en la ruta local, buscar en /app/tokens
-    if (!fs.existsSync(sessionPath) && fs.existsSync(`/app/tokens/${clienteId}`)) {
-      sessionPath = `/app/tokens/${clienteId}`;
-      console.log(`📁 Usando ruta alternativa: ${sessionPath}`);
-    }
-    
-    if (!fs.existsSync(sessionPath)) {
-      return res.status(404).json({ 
-        error: "No se encontraron archivos de sesión para este cliente",
-        requiereQR: true 
-      });
-    }
-    
-    // Cerrar sesión actual si existe
-    if (sessions[clienteId]) {
-      try {
-        await sessions[clienteId].close();
-      } catch (e) {
-        console.log("No se pudo cerrar la sesión anterior:", e.message);
-      }
-      delete sessions[clienteId];
-    }
-    
-    // Configurar la ruta de sesión temporalmente
-    const originalSessionFolder = process.env.SESSION_FOLDER;
-    process.env.SESSION_FOLDER = path.dirname(sessionPath);
-    
-    try {
-      // Restaurar desde archivos del disco
-      await crearSesion(clienteId, false);
-      
-      // Verificar estado después de restaurar
-      let estado = "UNKNOWN";
-      if (sessions[clienteId]) {
-        try {
-          // Esperar un poco para que la sesión se establezca
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          estado = await sessions[clienteId].getConnectionState();
-        } catch (err) {
-          estado = "ERROR";
-        }
-      }
-      
-      res.json({ 
-        success: true, 
-        mensaje: `Sesión restaurada para cliente ${clienteId}`,
-        estado: estado,
-        rutaUsada: sessionPath
-      });
-    } finally {
-      // Restaurar la configuración original
-      if (originalSessionFolder) {
-        process.env.SESSION_FOLDER = originalSessionFolder;
-      } else {
-        delete process.env.SESSION_FOLDER;
-      }
-    }
-  } catch (error) {
-    console.error("❌ Error restaurando sesión:", error);
-    res.status(500).json({ 
-      error: "Error al restaurar sesión",
-      details: error.message 
-    });
-  }
-});
-
-app.get("/debug/cliente/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  
-  try {
-    console.log(`🔍 Diagnóstico detallado para cliente ${clienteId}...`);
-    
-    const diagnostico = {
-      clienteId,
-      timestamp: new Date().toISOString(),
-      baseDatos: {},
-      carpetas: {},
-      sesionMemoria: {},
-      venom: {}
-    };
-    
-    // 1. Verificar en base de datos
-    try {
-      const result = await pool.query("SELECT id, nombre, comercio FROM tenants WHERE id = $1", [clienteId]);
-      diagnostico.baseDatos = {
-        existe: result.rows.length > 0,
-        datos: result.rows[0] || null
-      };
-    } catch (err) {
-      diagnostico.baseDatos = { error: err.message };
-    }
-    
-    // 2. Verificar carpetas en disco
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const rutasVerificar = [
-      path.join(sessionDir, clienteId),
-      `/app/tokens/${clienteId}`
-    ];
-    
-    diagnostico.carpetas.rutas = {};
-    for (const ruta of rutasVerificar) {
-      const existe = fs.existsSync(ruta);
-      diagnostico.carpetas.rutas[ruta] = {
-        existe,
-        archivos: existe ? fs.readdirSync(ruta) : [],
-        defaultFolder: existe ? fs.existsSync(path.join(ruta, 'Default')) : false
-      };
-      
-      if (existe) {
-        const defaultPath = path.join(ruta, 'Default');
-        if (fs.existsSync(defaultPath)) {
-          diagnostico.carpetas.rutas[ruta].defaultFiles = fs.readdirSync(defaultPath);
-          
-          // Verificar archivos importantes de WhatsApp
-          const archivosImportantes = [
-            'Local Storage',
-            'Session Storage', 
-            'IndexedDB',
-            'Preferences'
-          ];
-          
-          diagnostico.carpetas.rutas[ruta].archivosImportantes = {};
-          for (const archivo of archivosImportantes) {
-            const archivoPath = path.join(defaultPath, archivo);
-            diagnostico.carpetas.rutas[ruta].archivosImportantes[archivo] = fs.existsSync(archivoPath);
-          }
-        }
-      }
-    }
-    
-    // 3. Verificar sesión en memoria
-    diagnostico.sesionMemoria = {
-      existe: !!sessions[clienteId],
-      tipo: sessions[clienteId] ? typeof sessions[clienteId] : null
-    };
-    
-    if (sessions[clienteId]) {
-      try {
-        const estado = await sessions[clienteId].getConnectionState();
-        diagnostico.sesionMemoria.estado = estado;
-        
-        const isConnected = await sessions[clienteId].isConnected();
-        diagnostico.sesionMemoria.conectado = isConnected;
-        
-        // Intentar obtener información de la sesión
-        try {
-          const hostDevice = await sessions[clienteId].getHostDevice();
-          diagnostico.sesionMemoria.dispositivo = hostDevice;
-        } catch (e) {
-          diagnostico.sesionMemoria.dispositivo = `Error: ${e.message}`;
-        }
-        
-      } catch (err) {
-        diagnostico.sesionMemoria.error = err.message;
-      }
-    }
-    
-    // 4. Verificar si Venom puede detectar la sesión
-    try {
-      // Simular las opciones que usaría venom
-      const carpetaEncontrada = rutasVerificar.find(ruta => fs.existsSync(ruta));
-      
-      if (carpetaEncontrada) {
-        diagnostico.venom = {
-          carpetaDetectada: carpetaEncontrada,
-          puedeRestaurar: fs.existsSync(path.join(carpetaEncontrada, 'Default')),
-          configuracion: {
-            session: clienteId,
-            userDataDir: carpetaEncontrada,
-            browserArgs: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox', 
-              '--disable-dev-shm-usage'
-            ]
-          }
-        };
-      } else {
-        diagnostico.venom = {
-          carpetaDetectada: null,
-          puedeRestaurar: false,
-          requiereQR: true
-        };
-      }
-    } catch (err) {
-      diagnostico.venom = { error: err.message };
-    }
-    
-    console.log(`📋 Diagnóstico completo para cliente ${clienteId}:`, JSON.stringify(diagnostico, null, 2));
-    
-    res.json(diagnostico);
-    
-  } catch (error) {
-    console.error(`❌ Error en diagnóstico de cliente ${clienteId}:`, error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete("/limpiar-huerfanas", async (req, res) => {
-  try {
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    if (!fs.existsSync(sessionDir)) {
-      return res.json({ mensaje: "No existe carpeta de sesiones", eliminadas: [] });
-    }
-    
-    // Obtener clientes válidos de la DB
-    const result = await pool.query("SELECT id FROM tenants");
-    const clientesValidos = result.rows.map(r => String(r.id));
-    
-    // Encontrar carpetas huérfanas
-    const carpetas = fs.readdirSync(sessionDir).filter(item => {
-      const itemPath = path.join(sessionDir, item);
-      return fs.statSync(itemPath).isDirectory() && !isNaN(item);
-    });
-    
-    const carpetasHuerfanas = carpetas.filter(c => !clientesValidos.includes(c));
-    const eliminadas = [];
-    
-    for (const carpeta of carpetasHuerfanas) {
-      try {
-        const carpetaPath = path.join(sessionDir, carpeta);
-        console.log(`🗑️ Eliminando carpeta huérfana: ${carpetaPath}`);
-        
-        // Cerrar sesión si está activa
-        if (sessions[carpeta]) {
-          await sessions[carpeta].close();
-          delete sessions[carpeta];
-        }
-        
-        // Eliminar carpeta recursivamente
-        fs.rmSync(carpetaPath, { recursive: true, force: true });
-        eliminadas.push(carpeta);
-        console.log(`✅ Carpeta ${carpeta} eliminada`);
-      } catch (err) {
-        console.error(`❌ Error eliminando carpeta ${carpeta}:`, err);
-      }
-    }
-    
-    res.json({
-      mensaje: `Limpieza completada. ${eliminadas.length} carpetas eliminadas.`,
-      carpetas_eliminadas: eliminadas,
-      clientes_validos: clientesValidos
-    });
-  } catch (err) {
-    console.error("❌ Error limpiando carpetas huérfanas:", err);
-    res.status(500).json({ error: "Error limpiando carpetas" });
-  }
-});
-
-app.post("/forzar-nueva-sesion/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  
-  try {
-    console.log(`🔄 Forzando nueva sesión para cliente ${clienteId}...`);
-    
-    // 1. Verificar que el cliente existe en la base de datos
-    try {
-      const result = await pool.query("SELECT id, comercio FROM tenants WHERE id = $1", [clienteId]);
-      if (result.rows.length === 0) {
-        return res.status(404).json({ 
-          error: `Cliente ${clienteId} no existe en la base de datos`,
-          accion: "verificar_cliente"
-        });
-      }
-      console.log(`✅ Cliente ${clienteId} encontrado en BD: ${result.rows[0].comercio}`);
-    } catch (dbError) {
-      console.error(`❌ Error verificando cliente en BD: ${dbError.message}`);
-      // Continuar anyway si hay problemas de BD
-    }
-    
-    // 2. Cerrar sesión existente si está en memoria
-    if (sessions[clienteId]) {
-      console.log(`🔒 Cerrando sesión existente en memoria para ${clienteId}...`);
-      try {
-        await sessions[clienteId].close();
-        console.log(`✅ Sesión en memoria cerrada para ${clienteId}`);
-      } catch (closeError) {
-        console.log(`⚠️ Error cerrando sesión: ${closeError.message}`);
-      }
-      delete sessions[clienteId];
-    }
-    
-    // 3. Limpiar archivos de sesión existentes si los hay
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const rutasLimpiar = [
-      path.join(sessionDir, clienteId),
-      `/app/tokens/${clienteId}`
-    ];
-    
-    for (const rutaLimpiar of rutasLimpiar) {
-      if (fs.existsSync(rutaLimpiar)) {
-        console.log(`🗑️ Eliminando carpeta de sesión: ${rutaLimpiar}`);
-        try {
-          fs.rmSync(rutaLimpiar, { recursive: true, force: true });
-          console.log(`✅ Carpeta eliminada: ${rutaLimpiar}`);
-        } catch (deleteError) {
-          console.log(`⚠️ Error eliminando carpeta: ${deleteError.message}`);
-        }
-      }
-    }
-    
-    // 4. Limpiar QR en base de datos
-    try {
-      await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [clienteId]);
-      console.log(`✅ QR limpiado en base de datos para cliente ${clienteId}`);
-    } catch (dbError) {
-      console.log(`⚠️ Error limpiando QR en BD: ${dbError.message}`);
-    }
-    
-    // 5. Crear nueva sesión desde cero
-    console.log(`🚀 Creando nueva sesión desde cero para cliente ${clienteId}...`);
-    
-    try {
-      await crearSesionConTimeout(clienteId, 45000, true); // 45 segundos timeout, generar QR
-      
-      // Verificar que el QR se haya generado
-      const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-      const qrPath = path.join(sessionDir, `${clienteId}.html`);
-      
-      let qrGenerado = false;
-      let qrEnDB = false;
-      
-      // Verificar archivo QR
-      if (fs.existsSync(qrPath)) {
-        qrGenerado = true;
-        console.log(`✅ Archivo QR generado para cliente ${clienteId}`);
-      }
-      
-      // Verificar QR en base de datos
-      try {
-        const qrCheck = await pool.query("SELECT qr_code FROM tenants WHERE id = $1", [clienteId]);
-        if (qrCheck.rows.length > 0 && qrCheck.rows[0].qr_code) {
-          qrEnDB = true;
-          console.log(`✅ QR guardado en base de datos para cliente ${clienteId}`);
-        }
-      } catch (dbError) {
-        console.log(`⚠️ Error verificando QR en DB: ${dbError.message}`);
-      }
-      
-      const response = {
-        success: true,
-        mensaje: `Nueva sesión creada para cliente ${clienteId}`,
-        accion: "escanear_qr",
-        qr_url: `/qr/${clienteId}`,
-        timestamp: new Date().toISOString(),
-        verificacion: {
-          qr_archivo_generado: qrGenerado,
-          qr_guardado_en_db: qrEnDB,
-          ruta_qr: qrPath
-        }
-      };
-      
-      console.log(`✅ Nueva sesión creada exitosamente para cliente ${clienteId}`);
-      res.json(response);
-      
-    } catch (createError) {
-      console.error(`❌ Error creando nueva sesión: ${createError.message}`);
-      res.status(500).json({
-        error: "Error creando nueva sesión",
-        details: createError.message,
-        accion: "reintentar",
-        qr_url: `/qr/${clienteId}` // Intentar mostrar QR anyway
-      });
-    }
-    
-  } catch (error) {
-    console.error(`❌ Error en forzar-nueva-sesion para ${clienteId}:`, error);
-    res.status(500).json({ 
-      error: "Error interno del servidor",
-      details: error.message 
-    });
-  }
-});
-
-app.post("/test-mensaje/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  const { telefono, mensaje } = req.body;
-  
-  if (!sessions[clienteId]) {
-    return res.status(404).json({ error: "Sesión no encontrada" });
-  }
-  
-  try {
-    console.log(`🧪 Enviando mensaje de prueba desde cliente ${clienteId} a ${telefono}: "${mensaje}"`);
-    
-    // Verificar estado de la sesión
-    const isConnected = await sessions[clienteId].isConnected();
-    const connectionState = await sessions[clienteId].getConnectionState();
-    
-    console.log(`📊 Estado de sesión ${clienteId}:`, { isConnected, connectionState });
-    
-    if (!isConnected) {
-      return res.status(400).json({ 
-        error: "Sesión no conectada", 
-        estado: connectionState,
-        conectado: isConnected 
-      });
-    }
-    
-    // Simular mensaje recibido (para probar el handler)
-    const fakeMessage = {
-      from: `${telefono}@c.us`,
-      body: mensaje,
-      type: 'chat'
-    };
-    
-    console.log(`🎭 Simulando mensaje recibido:`, fakeMessage);
-    
-    // Llamar manualmente al handler
-    try {
-      const backendResponse = await axios.post(
-        "https://backend-agenda-2.onrender.com/api/webhook",
-        {
-          telefono,
-          mensaje,
-          cliente_id: clienteId
-        }
-      );
-      
-      console.log(`🔗 Respuesta del backend para test:`, backendResponse.data);
-      
-      const respuesta = backendResponse.data && backendResponse.data.mensaje;
-      if (respuesta) {
-        console.log(`💬 Enviando respuesta de prueba a ${telefono}: "${respuesta}"`);
-        await sessions[clienteId].sendText(`${telefono}@c.us`, respuesta);
-        console.log(`✅ Mensaje de prueba enviado exitosamente`);
-        
-        res.json({ 
-          success: true, 
-          mensaje: "Mensaje de prueba enviado exitosamente",
-          respuesta_backend: backendResponse.data,
-          respuesta_enviada: respuesta
-        });
-      } else {
-        res.json({ 
-          success: false, 
-          mensaje: "Backend no devolvió respuesta",
-          respuesta_backend: backendResponse.data 
-        });
-      }
-    } catch (backendErr) {
-      console.error("❌ Error en test del backend:", backendErr.message);
-      res.status(500).json({ 
-        error: "Error comunicándose con el backend",
-        details: backendErr.message,
-        response: backendErr.response ? backendErr.response.data : null
-      });
-    }
-    
-  } catch (err) {
-    console.error(`❌ Error en test de mensaje para cliente ${clienteId}:`, err);
-    res.status(500).json({ error: "Error interno", details: err.message });
-  }
-});
-
-app.post("/notificar-chat-humano", async (req, res) => {
-  try {
-    const { cliente_id, telefono, mensaje, tipo } = req.body;
-    
-    if (!cliente_id || !telefono) {
-      return res.status(400).json({ error: "cliente_id y telefono son requeridos" });
-    }
-    
-    console.log(`🚨 ==========================================`);
-    console.log(`🚨 ALERTA: ATENCIÓN HUMANA REQUERIDA`);
-    console.log(`🚨 ==========================================`);
-    console.log(`📞 Cliente ID: ${cliente_id}`);
-    console.log(`📱 Teléfono: ${telefono}`);
-    console.log(`💬 Último mensaje: ${mensaje}`);
-    console.log(`🔔 Tipo: ${tipo || 'solicitud_ayuda'}`);
-    console.log(`⏰ Fecha: ${new Date().toLocaleString('es-AR')}`);
-    
-    // Buscar información del cliente en la base de datos
-    let comercio = 'N/A';
-    let nombre = 'N/A';
-    try {
-      const clienteInfo = await pool.query("SELECT comercio, nombre FROM tenants WHERE id = $1", [cliente_id]);
-      if (clienteInfo.rows.length > 0) {
-        comercio = clienteInfo.rows[0].comercio || 'N/A';
-        nombre = clienteInfo.rows[0].nombre || 'N/A';
-        console.log(`🏢 Comercio: ${comercio}`);
-        console.log(`👤 Contacto: ${nombre}`);
-      }
-    } catch (err) {
-      console.log(`⚠️ No se pudo obtener info del cliente: ${err.message}`);
-    }
-    
-    console.log(`🚨 ==========================================`);
-    console.log(`💡 El usuario puede escribir "Bot" para volver al asistente virtual`);
-    console.log(`🚨 ==========================================`);
-    
-    // Nota: Autonotificación removida como se solicitó
-    console.log(`ℹ️ Notificación registrada. El administrador debe monitorear manualmente las solicitudes de ayuda.`);
-    
-    res.json({ 
-      success: true, 
-      mensaje: "Notificación de chat humano registrada",
-      cliente_id,
-      telefono,
-      action: "logged_only",
-      nota: "Autonotificación deshabilitada"
-    });
-  } catch (error) {
-    console.error("❌ Error procesando notificación de chat humano:", error);
-    res.status(500).json({ error: "Error procesando notificación", details: error.message });
-  }
-});
-
-// Endpoint de salud para verificar estado de sesiones
-app.get("/health", async (req, res) => {
-  try {
-    const estadoSesiones = {};
-    
-    for (const clienteId in sessions) {
-      try {
-        const isConnected = await verificarEstadoSesion(clienteId);
-        const state = sessions[clienteId] ? await sessions[clienteId].getConnectionState() : 'NO_SESSION';
-        
-        estadoSesiones[clienteId] = {
-          conectada: isConnected,
-          estado: state,
-          existe: !!sessions[clienteId]
-        };
-      } catch (e) {
-        estadoSesiones[clienteId] = {
-          conectada: false,
-          estado: 'ERROR',
-          existe: !!sessions[clienteId],
-          error: e.message
-        };
-      }
-    }
-    
-    const totalSesiones = Object.keys(sessions).length;
-    const sesionesConectadas = Object.values(estadoSesiones).filter(s => s.conectada).length;
-    
-    res.json({
-      status: "healthy",
-      timestamp: new Date().toISOString(),
-      sesiones: {
-        total: totalSesiones,
-        conectadas: sesionesConectadas,
-        desconectadas: totalSesiones - sesionesConectadas,
-        detalle: estadoSesiones
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: "unhealthy",
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// Endpoint para reconectar una sesión específica
-app.post("/reconectar/:clienteId", async (req, res) => {
-  const clienteId = req.params.clienteId;
-  
-  try {
-    console.log(`🔄 Solicitud manual de reconexión para sesión ${clienteId}`);
-    
-    // Verificar que el cliente existe en la DB
-    const cliente = await pool.query("SELECT id, comercio FROM tenants WHERE id = $1", [clienteId]);
-    if (cliente.rows.length === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado en la base de datos" });
-    }
-    
-    await reconectarSesion(clienteId);
-    
-    res.json({
-      success: true,
-      message: `Reconexión iniciada para sesión ${clienteId}`,
-      cliente: cliente.rows[0].comercio
-    });
-  } catch (error) {
-    console.error(`❌ Error en reconexión manual ${clienteId}:`, error);
-    res.status(500).json({
-      error: "Error iniciando reconexión",
-      details: error.message
-    });
-  }
-});
-
-app.post("/generar-qr/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  
-  try {
-    console.log(`🎯 Solicitud específica de generación QR para cliente ${clienteId}...`);
-    
-    // 1. Verificar que el cliente existe en la base de datos
-    try {
-      const result = await pool.query("SELECT id, comercio FROM tenants WHERE id = $1", [clienteId]);
-      if (result.rows.length === 0) {
-        return res.status(404).json({ 
-          error: `Cliente ${clienteId} no existe en la base de datos`,
-          success: false
-        });
-      }
-      console.log(`✅ Cliente ${clienteId} encontrado: ${result.rows[0].comercio}`);
-    } catch (dbError) {
-      console.error(`❌ Error verificando cliente en BD: ${dbError.message}`);
-      return res.status(500).json({ error: "Error verificando cliente en base de datos" });
-    }
-    
-    // 2. Resetear contador de errores para permitir nueva generación
-    sessionErrors[clienteId] = 0;
-    
-    // 3. Cerrar sesión existente si está en memoria
-    if (sessions[clienteId]) {
-      console.log(`🔒 Cerrando sesión existente para regenerar QR ${clienteId}...`);
-      try {
-        await sessions[clienteId].close();
-        console.log(`✅ Sesión cerrada para ${clienteId}`);
-      } catch (closeError) {
-        console.log(`⚠️ Error cerrando sesión: ${closeError.message}`);
-      }
-      delete sessions[clienteId];
-    }
-    
-    // 4. Limpiar archivos de sesión existentes
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const rutasLimpiar = [
-      path.join(sessionDir, clienteId),
-      `/app/tokens/${clienteId}`
-    ];
-    
-    for (const rutaLimpiar of rutasLimpiar) {
-      if (fs.existsSync(rutaLimpiar)) {
-        console.log(`🗑️ Eliminando carpeta de sesión: ${rutaLimpiar}`);
-        try {
-          fs.rmSync(rutaLimpiar, { recursive: true, force: true });
-          console.log(`✅ Carpeta eliminada: ${rutaLimpiar}`);
-        } catch (deleteError) {
-          console.log(`⚠️ Error eliminando carpeta: ${deleteError.message}`);
-        }
-      }
-    }
-    
-    // 5. Generar nuevo QR
-    console.log(`🚀 Generando nuevo QR para cliente ${clienteId}...`);
-    
-    await crearSesionConTimeout(clienteId, 30000, true); // Solo 30 segundos, generar QR
-    
-    // 6. Verificar que el QR se haya generado
-    const qrPath = path.join(sessionDir, `${clienteId}.html`);
-    
-    let qrGenerado = false;
-    let qrEnDB = false;
-    
-    // Verificar archivo QR
-    if (fs.existsSync(qrPath)) {
-      qrGenerado = true;
-      console.log(`✅ Archivo QR generado para cliente ${clienteId}`);
-    }
-    
-    // Verificar QR en base de datos
-    try {
-      const qrCheck = await pool.query("SELECT qr_code FROM tenants WHERE id = $1", [clienteId]);
-      if (qrCheck.rows.length > 0 && qrCheck.rows[0].qr_code) {
-        qrEnDB = true;
-        console.log(`✅ QR guardado en base de datos para cliente ${clienteId}`);
-      }
-    } catch (dbError) {
-      console.log(`⚠️ Error verificando QR en DB: ${dbError.message}`);
-    }
-    
-    res.json({
-      success: true,
-      mensaje: `QR generado exitosamente para cliente ${clienteId}`,
-      cliente_id: clienteId,
-      qr_url: `/qr/${clienteId}`,
-      timestamp: new Date().toISOString(),
-      verificacion: {
-        qr_archivo_generado: qrGenerado,
-        qr_guardado_en_db: qrEnDB,
-        ruta_qr: qrPath
-      }
-    });
-    
-  } catch (error) {
-    console.error(`❌ Error generando QR para ${clienteId}:`, error);
-    res.status(500).json({
-      success: false,
-      error: "Error generando QR",
-      details: error.message,
-      cliente_id: clienteId
-    });
-  }
-});
-
-app.post("/reset-errores/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  
-  try {
-    const erroresAnteriores = sessionErrors[clienteId] || 0;
-    sessionErrors[clienteId] = 0;
-    
-    console.log(`🔄 Contador de errores reseteado para cliente ${clienteId} (era: ${erroresAnteriores})`);
-    
-    res.json({
-      success: true,
-      mensaje: `Contador de errores reseteado para cliente ${clienteId}`,
-      errores_anteriores: erroresAnteriores,
-      cliente_id: clienteId
-    });
-  } catch (error) {
-    console.error(`❌ Error reseteando errores para ${clienteId}:`, error);
-    res.status(500).json({
-      success: false,
-      error: "Error reseteando contador de errores",
-           details: error.message
-    });
-  }
-});
-
-app.post("/limpiar-locks/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  
-  try {
-    console.log(`🧹 Limpiando archivos de bloqueo para cliente ${clienteId}...`);
-    
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const sessionPath = path.join(sessionDir, clienteId);
-    const singletonLockPath = path.join(sessionPath, "SingletonLock");
-    
-    let archivosLimpiados = [];
-    
-    // Limpiar SingletonLock
-    if (fs.existsSync(singletonLockPath)) {
-      try {
-        fs.unlinkSync(singletonLockPath);
-        archivosLimpiados.push("SingletonLock");
-        console.log(`🔓 Archivo SingletonLock eliminado para cliente ${clienteId}`);
-      } catch (e) {
-        console.log(`⚠️ Error eliminando SingletonLock: ${e.message}`);
-      }
-    }
-    
-    // También buscar en /app/tokens si es diferente
-    if (fs.existsSync(`/app/tokens/${clienteId}`)) {
-      const altSingletonPath = path.join(`/app/tokens/${clienteId}`, "SingletonLock");
-      if (fs.existsSync(altSingletonPath)) {
-        try {
-          fs.unlinkSync(altSingletonPath);
-          archivosLimpiados.push("SingletonLock (alternativo)");
-          console.log(`🔓 Archivo SingletonLock alternativo eliminado para cliente ${clienteId}`);
-        } catch (e) {
-          console.log(`⚠️ Error eliminando SingletonLock alternativo: ${e.message}`);
-        }
-      }
-    }
-    
-    res.json({
-      success: true,
-      mensaje: `Archivos de bloqueo limpiados para cliente ${clienteId}`,
-      archivos_limpiados: archivosLimpiados,
-      cliente_id: clienteId
-    });
-    
-  } catch (error) {
-    console.error(`❌ Error limpiando locks para ${clienteId}:`, error);
-    res.status(500).json({
-      success: false,
-      error: "Error limpiando archivos de bloqueo",
-      details: error.message
-    });
-  }
-});
-
-app.get("/debug/errores", (req, res) => {
-  res.json({
-    session_errors: sessionErrors,
-    total_clientes_con_errores: Object.keys(sessionErrors).length,
-    clientes_bloqueados: Object.entries(sessionErrors)
-      .filter(([clienteId, errores]) => errores >= 5)
-      .map(([clienteId, errores]) => ({ clienteId, errores }))
-  });
-});
-
-// **NUEVO ENDPOINT DE DEBUG DETALLADO**
-app.get("/debug/estados", async (req, res) => {
-  const debug = {
-    sesiones_memoria: {},
-    tenants_bd: [],
-    diagnostico_detallado: []
-  };
-  
-  try {
-    // Información de sesiones en memoria
-    for (const [clienteId, session] of Object.entries(sessions)) {
-      debug.sesiones_memoria[clienteId] = {
-        existe: !!session,
-        tipo: typeof session,
-        es_objeto: session && typeof session === 'object'
-      };
-      
-      if (session) {
-        try {
-          // Probar diferentes métodos para verificar estado
-          const estado = await session.getConnectionState();
-          const isConnected = await session.isConnected();
-          
-          debug.sesiones_memoria[clienteId].estado = estado;
-          debug.sesiones_memoria[clienteId].isConnected = isConnected;
-          debug.sesiones_memoria[clienteId].metodos_disponibles = Object.getOwnPropertyNames(Object.getPrototypeOf(session));
-        } catch (err) {
-          debug.sesiones_memoria[clienteId].error = err.message;
-        }
-      }
-    }
-    
-    // Información de tenants en BD
-    const result = await pool.query("SELECT id, nombre, comercio FROM tenants ORDER BY id");
-    debug.tenants_bd = result.rows;
-    
-    // Diagnóstico detallado por cliente
-    for (const cliente of result.rows) {
-      const clienteId = String(cliente.id);
-      const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-      
-      const diag = {
-        clienteId,
-        nombre: cliente.nombre,
-        comercio: cliente.comercio,
-        sesion_en_memoria: !!sessions[clienteId],
-        archivos_disco: {
-          sessionDir: sessionDir,
-          carpeta_existe: false,
-          default_existe: false,
-          singleton_lock_existe: false
-       
-        },
-        estado_final: "NO_INICIADA"
-      };
-      
-      // Verificar archivos en disco (ruta local)
-      const sessionPath = path.join(sessionDir, clienteId);
-      if (fs.existsSync(sessionPath)) {
-        diag.archivos_disco.carpeta_existe = true;
-        const defaultPath = path.join(sessionPath, "Default");
-        const singletonPath = path.join(sessionPath, "SingletonLock");
-        diag.archivos_disco.default_existe = fs.existsSync(defaultPath);
-        diag.archivos_disco.singleton_lock_existe = fs.existsSync(singletonPath);
-      }
-      
-      // También verificar en /app/tokens
-      const appTokensPath = `/app/tokens/${clienteId}`;
-      if (fs.existsSync(appTokensPath)) {
-        diag.archivos_disco.app_tokens = {
-          carpeta_existe: true,
-          default_existe: fs.existsSync(path.join(appTokensPath, "Default")),
-          singleton_lock_existe: fs.existsSync(path.join(appTokensPath, "SingletonLock"))
-        };
-      }
-      
-      // Determinar estado
-      if (sessions[clienteId]) {
-        try {
-          diag.estado_final = await sessions[clienteId].getConnectionState();
-          diag.is_connected = await sessions[clienteId].isConnected();
-        } catch (err) {
-          diag.estado_final = "ERROR";
-          diag.error_estado = err.message;
-        }
-      } else if (diag.archivos_disco.default_existe || (diag.archivos_disco.app_tokens && diag.archivos_disco.app_tokens.default_existe)) {
-        diag.estado_final = "ARCHIVOS_DISPONIBLES";
-      }
-      
-      debug.diagnostico_detallado.push(diag);
-    }
-    
-    res.json(debug);
-  } catch (error) {
-    console.error("❌ Error en debug de estados:", error);
-    res.status(500).json({ error: error.message, stack: error.stack });
-  }
-});
-
-// **NUEVA FUNCIÓN: Crear carpetas automáticamente para clientes sin sesión**
-async function crearCarpetasAutomaticamente() {
-  console.log("🏗️ Verificando y creando carpetas para clientes sin sesión...");
-  
-  try {
-    // Obtener clientes de la base de datos
-    const result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
-    const clientesActivos = result.rows.map(row => String(row.id));
-    
-    if (clientesActivos.length === 0) {
-      console.log("⚠️ No hay clientes en la base de datos");
-      return;
-    }
-    
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const productionPath = "/app/tokens";
-    
-    // Usar la ruta de producción si existe, sino la local
-    const basePath = fs.existsSync(productionPath) ? productionPath : sessionDir;
-    
-    // Asegurar que la carpeta base existe
-    if (!fs.existsSync(basePath)) {
-      fs.mkdirSync(basePath, { recursive: true });
-      console.log(`📁 Carpeta base creada: ${basePath}`);
-    }
-    
-    let carpetasCreadas = 0;
-    
-    for (const clienteId of clientesActivos) {
-      const carpetaCliente = path.join(basePath, clienteId);
-      
-      if (!fs.existsSync(carpetaCliente)) {
-        try {
-          // Crear carpeta del cliente
-          fs.mkdirSync(carpetaCliente, { recursive: true });
-          
-          // Crear estructura básica de Chrome
-          const defaultPath = path.join(carpetaCliente, "Default");
-          fs.mkdirSync(defaultPath, { recursive: true });
-          
-          // Crear archivo básico de configuración para que Chrome reconozca la sesión
-          const preferencesFile = path.join(defaultPath, "Preferences");
-          const basicPreferences = {
-            "profile": {
-              "name": `WhatsApp-${clienteId}`,
-              "default_content_setting_values": {
-                "notifications": 1
-              }
-            },
-            "whatsapp": {
-              "client_id": clienteId,
-              "created_at": new Date().toISOString()
-            }
-          };
-          
-          fs.writeFileSync(preferencesFile, JSON.stringify(basicPreferences, null, 2));
-          
-          console.log(`📁 Carpeta creada para cliente ${clienteId}: ${carpetaCliente}`);
-          carpetasCreadas++;
-          
-        } catch (err) {
-          console.error(`❌ Error creando carpeta para cliente ${clienteId}:`, err.message);
-        }
-      }
-    }
-    
-    if (carpetasCreadas > 0) {
-      console.log(`✅ Se crearon ${carpetasCreadas} carpetas nuevas`);
-    } else {
-      console.log("✅ Todas las carpetas ya existen");
-    }
-    
-  } catch (err) {
-    console.error("❌ Error creando carpetas automáticamente:", err);
   }
 }
 
@@ -2395,6 +1240,140 @@ app.post("/reparar-automatico/:clienteId", async (req, res) => {
       success: false,
       error: "Error en reparación automática",
       details: err.message
+    });
+  }
+});
+
+// **NUEVA FUNCIÓN: Limpiar archivos SingletonLock más agresivamente**
+async function limpiarSingletonLock(clienteId) {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const searchPaths = [
+    path.join(sessionDir, clienteId),
+    `/app/tokens/${clienteId}`,
+    `/tmp/puppeteer_dev_chrome_profile-${clienteId}`,
+    `/tmp/.org.chromium.Chromium.${clienteId}`
+  ];
+  
+  console.log(`🧹 Limpiando archivos SingletonLock para cliente ${clienteId}...`);
+  
+  for (const searchPath of searchPaths) {
+    const singletonPath = path.join(searchPath, "SingletonLock");
+    
+    if (fs.existsSync(singletonPath)) {
+      try {
+        // Intentar eliminar el archivo
+        fs.unlinkSync(singletonPath);
+        console.log(`🔓 Eliminado SingletonLock: ${singletonPath}`);
+      } catch (err) {
+        console.error(`❌ Error eliminando SingletonLock ${singletonPath}:`, err.message);
+        
+        // Si no se puede eliminar, intentar con chmod
+        try {
+          await new Promise((resolve, reject) => {
+            require('child_process').exec(`chmod 666 "${singletonPath}" && rm -f "${singletonPath}"`, (error) => {
+              if (error) reject(error);
+              else resolve();
+            });
+          });
+          console.log(`🔓 Forzado eliminación de SingletonLock: ${singletonPath}`);
+        } catch (forceErr) {
+          console.error(`❌ Error forzando eliminación ${singletonPath}:`, forceErr.message);
+        }
+      }
+    }
+    
+    // También buscar archivos de Chrome temporales
+    if (fs.existsSync(searchPath)) {
+      try {
+        const files = fs.readdirSync(searchPath);
+        const lockFiles = files.filter(file => 
+          file.includes('SingletonLock') || 
+          file.includes('lockfile') ||
+          file.includes('.lock')
+        );
+        
+        for (const lockFile of lockFiles) {
+          const lockPath = path.join(searchPath, lockFile);
+          try {
+            fs.unlinkSync(lockPath);
+            console.log(`🔓 Eliminado archivo de bloqueo: ${lockPath}`);
+          } catch (err) {
+            console.error(`❌ Error eliminando ${lockPath}:`, err.message);
+          }
+        }
+      } catch (err) {
+        console.error(`❌ Error buscando archivos de bloqueo en ${searchPath}:`, err.message);
+      }
+    }
+  }
+  
+  // Esperar un poco para asegurar que se liberen los recursos
+  await new Promise(resolve => setTimeout(resolve, 1000));
+}
+
+// ...existing code...
+
+app.post("/reiniciar-sesion/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🔄 Reiniciando sesión para cliente ${clienteId}...`);
+    
+    // 1. Verificar que el cliente existe en la base de datos
+    const result = await pool.query("SELECT id, comercio FROM tenants WHERE id = $1", [clienteId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Cliente no encontrado en la base de datos" });
+    }
+    
+    // 2. Resetear contador de errores
+    sessionErrors[clienteId] = 0;
+    delete reconnectIntervals[clienteId];
+    
+    // 3. Cerrar sesión actual si existe
+    if (sessions[clienteId]) {
+      try {
+        await sessions[clienteId].close();
+        console.log(`🔒 Sesión anterior cerrada para cliente ${clienteId}`);
+      } catch (e) {
+        console.log(`⚠️ Error cerrando sesión anterior para ${clienteId}:`, e.message);
+      }
+      delete sessions[clienteId];
+    }
+    
+    // 4. Limpiar archivos de bloqueo
+    await limpiarSingletonLock(clienteId);
+    
+    // 5. Esperar antes de crear nueva sesión
+    console.log(`⏳ Esperando 3 segundos antes de crear nueva sesión...`);
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // 6. Crear nueva sesión
+    await crearSesionConTimeout(clienteId, 45000, false); // false = no generar QR
+    
+    // 7. Verificar estado
+    let estado = "UNKNOWN";
+    if (sessions[clienteId]) {
+      try {
+        const isConnected = await sessions[clienteId].isConnected();
+        const connectionState = await sessions[clienteId].getConnectionState();
+        estado = isConnected ? "CONNECTED" : connectionState;
+      } catch (err) {
+        estado = "ERROR";
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      mensaje: `Sesión reiniciada para cliente ${clienteId}`,
+      estado: estado,
+      errores_reseteados: true
+    });
+    
+  } catch (error) {
+    console.error(`❌ Error reiniciando sesión para cliente ${clienteId}:`, error);
+    res.status(500).json({ 
+      error: "Error al reiniciar sesión",
+      details: error.message 
     });
   }
 });
