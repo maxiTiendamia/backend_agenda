@@ -18,6 +18,55 @@ const sessions = {};
 const reconnectIntervals = {}; // Para manejar intervalos de reconexión
 const sessionErrors = {}; // Para rastrear errores por sesión y evitar bucles infinitos
 
+// **NUEVA FUNCIÓN: Verificar conectividad del backend**
+async function verificarConectividadBackend() {
+  try {
+    console.log("🔍 Verificando conectividad del backend...");
+    const response = await axios.get("https://backend-agenda-2.onrender.com/api/webhook", {
+      timeout: 10000,
+      validateStatus: function (status) {
+        return status < 500; // Considerar OK cualquier status menor a 500
+      }
+    });
+    console.log(`✅ Backend accesible - Status: ${response.status}`);
+    return true;
+  } catch (err) {
+    console.error("❌ Error verificando conectividad del backend:", err.message);
+    if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED') {
+      console.error("🔌 Error de conexión de red al backend");
+    }
+    return false;
+  }
+}
+
+// **NUEVA FUNCIÓN: Test del webhook**
+async function testWebhook(clienteId) {
+  try {
+    console.log(`🧪 Probando webhook para cliente ${clienteId}...`);
+    const testResponse = await axios.post(
+      "https://backend-agenda-2.onrender.com/api/webhook",
+      {
+        telefono: "123456789", // Teléfono de prueba
+        mensaje: "test",
+        cliente_id: clienteId
+      },
+      { timeout: 10000 }
+    );
+    
+    console.log(`✅ Webhook test exitoso - Status: ${testResponse.status}`, testResponse.data);
+    return true;
+  } catch (err) {
+    console.error(`❌ Error en test del webhook para cliente ${clienteId}:`, err.message);
+    if (err.response) {
+      console.error("❌ Respuesta del webhook con error:", {
+        status: err.response.status,
+        data: err.response.data
+      });
+    }
+    return false;
+  }
+}
+
 // Función para verificar el estado de una sesión
 async function verificarEstadoSesion(clienteId) {
   try {
@@ -323,6 +372,19 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
         sessionErrors[sessionId] = 0; // **NUEVO: Reset contador de errores globales**
         console.log(`✅ Sesión ${sessionId} conectada exitosamente`);
         
+        // **NUEVO: Verificar que el cliente puede recibir mensajes**
+        try {
+          const isConnected = await client.isConnected();
+          const connectionState = await client.getConnectionState();
+          console.log(`🔍 Estado detallado de sesión ${sessionId}:`, {
+            isConnected,
+            connectionState,
+            canReceiveMessages: true // Asumimos que sí puede recibir mensajes si está conectado
+          });
+        } catch (verifyErr) {
+          console.error(`❌ Error verificando capacidad de recepción de mensajes ${sessionId}:`, verifyErr.message);
+        }
+        
         // **NUEVO: Guardar información de sesión inmediatamente**
         try {
           await guardarInformacionSesion(sessionId, client);
@@ -381,9 +443,18 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
     client.onMessage(async (message) => {
       try {
+        console.log(`📩 Mensaje recibido en cliente ${sessionId}:`, {
+          from: message.from,
+          body: message.body,
+          type: message.type,
+          timestamp: new Date().toISOString()
+        });
+        
         const telefono = message.from.replace("@c.us", "");
         const mensaje = message.body;
         const cliente_id = sessionId;
+
+        console.log(`🔄 Enviando al backend - Cliente: ${cliente_id}, Teléfono: ${telefono}, Mensaje: "${mensaje}"`);
 
         // Envía el mensaje al backend y espera la respuesta
         const backendResponse = await axios.post(
@@ -395,17 +466,46 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
           }
         );
 
+        console.log(`🔗 Respuesta del backend:`, {
+          status: backendResponse.status,
+          data: backendResponse.data,
+          headers: backendResponse.headers['content-type']
+        });
+
         // El backend debe responder con { mensaje: "texto a enviar" }
         const respuesta = backendResponse.data && backendResponse.data.mensaje;
         if (respuesta) {
+          console.log(`💬 Enviando respuesta a ${telefono}: "${respuesta}"`);
           await client.sendText(`${telefono}@c.us`, respuesta);
+          console.log(`✅ Respuesta enviada exitosamente a ${telefono}`);
+        } else {
+          console.log(`⚠️ Backend no devolvió mensaje para enviar. Respuesta completa:`, backendResponse.data);
         }
       } catch (err) {
         console.error("❌ Error reenviando mensaje a backend o enviando respuesta:", err);
+        if (err.response) {
+          console.error("❌ Respuesta del backend con error:", {
+            status: err.response.status,
+            data: err.response.data,
+            headers: err.response.headers
+          });
+        }
+        if (err.request) {
+          console.error("❌ Error de red/conexión:", err.request);
+        }
       }
     });
 
     console.log(`✅ Cliente venom creado para ${sessionId}`);
+    
+    // **NUEVO: Verificar conectividad del backend antes de finalizar**
+    const backendOk = await verificarConectividadBackend();
+    if (!backendOk) {
+      console.error(`⚠️ ADVERTENCIA: Backend no accesible para cliente ${sessionId}. Los mensajes pueden no procesarse.`);
+    } else {
+      // Test del webhook si el backend está accesible
+      await testWebhook(sessionId);
+    }
     
     // Si se solicitó guardar QR, verificar que se haya generado después de un tiempo
     if (permitirGuardarQR) {
@@ -934,6 +1034,56 @@ app.get("/qr/:clienteId", (req, res) => {
     res.sendFile(filePath);
   } else {
     res.status(404).send(`<h2>⚠️ Aún no se generó un QR para el cliente: ${clienteId}</h2>`);
+  }
+});
+
+app.get("/debug/sesiones", async (req, res) => {
+  try {
+    const diagnostico = {
+      timestamp: new Date().toISOString(),
+      sesiones_activas: Object.keys(sessions).length,
+      backend_disponible: await verificarConectividadBackend(),
+      sesiones: {}
+    };
+    
+    for (const [clienteId, session] of Object.entries(sessions)) {
+      try {
+        const isConnected = await session.isConnected();
+        const connectionState = await session.getConnectionState();
+        
+        diagnostico.sesiones[clienteId] = {
+          conectado: isConnected,
+          estado: connectionState,
+          errores_acumulados: sessionErrors[clienteId] || 0,
+          bloqueado: (sessionErrors[clienteId] || 0) >= 3,
+          tipo_sesion: typeof session,
+          tiene_onMessage: typeof session.onMessage === 'function'
+        };
+        
+        // Verificar si puede obtener información del dispositivo
+        try {
+          const hostDevice = await session.getHostDevice();
+          diagnostico.sesiones[clienteId].dispositivo = {
+            platform: hostDevice.platform,
+            phone: hostDevice.phone,
+            connected: hostDevice.connected
+          };
+        } catch (deviceErr) {
+          diagnostico.sesiones[clienteId].dispositivo = `Error: ${deviceErr.message}`;
+        }
+        
+      } catch (err) {
+        diagnostico.sesiones[clienteId] = {
+          error: err.message,
+          tipo_error: err.name
+        };
+      }
+    }
+    
+    res.json(diagnostico);
+  } catch (err) {
+    console.error("❌ Error en diagnóstico de sesiones:", err);
+    res.status(500).json({ error: "Error interno", details: err.message });
   }
 });
 
@@ -1506,6 +1656,87 @@ app.post("/forzar-nueva-sesion/:clienteId", async (req, res) => {
       error: "Error interno del servidor",
       details: error.message 
     });
+  }
+});
+
+app.post("/test-mensaje/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  const { telefono, mensaje } = req.body;
+  
+  if (!sessions[clienteId]) {
+    return res.status(404).json({ error: "Sesión no encontrada" });
+  }
+  
+  try {
+    console.log(`🧪 Enviando mensaje de prueba desde cliente ${clienteId} a ${telefono}: "${mensaje}"`);
+    
+    // Verificar estado de la sesión
+    const isConnected = await sessions[clienteId].isConnected();
+    const connectionState = await sessions[clienteId].getConnectionState();
+    
+    console.log(`📊 Estado de sesión ${clienteId}:`, { isConnected, connectionState });
+    
+    if (!isConnected) {
+      return res.status(400).json({ 
+        error: "Sesión no conectada", 
+        estado: connectionState,
+        conectado: isConnected 
+      });
+    }
+    
+    // Simular mensaje recibido (para probar el handler)
+    const fakeMessage = {
+      from: `${telefono}@c.us`,
+      body: mensaje,
+      type: 'chat'
+    };
+    
+    console.log(`🎭 Simulando mensaje recibido:`, fakeMessage);
+    
+    // Llamar manualmente al handler
+    try {
+      const backendResponse = await axios.post(
+        "https://backend-agenda-2.onrender.com/api/webhook",
+        {
+          telefono,
+          mensaje,
+          cliente_id: clienteId
+        }
+      );
+      
+      console.log(`🔗 Respuesta del backend para test:`, backendResponse.data);
+      
+      const respuesta = backendResponse.data && backendResponse.data.mensaje;
+      if (respuesta) {
+        console.log(`💬 Enviando respuesta de prueba a ${telefono}: "${respuesta}"`);
+        await sessions[clienteId].sendText(`${telefono}@c.us`, respuesta);
+        console.log(`✅ Mensaje de prueba enviado exitosamente`);
+        
+        res.json({ 
+          success: true, 
+          mensaje: "Mensaje de prueba enviado exitosamente",
+          respuesta_backend: backendResponse.data,
+          respuesta_enviada: respuesta
+        });
+      } else {
+        res.json({ 
+          success: false, 
+          mensaje: "Backend no devolvió respuesta",
+          respuesta_backend: backendResponse.data 
+        });
+      }
+    } catch (backendErr) {
+      console.error("❌ Error en test del backend:", backendErr.message);
+      res.status(500).json({ 
+        error: "Error comunicándose con el backend",
+        details: backendErr.message,
+        response: backendErr.response ? backendErr.response.data : null
+      });
+    }
+    
+  } catch (err) {
+    console.error(`❌ Error en test de mensaje para cliente ${clienteId}:`, err);
+    res.status(500).json({ error: "Error interno", details: err.message });
   }
 });
 
