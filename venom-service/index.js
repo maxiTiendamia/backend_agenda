@@ -644,6 +644,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
   }
 }
 
+// Función para restaurar sesiones solo desde sessionDir
 async function restaurarSesiones() {
   try {
     console.log("🔄 Iniciando restauración de sesiones...");
@@ -671,50 +672,28 @@ async function restaurarSesiones() {
     
     const clientesActivos = result.rows.map(row => String(row.id));
     
-    // Buscar carpetas de sesión existentes
+    // Buscar carpetas de sesión existentes SOLO en sessionDir
     if (!fs.existsSync(sessionDir)) {
       console.log("📁 No existe carpeta de sesiones, creándola...");
       fs.mkdirSync(sessionDir, { recursive: true });
     }
 
     let sessionFolders = [];
-    
-    // Priorizar /app/tokens si existe (para producción)
-    if (fs.existsSync("/app/tokens")) {
-      console.log("🔍 Buscando carpetas en /app/tokens...");
-      try {
-        const appTokenFolders = fs.readdirSync("/app/tokens").filter(item => {
-          const itemPath = path.join("/app/tokens", item);
-          return fs.statSync(itemPath).isDirectory() && !isNaN(item) && clientesActivos.includes(item);
-        });
-        console.log(`📂 Encontradas ${appTokenFolders.length} carpetas válidas en /app/tokens:`, appTokenFolders);
-        
-        sessionFolders = appTokenFolders.map(folder => ({
-          id: folder,
-          path: path.join("/app/tokens", folder)
-        }));
-      } catch (err) {
-        console.error("❌ Error leyendo /app/tokens:", err.message);
-      }
+    try {
+      const localFolders = fs.readdirSync(sessionDir).filter(item => {
+        const itemPath = path.join(sessionDir, item);
+        return fs.statSync(itemPath).isDirectory() && !isNaN(item) && clientesActivos.includes(item);
+      });
+      console.log(`📂 Encontradas ${localFolders.length} carpetas válidas en ${sessionDir}:`, localFolders);
+
+      sessionFolders = localFolders.map(folder => ({
+        id: folder,
+        path: path.join(sessionDir, folder)
+      }));
+    } catch (err) {
+      console.error("❌ Error leyendo carpeta local:", err.message);
     }
     
-    // Si no hay carpetas en /app/tokens, buscar en sessionDir local
-    if (sessionFolders.length === 0) {
-      try {
-        const localFolders = fs.readdirSync(sessionDir).filter(item => {
-          const itemPath = path.join(sessionDir, item);
-          return fs.statSync(itemPath).isDirectory() && !isNaN(item) && clientesActivos.includes(item);
-        });
-        console.log(`📂 Encontradas ${localFolders.length} carpetas válidas en ${sessionDir}:`, localFolders);
-        
-        sessionFolders = localFolders.map(folder => ({
-          id: folder,
-          path: path.join(sessionDir, folder)
-        }));
-      } catch (err) {
-        console.error("❌ Error leyendo carpeta local:", err.message);
-      }
-    }
     console.log(`🔍 Clientes activos en BD (strings): [${clientesActivos.join(', ')}]`);
     
     // Verificar estado de sesiones activas en memoria
@@ -886,7 +865,7 @@ async function restaurarSesiones() {
     console.log("🧹 Limpiando carpetas huérfanas y archivos de bloqueo...");
     
     // Buscar y eliminar carpetas de clientes que ya no están en la BD
-    const searchPaths = [sessionDir, "/app/tokens"];
+    const searchPaths = [sessionDir];
     
     for (const searchPath of searchPaths) {
       if (!fs.existsSync(searchPath)) continue;
@@ -933,7 +912,7 @@ async function restaurarSesiones() {
         const singletonPath = path.join(searchPath, clienteId, "SingletonLock");
         if (fs.existsSync(singletonPath)) {
           try {
-            fs.unlinkSync(singletonPath);
+            fs.unlinkSync(singletonLockPath);
             console.log(`🔓 Limpiado SingletonLock para cliente activo ${clienteId}`);
           } catch (err) {
             console.error(`❌ Error limpiando SingletonLock ${clienteId}:`, err.message);
@@ -962,19 +941,27 @@ async function restaurarSesiones() {
   }
 }
 
+// Función para crear carpetas base automáticamente si no existen
+async function crearCarpetasAutomaticamente() {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+    console.log(`📁 Carpeta de sesiones creada automáticamente: ${sessionDir}`);
+  }
+}
+
 // Refuerzo: Limpieza agresiva de archivos SingletonLock y carpetas antes de crear/restaurar sesión
 async function limpiarSingletonLock(clienteId) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
   const searchPaths = [
     path.join(sessionDir, clienteId),
-    `/app/tokens/${clienteId}`,
     `/tmp/puppeteer_dev_chrome_profile-${clienteId}`,
     `/tmp/.org.chromium.Chromium.${clienteId}`
   ];
   for (const searchPath of searchPaths) {
     const singletonPath = path.join(searchPath, "SingletonLock");
     if (fs.existsSync(singletonPath)) {
-      try { fs.unlinkSync(singletonPath); } catch {}
+      try { fs.unlinkSync(singletonLockPath); } catch {}
     }
     // Limpia otros archivos de lock
     if (fs.existsSync(searchPath)) {
@@ -993,16 +980,11 @@ async function limpiarSingletonLock(clienteId) {
 // **NUEVA FUNCIÓN: Guardar información esencial de sesión para restauración futura**
 async function guardarInformacionSesion(clienteId, client) {
   console.log(`💾 Guardando información de sesión para cliente ${clienteId}...`);
-  
   try {
     const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const productionPath = "/app/tokens";
-    
-    // Usar la ruta de producción si existe, sino la local
-    const basePath = fs.existsSync(productionPath) ? productionPath : sessionDir;
-    const clientePath = path.join(basePath, clienteId);
+    const clientePath = path.join(sessionDir, clienteId);
     const defaultPath = path.join(clientePath, "Default");
-    
+
     // Asegurar que las carpetas existen
     if (!fs.existsSync(clientePath)) {
       fs.mkdirSync(clientePath, { recursive: true });
@@ -1010,7 +992,7 @@ async function guardarInformacionSesion(clienteId, client) {
     if (!fs.existsSync(defaultPath)) {
       fs.mkdirSync(defaultPath, { recursive: true });
     }
-    
+
     // Obtener información del dispositivo/conexión
     let deviceInfo = {};
     try {
@@ -1030,7 +1012,7 @@ async function guardarInformacionSesion(clienteId, client) {
         fallback: true
       };
     }
-    
+
     // Guardar información de sesión en archivo JSON
     const sessionInfoFile = path.join(defaultPath, "SessionInfo.json");
     const sessionInfo = {
@@ -1041,7 +1023,7 @@ async function guardarInformacionSesion(clienteId, client) {
       isReady: true,
       lastUpdate: new Date().toISOString()
     };
-    
+
     fs.writeFileSync(sessionInfoFile, JSON.stringify(sessionInfo, null, 2));
     console.log(`💾 Información de sesión guardada: ${sessionInfoFile}`);
     
@@ -1244,136 +1226,572 @@ app.post("/reparar-automatico/:clienteId", async (req, res) => {
   }
 });
 
-// **NUEVA FUNCIÓN: Limpiar archivos SingletonLock más agresivamente**
+// Función para crear carpetas base automáticamente si no existen
+async function crearCarpetasAutomaticamente() {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+    console.log(`📁 Carpeta de sesiones creada automáticamente: ${sessionDir}`);
+  }
+}
+
+// Refuerzo: Limpieza agresiva de archivos SingletonLock y carpetas antes de crear/restaurar sesión
 async function limpiarSingletonLock(clienteId) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
   const searchPaths = [
     path.join(sessionDir, clienteId),
-    `/app/tokens/${clienteId}`,
     `/tmp/puppeteer_dev_chrome_profile-${clienteId}`,
     `/tmp/.org.chromium.Chromium.${clienteId}`
   ];
-  
-  console.log(`🧹 Limpiando archivos SingletonLock para cliente ${clienteId}...`);
-  
   for (const searchPath of searchPaths) {
     const singletonPath = path.join(searchPath, "SingletonLock");
-    
     if (fs.existsSync(singletonPath)) {
-      try {
-        // Intentar eliminar el archivo
-        fs.unlinkSync(singletonPath);
-        console.log(`🔓 Eliminado SingletonLock: ${singletonPath}`);
-      } catch (err) {
-        console.error(`❌ Error eliminando SingletonLock ${singletonPath}:`, err.message);
-        
-        // Si no se puede eliminar, intentar con chmod
-        try {
-          await new Promise((resolve, reject) => {
-            require('child_process').exec(`chmod 666 "${singletonPath}" && rm -f "${singletonPath}"`, (error) => {
-              if (error) reject(error);
-              else resolve();
-            });
-          });
-          console.log(`🔓 Forzado eliminación de SingletonLock: ${singletonPath}`);
-        } catch (forceErr) {
-          console.error(`❌ Error forzando eliminación ${singletonPath}:`, forceErr.message);
-        }
-      }
+      try { fs.unlinkSync(singletonLockPath); } catch {}
     }
-    
-    // También buscar archivos de Chrome temporales
+    // Limpia otros archivos de lock
     if (fs.existsSync(searchPath)) {
       try {
         const files = fs.readdirSync(searchPath);
-        const lockFiles = files.filter(file => 
-          file.includes('SingletonLock') || 
-          file.includes('lockfile') ||
-          file.includes('.lock')
-        );
-        
-        for (const lockFile of lockFiles) {
-          const lockPath = path.join(searchPath, lockFile);
-          try {
-            fs.unlinkSync(lockPath);
-            console.log(`🔓 Eliminado archivo de bloqueo: ${lockPath}`);
-          } catch (err) {
-            console.error(`❌ Error eliminando ${lockPath}:`, err.message);
-          }
-        }
-      } catch (err) {
-        console.error(`❌ Error buscando archivos de bloqueo en ${searchPath}:`, err.message);
-      }
+        files.filter(f => f.includes('Lock') || f.includes('lockfile') || f.includes('.lock'))
+          .forEach(lockFile => {
+            try { fs.unlinkSync(path.join(searchPath, lockFile)); } catch {}
+          });
+      } catch {}
     }
   }
-  
-  // Esperar un poco para asegurar que se liberen los recursos
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await new Promise(resolve => setTimeout(resolve, 500));
 }
 
-// ...existing code...
-
-app.post("/reiniciar-sesion/:clienteId", async (req, res) => {
-  const { clienteId } = req.params;
-  
+// **NUEVA FUNCIÓN: Guardar información esencial de sesión para restauración futura**
+async function guardarInformacionSesion(clienteId, client) {
+  console.log(`💾 Guardando información de sesión para cliente ${clienteId}...`);
   try {
-    console.log(`🔄 Reiniciando sesión para cliente ${clienteId}...`);
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const clientePath = path.join(sessionDir, clienteId);
+    const defaultPath = path.join(clientePath, "Default");
+
+    // Asegurar que las carpetas existen
+    if (!fs.existsSync(clientePath)) {
+      fs.mkdirSync(clientePath, { recursive: true });
+    }
+    if (!fs.existsSync(defaultPath)) {
+      fs.mkdirSync(defaultPath, { recursive: true });
+    }
+
+    // Obtener información del dispositivo/conexión
+    let deviceInfo = {};
+    try {
+      const hostDevice = await client.getHostDevice();
+      deviceInfo = {
+        platform: hostDevice.platform || 'unknown',
+        phone: hostDevice.phone || {},
+        connected: true,
+        lastSeen: new Date().toISOString()
+      };
+      console.log(`📱 Información del dispositivo obtenida para ${clienteId}`);
+    } catch (err) {
+      console.log(`⚠️ No se pudo obtener info del dispositivo para ${clienteId}: ${err.message}`);
+      deviceInfo = {
+        connected: true,
+        lastSeen: new Date().toISOString(),
+        fallback: true
+      };
+    }
+
+    // Guardar información de sesión en archivo JSON
+    const sessionInfoFile = path.join(defaultPath, "SessionInfo.json");
+    const sessionInfo = {
+      clienteId: clienteId,
+      connectedAt: new Date().toISOString(),
+      deviceInfo: deviceInfo,
+      sessionVersion: "1.0",
+      isReady: true,
+      lastUpdate: new Date().toISOString()
+    };
+
+    fs.writeFileSync(sessionInfoFile, JSON.stringify(sessionInfo, null, 2));
+    console.log(`💾 Información de sesión guardada: ${sessionInfoFile}`);
     
-    // 1. Verificar que el cliente existe en la base de datos
-    const result = await pool.query("SELECT id, comercio FROM tenants WHERE id = $1", [clienteId]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado en la base de datos" });
+    // Actualizar también las preferencias de Chrome con info actualizada
+    const preferencesFile = path.join(defaultPath, "Preferences");
+    let preferences = {};
+    
+    try {
+      if (fs.existsSync(preferencesFile)) {
+        preferences = JSON.parse(fs.readFileSync(preferencesFile, 'utf8'));
+      }
+    } catch (err) {
+      console.log(`⚠️ Error leyendo preferencias existentes, creando nuevas: ${err.message}`);
+      preferences = {};
     }
     
-    // 2. Resetear contador de errores
-    sessionErrors[clienteId] = 0;
-    delete reconnectIntervals[clienteId];
+    // Actualizar preferencias con información de conexión
+    preferences.whatsapp = {
+      ...preferences.whatsapp,
+      client_id: clienteId,
+      last_connected: new Date().toISOString(),
+      device_info: deviceInfo,
+      session_ready: true
+    };
     
-    // 3. Cerrar sesión actual si existe
+    preferences.profile = {
+      ...preferences.profile,
+      name: `WhatsApp-${clienteId}`,
+      default_content_setting_values: {
+        notifications: 1
+      }
+    };
+    
+    fs.writeFileSync(preferencesFile, JSON.stringify(preferences, null, 2));
+    console.log(`⚙️ Preferencias actualizadas para cliente ${clienteId}`);
+    
+    console.log(`✅ Información de sesión guardada exitosamente para cliente ${clienteId}`);
+    
+  } catch (err) {
+    console.error(`❌ Error guardando información de sesión para ${clienteId}:`, err);
+    throw err;
+  }
+}
+
+// Función para inicializar la aplicación
+async function inicializarAplicacion() {
+  try {
+    console.log(`📁 Carpeta de sesiones configurada: ${process.env.SESSION_FOLDER || path.join(__dirname, "tokens")}`);
+    console.log(`🔍 Verificando si existe /app/tokens:`, fs.existsSync("/app/tokens"));
+    
+    if (fs.existsSync("/app/tokens")) {
+      const folders = fs.readdirSync("/app/tokens").filter(item => !isNaN(item));
+      console.log(`📂 Carpetas numéricas encontradas en /app/tokens:`, folders);
+    }
+    
+    // Esperar un poco para asegurar que la DB esté lista
+    console.log("⏱️ Esperando conexión estable a la base de datos...");
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    await restaurarSesiones();
+    await crearCarpetasAutomaticamente();
+    
+    console.log("🎉 Aplicación inicializada correctamente");
+  } catch (error) {
+    console.error("❌ Error durante la inicialización:", error);
+  }
+}
+
+// Intentar iniciar el servidor with manejo de errores
+const server = app.listen(PORT)
+  .on('listening', async () => {
+    console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
+    await inicializarAplicacion();
+  })
+  .on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`❌ Puerto ${PORT} ya está en uso. Intentando puerto alternativo...`);
+      
+      // Intentar con puerto aleatorio
+      const server2 = app.listen(0)
+        .on('listening', async () => {
+          const actualPort = server2.address().port;
+          console.log(`✅ Venom-service corriendo en puerto alternativo ${actualPort}`);
+          await inicializarAplicacion();
+        })
+        .on('error', (err) => {
+          console.error(`❌ Error fatal iniciando servidor:`, err);
+          process.exit(1);
+        });
+    } else {
+      console.error(`❌ Error iniciando servidor:`, error);
+      process.exit(1);
+    }
+  });
+
+// Nuevos endpoints para limpieza y reparación
+app.post("/limpiar/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  
+  try {
+    console.log(`🧹 Iniciando limpieza completa para cliente ${clienteId}...`);
+    
+    // 1. Cerrar sesión activa si existe
     if (sessions[clienteId]) {
       try {
         await sessions[clienteId].close();
-        console.log(`🔒 Sesión anterior cerrada para cliente ${clienteId}`);
-      } catch (e) {
-        console.log(`⚠️ Error cerrando sesión anterior para ${clienteId}:`, e.message);
+        console.log(`🔒 Sesión activa cerrada para cliente ${clienteId}`);
+      } catch (err) {
+        console.log(`⚠️ Error cerrando sesión activa para ${clienteId}:`, err.message);
       }
       delete sessions[clienteId];
     }
     
-    // 4. Limpiar archivos de bloqueo
-    await limpiarSingletonLock(clienteId);
+    // 2. Resetear contador de errores
+    sessionErrors[clienteId] = 0;
+    console.log(`🔄 Contador de errores reseteado para cliente ${clienteId}`);
     
-    // 5. Esperar antes de crear nueva sesión
-    console.log(`⏳ Esperando 3 segundos antes de crear nueva sesión...`);
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    // 6. Crear nueva sesión
-    await crearSesionConTimeout(clienteId, 45000, false); // false = no generar QR
-    
-    // 7. Verificar estado
-    let estado = "UNKNOWN";
-    if (sessions[clienteId]) {
-      try {
-        const isConnected = await sessions[clienteId].isConnected();
-        const connectionState = await sessions[clienteId].getConnectionState();
-        estado = isConnected ? "CONNECTED" : connectionState;
-      } catch (err) {
-        estado = "ERROR";
-      }
+    // 3. Eliminar carpeta de sesión completa
+    const sessionPath = path.join(sessionDir, clienteId);
+    if (fs.existsSync(sessionPath)) {
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      console.log(`🗑️ Carpeta de sesión eliminada: ${sessionPath}`);
     }
     
-    res.json({ 
-      success: true, 
-      mensaje: `Sesión reiniciada para cliente ${clienteId}`,
-      estado: estado,
-      errores_reseteados: true
+    // 4. Eliminar archivo QR HTML
+    const qrPath = path.join(sessionDir, `${clienteId}.html`);
+    if (fs.existsSync(qrPath)) {
+      fs.unlinkSync(qrPath);
+      console.log(`🗑️ Archivo QR eliminado: ${qrPath}`);
+    }
+    
+    // 5. Limpiar QR en base de datos
+    try {
+      const result = await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [clienteId]);
+      console.log(`🧹 QR limpiado en DB para cliente ${clienteId}, filas afectadas: ${result.rowCount}`);
+    } catch (err) {
+      console.error(`❌ Error limpiando QR en DB para cliente ${clienteId}:`, err);
+    }
+    
+    // 6. Crear carpetas limpias
+    await crearCarpetasAutomaticamente();
+    
+    console.log(`✅ Limpieza completa finalizada para cliente ${clienteId}`);
+    
+    res.json({
+      success: true,
+      message: `Cliente ${clienteId} limpiado completamente`,
+      acciones: [
+        "Sesión activa cerrada",
+        "Contador de errores reseteado", 
+        "Carpeta de sesión eliminada",
+        "Archivo QR eliminado",
+        "QR limpiado en DB",
+        "Carpetas base recreadas"
+      ],
+      siguiente_paso: `Usar /iniciar/${clienteId} para generar nuevo QR`
     });
     
+  } catch (err) {
+    console.error(`❌ Error limpiando cliente ${clienteId}:`, err);
+    res.status(500).json({
+      success: false,
+      error: "Error durante la limpieza",
+      details: err.message
+    });
+  }
+});
+
+app.post("/reparar-automatico/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🔧 Iniciando reparación automática para cliente ${clienteId}...`);
+    
+    // 1. Limpiar completamente
+    await fetch(`http://localhost:${PORT}/limpiar/${clienteId}`, { method: 'POST' });
+    
+    // 2. Esperar un poco
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // 3. Iniciar nueva sesión
+    await crearSesionConTimeout(clienteId, 60000, true);
+    
+    console.log(`✅ Reparación automática completada para cliente ${clienteId}`);
+    
+    res.json({
+      success: true,
+      message: `Cliente ${clienteId} reparado automáticamente`,
+      qr_disponible_en: `/qr/${clienteId}`
+    });
+    
+  } catch (err) {
+    console.error(`❌ Error en reparación automática para cliente ${clienteId}:`, err);
+    res.status(500).json({
+      success: false,
+      error: "Error en reparación automática",
+      details: err.message
+    });
+  }
+});
+
+// Función para crear carpetas base automáticamente si no existen
+async function crearCarpetasAutomaticamente() {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+    console.log(`📁 Carpeta de sesiones creada automáticamente: ${sessionDir}`);
+  }
+}
+
+// Refuerzo: Limpieza agresiva de archivos SingletonLock y carpetas antes de crear/restaurar sesión
+async function limpiarSingletonLock(clienteId) {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const searchPaths = [
+    path.join(sessionDir, clienteId),
+    `/tmp/puppeteer_dev_chrome_profile-${clienteId}`,
+    `/tmp/.org.chromium.Chromium.${clienteId}`
+  ];
+  for (const searchPath of searchPaths) {
+    const singletonPath = path.join(searchPath, "SingletonLock");
+    if (fs.existsSync(singletonPath)) {
+      try { fs.unlinkSync(singletonLockPath); } catch {}
+    }
+    // Limpia otros archivos de lock
+    if (fs.existsSync(searchPath)) {
+      try {
+        const files = fs.readdirSync(searchPath);
+        files.filter(f => f.includes('Lock') || f.includes('lockfile') || f.includes('.lock'))
+          .forEach(lockFile => {
+            try { fs.unlinkSync(path.join(searchPath, lockFile)); } catch {}
+          });
+      } catch {}
+    }
+  }
+  await new Promise(resolve => setTimeout(resolve, 500));
+}
+
+// **NUEVA FUNCIÓN: Guardar información esencial de sesión para restauración futura**
+async function guardarInformacionSesion(clienteId, client) {
+  console.log(`💾 Guardando información de sesión para cliente ${clienteId}...`);
+  try {
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const clientePath = path.join(sessionDir, clienteId);
+    const defaultPath = path.join(clientePath, "Default");
+
+    // Asegurar que las carpetas existen
+    if (!fs.existsSync(clientePath)) {
+      fs.mkdirSync(clientePath, { recursive: true });
+    }
+    if (!fs.existsSync(defaultPath)) {
+      fs.mkdirSync(defaultPath, { recursive: true });
+    }
+
+    // Obtener información del dispositivo/conexión
+    let deviceInfo = {};
+    try {
+      const hostDevice = await client.getHostDevice();
+      deviceInfo = {
+        platform: hostDevice.platform || 'unknown',
+        phone: hostDevice.phone || {},
+        connected: true,
+        lastSeen: new Date().toISOString()
+      };
+      console.log(`📱 Información del dispositivo obtenida para ${clienteId}`);
+    } catch (err) {
+      console.log(`⚠️ No se pudo obtener info del dispositivo para ${clienteId}: ${err.message}`);
+      deviceInfo = {
+        connected: true,
+        lastSeen: new Date().toISOString(),
+        fallback: true
+      };
+    }
+
+    // Guardar información de sesión en archivo JSON
+    const sessionInfoFile = path.join(defaultPath, "SessionInfo.json");
+    const sessionInfo = {
+      clienteId: clienteId,
+      connectedAt: new Date().toISOString(),
+      deviceInfo: deviceInfo,
+      sessionVersion: "1.0",
+      isReady: true,
+      lastUpdate: new Date().toISOString()
+    };
+
+    fs.writeFileSync(sessionInfoFile, JSON.stringify(sessionInfo, null, 2));
+    console.log(`💾 Información de sesión guardada: ${sessionInfoFile}`);
+    
+    // Actualizar también las preferencias de Chrome con info actualizada
+    const preferencesFile = path.join(defaultPath, "Preferences");
+    let preferences = {};
+    
+    try {
+      if (fs.existsSync(preferencesFile)) {
+        preferences = JSON.parse(fs.readFileSync(preferencesFile, 'utf8'));
+      }
+    } catch (err) {
+      console.log(`⚠️ Error leyendo preferencias existentes, creando nuevas: ${err.message}`);
+      preferences = {};
+    }
+    
+    // Actualizar preferencias con información de conexión
+    preferences.whatsapp = {
+      ...preferences.whatsapp,
+      client_id: clienteId,
+      last_connected: new Date().toISOString(),
+      device_info: deviceInfo,
+      session_ready: true
+    };
+    
+    preferences.profile = {
+      ...preferences.profile,
+      name: `WhatsApp-${clienteId}`,
+      default_content_setting_values: {
+        notifications: 1
+      }
+    };
+    
+    fs.writeFileSync(preferencesFile, JSON.stringify(preferences, null, 2));
+    console.log(`⚙️ Preferencias actualizadas para cliente ${clienteId}`);
+    
+    console.log(`✅ Información de sesión guardada exitosamente para cliente ${clienteId}`);
+    
+  } catch (err) {
+    console.error(`❌ Error guardando información de sesión para ${clienteId}:`, err);
+    throw err;
+  }
+}
+
+// Función para inicializar la aplicación
+async function inicializarAplicacion() {
+  try {
+    console.log(`📁 Carpeta de sesiones configurada: ${process.env.SESSION_FOLDER || path.join(__dirname, "tokens")}`);
+    console.log(`🔍 Verificando si existe /app/tokens:`, fs.existsSync("/app/tokens"));
+    
+    if (fs.existsSync("/app/tokens")) {
+      const folders = fs.readdirSync("/app/tokens").filter(item => !isNaN(item));
+      console.log(`📂 Carpetas numéricas encontradas en /app/tokens:`, folders);
+    }
+    
+    // Esperar un poco para asegurar que la DB esté lista
+    console.log("⏱️ Esperando conexión estable a la base de datos...");
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    await restaurarSesiones();
+    await crearCarpetasAutomaticamente();
+    
+    console.log("🎉 Aplicación inicializada correctamente");
   } catch (error) {
-    console.error(`❌ Error reiniciando sesión para cliente ${clienteId}:`, error);
-    res.status(500).json({ 
-      error: "Error al reiniciar sesión",
-      details: error.message 
+    console.error("❌ Error durante la inicialización:", error);
+  }
+}
+
+// Intentar iniciar el servidor with manejo de errores
+const server = app.listen(PORT)
+  .on('listening', async () => {
+    console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
+    await inicializarAplicacion();
+  })
+  .on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`❌ Puerto ${PORT} ya está en uso. Intentando puerto alternativo...`);
+      
+      // Intentar con puerto aleatorio
+      const server2 = app.listen(0)
+        .on('listening', async () => {
+          const actualPort = server2.address().port;
+          console.log(`✅ Venom-service corriendo en puerto alternativo ${actualPort}`);
+          await inicializarAplicacion();
+        })
+        .on('error', (err) => {
+          console.error(`❌ Error fatal iniciando servidor:`, err);
+          process.exit(1);
+        });
+    } else {
+      console.error(`❌ Error iniciando servidor:`, error);
+      process.exit(1);
+    }
+  });
+
+// Nuevos endpoints para limpieza y reparación
+app.post("/limpiar/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  
+  try {
+    console.log(`🧹 Iniciando limpieza completa para cliente ${clienteId}...`);
+    
+    // 1. Cerrar sesión activa si existe
+    if (sessions[clienteId]) {
+      try {
+        await sessions[clienteId].close();
+        console.log(`🔒 Sesión activa cerrada para cliente ${clienteId}`);
+      } catch (err) {
+        console.log(`⚠️ Error cerrando sesión activa para ${clienteId}:`, err.message);
+      }
+      delete sessions[clienteId];
+    }
+    
+    // 2. Resetear contador de errores
+    sessionErrors[clienteId] = 0;
+    console.log(`🔄 Contador de errores reseteado para cliente ${clienteId}`);
+    
+    // 3. Eliminar carpeta de sesión completa
+    const sessionPath = path.join(sessionDir, clienteId);
+    if (fs.existsSync(sessionPath)) {
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      console.log(`🗑️ Carpeta de sesión eliminada: ${sessionPath}`);
+    }
+    
+    // 4. Eliminar archivo QR HTML
+    const qrPath = path.join(sessionDir, `${clienteId}.html`);
+    if (fs.existsSync(qrPath)) {
+      fs.unlinkSync(qrPath);
+      console.log(`🗑️ Archivo QR eliminado: ${qrPath}`);
+    }
+    
+    // 5. Limpiar QR en base de datos
+    try {
+      const result = await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [clienteId]);
+      console.log(`🧹 QR limpiado en DB para cliente ${clienteId}, filas afectadas: ${result.rowCount}`);
+    } catch (err) {
+      console.error(`❌ Error limpiando QR en DB para cliente ${clienteId}:`, err);
+    }
+    
+    // 6. Crear carpetas limpias
+    await crearCarpetasAutomaticamente();
+    
+    console.log(`✅ Limpieza completa finalizada para cliente ${clienteId}`);
+    
+    res.json({
+      success: true,
+      message: `Cliente ${clienteId} limpiado completamente`,
+      acciones: [
+        "Sesión activa cerrada",
+        "Contador de errores reseteado", 
+        "Carpeta de sesión eliminada",
+        "Archivo QR eliminado",
+        "QR limpiado en DB",
+        "Carpetas base recreadas"
+      ],
+      siguiente_paso: `Usar /iniciar/${clienteId} para generar nuevo QR`
+    });
+    
+  } catch (err) {
+    console.error(`❌ Error limpiando cliente ${clienteId}:`, err);
+    res.status(500).json({
+      success: false,
+      error: "Error durante la limpieza",
+      details: err.message
+    });
+  }
+});
+
+app.post("/reparar-automatico/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🔧 Iniciando reparación automática para cliente ${clienteId}...`);
+    
+    // 1. Limpiar completamente
+    await fetch(`http://localhost:${PORT}/limpiar/${clienteId}`, { method: 'POST' });
+    
+    // 2. Esperar un poco
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // 3. Iniciar nueva sesión
+    await crearSesionConTimeout(clienteId, 60000, true);
+    
+    console.log(`✅ Reparación automática completada para cliente ${clienteId}`);
+    
+    res.json({
+      success: true,
+      message: `Cliente ${clienteId} reparado automáticamente`,
+      qr_disponible_en: `/qr/${clienteId}`
+    });
+    
+  } catch (err) {
+    console.error(`❌ Error en reparación automática para cliente ${clienteId}:`, err);
+    res.status(500).json({
+      success: false,
+      error: "Error en reparación automática",
+      details: err.message
     });
   }
 });
