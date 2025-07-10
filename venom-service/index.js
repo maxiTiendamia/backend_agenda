@@ -1007,6 +1007,50 @@ app.get('/restaurar', async (req, res) => {
   }
 });
 
+app.get('/sesiones', async (req, res) => {
+  try {
+    const result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
+    const clientes = result.rows.map(row => String(row.id));
+    const estados = await Promise.all(clientes.map(async id => {
+      let estado = "desconocido";
+      if (sessions[id] && sessions[id].isConnected) {
+        try {
+          estado = (await sessions[id].isConnected()) ? "conectada" : "desconectada";
+        } catch {
+          estado = "error";
+        }
+      } else {
+        estado = "sin_sesion";
+      }
+      return { id, comercio: row.comercio, estado };
+    }));
+    res.json(estados);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/reiniciar/:clienteId', async (req, res) => {
+  const clienteId = req.params.clienteId;
+  try {
+    await crearSesionConTimeout(clienteId, 60000, true); // true = regenerar QR
+    res.json({ ok: true, mensaje: `Sesión reiniciada y QR regenerado para cliente ${clienteId}` });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/qr/:clienteId', async (req, res) => {
+  const clienteId = req.params.clienteId;
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const qrPath = path.join(sessionDir, `${clienteId}.html`);
+  if (fs.existsSync(qrPath)) {
+    res.sendFile(qrPath);
+  } else {
+    res.status(404).send("QR no encontrado");
+  }
+});
+
 // Iniciar el servidor con manejo de errores
 const server = app.listen(PORT)
   .on('listening', async () => {
