@@ -317,7 +317,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       session: sessionId,
       multidevice: true,
       disableWelcome: true,
-      sessionFolder: sessionDir,
+      sessionFolder: SESSION_FOLDER,
       autoClose: 180000,
       useChrome: true,
       // **NUEVO: Configuración más estricta para evitar múltiples instancias**
