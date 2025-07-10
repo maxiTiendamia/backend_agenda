@@ -24,6 +24,7 @@ const SESSION_FOLDER = process.env.SESSION_FOLDER || path.join(__dirname, "token
 // **NUEVA FUNCIÓN: Verificar conectividad del backend**
 async function verificarConectividadBackend() {
   try {
+    printf("🔍 Verificando conectividad del backend...");
     console.log("🔍 Verificando conectividad del backend...");
     const response = await axios.get("https://backend-agenda-2.onrender.com/api/webhook", {
       timeout: 10000,
