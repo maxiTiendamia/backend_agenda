@@ -145,26 +145,36 @@ async function monitorearSesiones() {
   console.log(`🔍 Monitoreando ${Object.keys(sessions).length} sesiones activas...`);
   
   for (const clienteId in sessions) {
-    // **NUEVO: Saltear si ya hay una reconexión en progreso**
+    // Saltear si ya hay una reconexión en progreso
     if (reconnectIntervals[clienteId]) {
       console.log(`⏳ Saltando monitoreo de ${clienteId} (reconexión en progreso)`);
       continue;
     }
-    
+
+    // NUEVO: Chequeo de estado real
+    let estado = "desconocido";
+    try {
+      if (sessions[clienteId] && sessions[clienteId].getConnectionState) {
+        estado = await sessions[clienteId].getConnectionState();
+      }
+    } catch (e) {
+      estado = "error";
+    }
+
+    if (estado === "CONNECTED") {
+      console.log(`✅ Sesión ${clienteId} ya está conectada, no se reconecta.`);
+      continue;
+    }
+
     const estaConectada = await verificarEstadoSesion(clienteId);
-    
+
     if (!estaConectada) {
       console.log(`🔍 Sesión ${clienteId} desconectada, iniciando reconexión...`);
-      
-      // Evitar múltiples reconexiones simultáneas
       if (!reconnectIntervals[clienteId]) {
-        // **NUEVO: Verificar si el cliente está bloqueado antes de intentar reconectar**
         if (sessionErrors[clienteId] && sessionErrors[clienteId] >= 3) {
           console.log(`🚫 Cliente ${clienteId} bloqueado por errores, saltando reconexión automática`);
           continue;
         }
-        
-        // No esperar la reconexión para no bloquear otras sesiones
         reconectarSesion(clienteId).catch(err => {
           console.error(`❌ Error en reconexión automática ${clienteId}:`, err.message);
         });
@@ -405,7 +415,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
     // Manejar reconexión automática con limitador
     let reconexionIntentos = 0;
-    const maxIntentos = 3;
+    const maxIntentos = 2;
     
     client.onStateChange(async (state) => {
       console.log(`🟠 Estado de la sesión ${sessionId}:`, state);
@@ -623,18 +633,6 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
     // Si hay demasiados errores consecutivos, limpiar completamente y bloquear temporalmente
     if (sessionErrors[sessionId] >= 3) {
       console.log(`🚫 Cliente ${sessionId} bloqueado temporalmente por exceso de errores (${sessionErrors[sessionId]}/3)`);
-      
-      // Limpiar carpeta de sesión si está corrupta
-      const sessionPath = path.join(sessionDir, sessionId);
-      if (fs.existsSync(sessionPath)) {
-        try {
-          console.log(`🧹 Eliminando carpeta de sesión corrupta: ${sessionPath}`);
-          fs.rmSync(sessionPath, { recursive: true, force: true });
-          console.log(`✅ Carpeta eliminada para cliente ${sessionId}`);
-        } catch (cleanupErr) {
-          console.error(`❌ Error limpiando carpeta para ${sessionId}:`, cleanupErr.message);
-        }
-      }
       
       // Programar reset del contador de errores en 30 minutos
       setTimeout(() => {
