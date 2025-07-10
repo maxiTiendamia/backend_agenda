@@ -24,7 +24,6 @@ const SESSION_FOLDER = process.env.SESSION_FOLDER || path.join(__dirname, "token
 // **NUEVA FUNCIÓN: Verificar conectividad del backend**
 async function verificarConectividadBackend() {
   try {
-    printf("🔍 Verificando conectividad del backend...");
     console.log("🔍 Verificando conectividad del backend...");
     const response = await axios.get("https://backend-agenda-2.onrender.com/api/webhook", {
       timeout: 10000,
@@ -987,7 +986,6 @@ app.get('/restaurar', async (req, res) => {
 
 app.get('/sesiones', async (req, res) => {
   try {
-    print(`🔍 Consultando estado de todas las sesiones...`);
     const result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
     const clientes = result.rows.map(row => String(row.id));
     const estados = await Promise.all(clientes.map(async id => {
