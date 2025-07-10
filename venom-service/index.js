@@ -1108,6 +1108,17 @@ app.post('/reset-errores/:clienteId', async (req, res) => {
   res.json({ ok: true, mensaje: `Errores reseteados para cliente ${clienteId}` });
 });
 
+// Endpoint para debug de errores de sesión
+app.get('/debug/errores', (req, res) => {
+  // Devuelve el estado actual de los errores de sesión y reconexiones
+  res.json({
+    sessionErrors,
+    reconnectIntervals: Object.keys(reconnectIntervals),
+    sesionesEnMemoria: Object.keys(sessions),
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Iniciar el servidor con manejo de errores
 const server = app.listen(PORT)
   .on('listening', async () => {
