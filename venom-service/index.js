@@ -942,18 +942,72 @@ async function restaurarSesiones() {
 }
 
 // Función para crear carpetas base automáticamente si no existen
+async function crearCarpetasAutomaticamente() {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+    console.log("📁 Carpeta de sesiones creada automáticamente:", sessionDir);
+  }
+}
 
+// Limpieza agresiva de archivos SingletonLock antes de crear/restaurar sesión
+async function limpiarSingletonLock(sessionId) {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const singletonLockPath = path.join(sessionDir, sessionId, "SingletonLock");
+  if (fs.existsSync(singletonLockPath)) {
+    try {
+      fs.unlinkSync(singletonLockPath);
+      console.log(`🔓 SingletonLock eliminado para cliente ${sessionId}`);
+    } catch (err) {
+      console.error(`❌ Error eliminando SingletonLock para ${sessionId}:`, err.message);
+    }
+  }
+}
 
-// Refuerzo: Limpieza agresiva de archivos SingletonLock y carpetas antes de crear/restaurar sesión
+// Guardar información esencial de sesión para restauración futura
+async function guardarInformacionSesion(sessionId, client) {
+  try {
+    const info = await client.getHostDevice();
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const infoPath = path.join(sessionDir, sessionId, "session_info.json");
+    fs.writeFileSync(infoPath, JSON.stringify(info, null, 2));
+    console.log(`💾 Información de sesión guardada para cliente ${sessionId}`);
+  } catch (err) {
+    console.error(`❌ Error guardando información de sesión para ${sessionId}:`, err.message);
+  }
+}
 
+// Inicializar la aplicación: restaurar sesiones previas
+async function inicializarAplicacion() {
+  try {
+    await restaurarSesiones();
+    console.log("🚀 Inicialización completa");
+  } catch (err) {
+    console.error("❌ Error durante la inicialización:", err);
+  }
+}
 
-// **NUEVA FUNCIÓN: Guardar información esencial de sesión para restauración futura**
+// Endpoints para limpieza y reparación
+app.get('/limpiar/:clienteId', async (req, res) => {
+  const clienteId = req.params.clienteId;
+  try {
+    await limpiarSingletonLock(clienteId);
+    res.json({ ok: true, mensaje: `SingletonLock limpiado para cliente ${clienteId}` });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
+app.get('/restaurar', async (req, res) => {
+  try {
+    await restaurarSesiones();
+    res.json({ ok: true, mensaje: "Sesiones restauradas" });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
-// Función para inicializar la aplicación
-
-
-// Intentar iniciar el servidor with manejo de errores
+// Iniciar el servidor con manejo de errores
 const server = app.listen(PORT)
   .on('listening', async () => {
     console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
@@ -962,8 +1016,6 @@ const server = app.listen(PORT)
   .on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
       console.error(`❌ Puerto ${PORT} ya está en uso. Intentando puerto alternativo...`);
-      
-      // Intentar con puerto aleatorio
       const server2 = app.listen(0)
         .on('listening', async () => {
           const actualPort = server2.address().port;
@@ -980,93 +1032,3 @@ const server = app.listen(PORT)
     }
   });
 
-// Nuevos endpoints para limpieza y reparación
-);
-
-);
-
-// Función para crear carpetas base automáticamente si no existen
-
-
-// Refuerzo: Limpieza agresiva de archivos SingletonLock y carpetas antes de crear/restaurar sesión
-
-
-// **NUEVA FUNCIÓN: Guardar información esencial de sesión para restauración futura**
-
-
-// Función para inicializar la aplicación
-
-
-// Intentar iniciar el servidor with manejo de errores
-=> {
-    console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
-    await inicializarAplicacion();
-  })
-  .on('error', (error) => {
-    if (error.code === 'EADDRINUSE') {
-      console.error(`❌ Puerto ${PORT} ya está en uso. Intentando puerto alternativo...`);
-      
-      // Intentar con puerto aleatorio
-      const server2 = app.listen(0)
-        .on('listening', async () => {
-          const actualPort = server2.address().port;
-          console.log(`✅ Venom-service corriendo en puerto alternativo ${actualPort}`);
-          await inicializarAplicacion();
-        })
-        .on('error', (err) => {
-          console.error(`❌ Error fatal iniciando servidor:`, err);
-          process.exit(1);
-        });
-    } else {
-      console.error(`❌ Error iniciando servidor:`, error);
-      process.exit(1);
-    }
-  });
-
-// Nuevos endpoints para limpieza y reparación
-);
-
-);
-
-// Función para crear carpetas base automáticamente si no existen
-
-
-// Refuerzo: Limpieza agresiva de archivos SingletonLock y carpetas antes de crear/restaurar sesión
-
-
-// **NUEVA FUNCIÓN: Guardar información esencial de sesión para restauración futura**
-
-
-// Función para inicializar la aplicación
-
-
-// Intentar iniciar el servidor with manejo de errores
-const server = app.listen(PORT)
-  .on('listening', async () PORT}`);
-    await inicializarAplicacion();
-  })
-  .on('error', (error) => {
-    if (error.code === 'EADDRINUSE') {
-      console.error(`❌ Puerto ${PORT} ya está en uso. Intentando puerto alternativo...`);
-      
-      // Intentar con puerto aleatorio
-      const server2 = app.listen(0)
-        .on('listening', async () => {
-          const actualPort = server2.address().port;
-          console.log(`✅ Venom-service corriendo en puerto alternativo ${actualPort}`);
-          await inicializarAplicacion();
-        })
-        .on('error', (err) => {
-          console.error(`❌ Error fatal iniciando servidor:`, err);
-          process.exit(1);
-        });
-    } else {
-      console.error(`❌ Error iniciando servidor:`, error);
-      process.exit(1);
-    }
-  });
-
-// Nuevos endpoints para limpieza y reparación
-);
-
-);
