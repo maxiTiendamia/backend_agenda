@@ -1007,8 +1007,10 @@ app.get('/restaurar', async (req, res) => {
   }
 });
 
+
 app.get('/sesiones', async (req, res) => {
   try {
+    print(`🔍 Consultando estado de todas las sesiones...`);
     const result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
     const clientes = result.rows.map(row => String(row.id));
     const estados = await Promise.all(clientes.map(async id => {
