@@ -1053,6 +1053,61 @@ app.get('/qr/:clienteId', async (req, res) => {
   }
 });
 
+// Endpoint compatible con admin: estado de todas las sesiones
+app.get('/estado-sesiones', async (req, res) => {
+  try {
+    const result = await pool.query("SELECT id, nombre, comercio FROM tenants ORDER BY id");
+    const clientes = result.rows;
+    const estados = await Promise.all(clientes.map(async row => {
+      const id = String(row.id);
+      let estado = "NO_INICIADA";
+      let enMemoria = false;
+      let tieneArchivos = false;
+      if (sessions[id] && sessions[id].getConnectionState) {
+        try {
+          estado = await sessions[id].getConnectionState();
+          enMemoria = true;
+        } catch {
+          estado = "ERROR";
+        }
+      }
+      // Verifica si hay archivos de sesión en disco
+      const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+      const sessionPath = path.join(sessionDir, id);
+      tieneArchivos = fs.existsSync(sessionPath);
+      return {
+        clienteId: id,
+        nombre: row.nombre,
+        comercio: row.comercio,
+        estado,
+        enMemoria,
+        tieneArchivos
+      };
+    }));
+    res.json(estados);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint compatible con admin: regenerar QR manualmente
+app.post('/generar-qr/:clienteId', async (req, res) => {
+  const clienteId = req.params.clienteId;
+  try {
+    await crearSesionConTimeout(clienteId, 60000, true); // true = regenerar QR
+    res.json({ ok: true, mensaje: `QR regenerado para cliente ${clienteId}` });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Endpoint compatible con admin: resetear contador de errores
+app.post('/reset-errores/:clienteId', async (req, res) => {
+  const clienteId = req.params.clienteId;
+  sessionErrors[clienteId] = 0;
+  res.json({ ok: true, mensaje: `Errores reseteados para cliente ${clienteId}` });
+});
+
 // Iniciar el servidor con manejo de errores
 const server = app.listen(PORT)
   .on('listening', async () => {
