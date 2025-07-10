@@ -1095,6 +1095,32 @@ app.get('/debug/errores', (req, res) => {
   });
 });
 
+app.get('/debug/listar-sesiones', (req, res) => {
+  const sessionDir = SESSION_FOLDER;
+  let resultado = {};
+  try {
+    if (fs.existsSync(sessionDir)) {
+      const carpetas = fs.readdirSync(sessionDir);
+      resultado.carpetas = carpetas.map(carpeta => {
+        const carpetaPath = path.join(sessionDir, carpeta);
+        let archivos = [];
+        if (fs.statSync(carpetaPath).isDirectory()) {
+          archivos = fs.readdirSync(carpetaPath);
+        }
+        return {
+          carpeta,
+          archivos
+        };
+      });
+    } else {
+      resultado.error = `La carpeta ${sessionDir} no existe`;
+    }
+  } catch (err) {
+    resultado.error = err.message;
+  }
+  res.json(resultado);
+});
+
 // Iniciar el servidor con manejo de errores
 const server = app.listen(PORT)
   .on('listening', async () => {
