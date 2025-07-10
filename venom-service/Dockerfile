@@ -40,6 +40,9 @@ RUN npm install
 
 COPY ./venom-service ./
 
+# Hacer ejecutables los scripts si existen
+RUN chmod +x start.sh debug.sh 2>/dev/null || true
+
 EXPOSE 3000
 
 CMD ["node", "index.js"]

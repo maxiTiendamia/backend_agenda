@@ -17,8 +17,6 @@ const pool = new Pool({
 const sessions = {};
 const reconnectIntervals = {}; // Para manejar intervalos de reconexión
 const sessionErrors = {}; // Para rastrear errores por sesión y evitar bucles infinitos
-const sessionErrorTimestamps = {}; // Para detectar bucles infinitos de errores
-const maxErrorsPerMinute = 5; // Máximo 5 errores por minuto antes de bloquear
 
 // Función para verificar el estado de una sesión
 async function verificarEstadoSesion(clienteId) {
@@ -38,8 +36,8 @@ async function verificarEstadoSesion(clienteId) {
 async function reconectarSesion(clienteId) {
   console.log(`🔄 Intentando reconectar sesión ${clienteId}...`);
   
-  // Verificar si está bloqueado por errores ANTES de intentar reconectar
-  if (sessionErrors[clienteId] && sessionErrors[clienteId] >= 5) {
+  // Verificar el estado de una sesión ANTES de intentar reconectar
+  if (sessionErrors[clienteId] && sessionErrors[clienteId] >= 3) {
     console.log(`🚫 Cliente ${clienteId} bloqueado por errores (${sessionErrors[clienteId]}), cancelando reconexión automática`);
     return; // No programar más reintentos
   }
@@ -62,19 +60,12 @@ async function reconectarSesion(clienteId) {
   } catch (error) {
     console.log(`❌ Error reconectando sesión ${clienteId}:`, error.message);
     
-    // Detectar bucle infinito en reconexiones
-    const esBucleInfinito = detectarBucleInfinito(clienteId);
-    if (esBucleInfinito) {
-      console.log(`🚨 BUCLE INFINITO en reconexión: Cliente ${clienteId} bloqueado automáticamente`);
-      return; // Salir sin programar más reintentos
-    }
-    
-    // Solo programar reintento si NO está bloqueado por errores
-    if (!sessionErrors[clienteId] || sessionErrors[clienteId] < 5) {
-      console.log(`⏳ Programando reintento de reconexión para ${clienteId} en 30 segundos...`);
+    // Solo programar reintento si NO está bloqueado por errores (límite más estricto)
+    if (!sessionErrors[clienteId] || sessionErrors[clienteId] < 3) {
+      console.log(`⏳ Programando reintento de reconexión para ${clienteId} en 60 segundos...`);
       setTimeout(() => {
         reconectarSesion(clienteId);
-      }, 30000); // Reintentar en 30 segundos
+      }, 60000); // Reintentar en 60 segundos (más tiempo)
     } else {
       console.log(`🚫 No se programará más reintentos para ${clienteId} (bloqueado por errores)`);
     }
@@ -136,76 +127,6 @@ function crearSesionConTimeout(clienteId, timeoutMs = 60000, permitirGuardarQR =
   });
 }
 
-// Función para detectar bucles infinitos de errores
-function detectarBucleInfinito(clienteId) {
-  const ahora = Date.now();
-  const unMinutoAtras = ahora - 60000; // 1 minuto
-  
-  if (!sessionErrorTimestamps[clienteId]) {
-    sessionErrorTimestamps[clienteId] = [];
-  }
-  
-  // Agregar timestamp actual
-  sessionErrorTimestamps[clienteId].push(ahora);
-  
-  // Limpiar timestamps antiguos (más de 1 minuto)
-  sessionErrorTimestamps[clienteId] = sessionErrorTimestamps[clienteId].filter(
-    timestamp => timestamp > unMinutoAtras
-  );
-  
-  const erroresEnUltimoMinuto = sessionErrorTimestamps[clienteId].length;
-  
-  console.log(`📊 Cliente ${clienteId}: ${erroresEnUltimoMinuto} errores en último minuto`);
-  
-  if (erroresEnUltimoMinuto >= maxErrorsPerMinute) {
-    console.log(`🚨 BUCLE INFINITO DETECTADO: Cliente ${clienteId} ha tenido ${erroresEnUltimoMinuto} errores en 1 minuto`);
-    
-    // Marcar como bloqueado
-    sessionErrors[clienteId] = 999; // Número alto para bloquear completamente
-    
-    // Cerrar sesión si existe
-    if (sessions[clienteId]) {
-      try {
-        console.log(`🔌 Cerrando sesión problemática ${clienteId}...`);
-        sessions[clienteId].close();
-        delete sessions[clienteId];
-      } catch (e) {
-        console.error(`⚠️ Error cerrando sesión ${clienteId}:`, e.message);
-      }
-    }
-    
-    // Limpiar carpetas automáticamente
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const pathsToClean = [
-      path.join(sessionDir, clienteId),
-      path.join("/app/tokens", clienteId)
-    ];
-    
-    for (const pathToClean of pathsToClean) {
-      if (fs.existsSync(pathToClean)) {
-        try {
-          console.log(`🗑️ AUTO-LIMPIEZA: Eliminando ${pathToClean}`);
-          fs.rmSync(pathToClean, { recursive: true, force: true });
-          console.log(`✅ AUTO-LIMPIEZA: Carpeta eliminada ${pathToClean}`);
-        } catch (cleanErr) {
-          console.error(`❌ Error en auto-limpieza ${pathToClean}:`, cleanErr.message);
-        }
-      }
-    }
-    
-    // Programar reset del bloqueo en 10 minutos
-    setTimeout(() => {
-      console.log(`🔄 RESET: Desbloqueando cliente ${clienteId} después de bucle infinito`);
-      sessionErrors[clienteId] = 0;
-      sessionErrorTimestamps[clienteId] = [];
-    }, 10 * 60 * 1000);
-    
-    return true; // Es un bucle infinito
-  }
-  
-  return false; // No es un bucle infinito
-}
-
 async function crearSesion(clienteId, permitirGuardarQR = true) {
   const sessionId = String(clienteId);
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
@@ -227,9 +148,16 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
     }
   }
 
-  // Verificar si esta sesión está en bucle de errores
-  if (sessionErrors[sessionId] && sessionErrors[sessionId] > 5) {
-    console.log(`🚫 Cliente ${sessionId} tiene demasiados errores consecutivos (${sessionErrors[sessionId]}), saltando...`);
+  // Verificar si esta sesión está en bucle de errores (reducido a 3 intentos)
+  if (sessionErrors[sessionId] && sessionErrors[sessionId] >= 3) {
+    console.log(`🚫 Cliente ${sessionId} tiene demasiados errores consecutivos (${sessionErrors[sessionId]}), bloqueado por 30 minutos`);
+    
+    // Bloquear por 30 minutos
+    setTimeout(() => {
+      console.log(`🔓 Desbloqueando cliente ${sessionId} después de 30 minutos`);
+      sessionErrors[sessionId] = 0;
+    }, 30 * 60 * 1000);
+    
     throw new Error(`Cliente ${sessionId} bloqueado por exceso de errores`);
   }
 
@@ -288,9 +216,25 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
   }
 
   console.log(`⚙️ Iniciando nueva sesión venom para ${sessionId}...`);
+  console.log(`📁 Directorio de sesiones: ${sessionDir}`);
+  console.log(`🎯 Ruta específica de esta sesión: ${path.join(sessionDir, sessionId)}`);
+  
   if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir);
+    fs.mkdirSync(sessionDir, { recursive: true });
     console.log("📁 Carpeta 'sessions' creada");
+  }
+
+  // **CRÍTICO: Verificar que no existan otras sesiones interferentes**
+  const carpetasExistentes = fs.readdirSync(sessionDir).filter(item => {
+    const fullPath = path.join(sessionDir, item);
+    return fs.statSync(fullPath).isDirectory() && item !== sessionId;
+  });
+  
+  if (carpetasExistentes.length > 0) {
+    console.log(`⚠️ ADVERTENCIA: Existen otras carpetas de sesión que podrían interferir:`);
+    carpetasExistentes.forEach(carpeta => {
+      console.log(`   - ${carpeta}`);
+    });
   }
 
   // Variable para controlar si ya se guardó el QR (evitar múltiples guardados)
@@ -376,6 +320,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       
       if (state === "CONNECTED") {
         reconexionIntentos = 0; // Reset contador cuando se conecta exitosamente
+        sessionErrors[sessionId] = 0; // **NUEVO: Reset contador de errores globales**
         console.log(`✅ Sesión ${sessionId} conectada exitosamente`);
         
         // **NUEVO: Guardar información de sesión inmediatamente**
@@ -387,13 +332,21 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
       }
       
       if (["CONFLICT", "UNPAIRED", "UNLAUNCHED", "DISCONNECTED"].includes(state)) {
+        // **NUEVO: Incrementar contador de errores globales**
+        if (!sessionErrors[sessionId]) sessionErrors[sessionId] = 0;
+        sessionErrors[sessionId]++;
+        
+        console.log(`⚠️ Error ${sessionErrors[sessionId]}/3 para sesión ${sessionId}: ${state}`);
+        
         // Solo intentar reconexión automática si NO se está generando QR explícitamente
-        if (!permitirGuardarQR && reconexionIntentos < maxIntentos) {
+        // Y no se ha alcanzado el límite de errores globales
+        if (!permitirGuardarQR && reconexionIntentos < maxIntentos && sessionErrors[sessionId] < 3) {
           reconexionIntentos++;
-          console.log(`🔄 Intento ${reconexionIntentos}/${maxIntentos} de reconexión automática para ${sessionId}...`);
+          console.log(`🔄 Intento ${reconexionIntentos}/${maxIntentos} de reconexión automática para ${sessionId} (error global: ${sessionErrors[sessionId]}/3)...`);
           
-          // Esperar antes de intentar reconectar
-          await new Promise(resolve => setTimeout(resolve, 5000));
+          // Esperar antes de intentar reconectar (tiempo progresivo)
+          const tiempoEspera = 5000 * reconexionIntentos; // 5s, 10s, 15s
+          await new Promise(resolve => setTimeout(resolve, tiempoEspera));
           
           try {
             // Cerrar sesión actual antes de recrear
@@ -407,14 +360,21 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
           } catch (err) {
             console.error(`❌ Error en intento ${reconexionIntentos} de reconexión automática ${sessionId}:`, err.message);
             
-            if (reconexionIntentos >= maxIntentos) {
-              console.error(`🚫 Máximo de intentos automáticos alcanzado para ${sessionId}, requiere intervención manual`);
+            if (reconexionIntentos >= maxIntentos || sessionErrors[sessionId] >= 3) {
+              console.error(`🚫 Máximo de intentos automáticos alcanzado para ${sessionId}, bloqueando por 30 minutos`);
+              
+              // Bloquear temporalmente esta sesión
+              setTimeout(() => {
+                console.log(`🔓 Desbloqueando sesión ${sessionId} después de 30 minutos`);
+                sessionErrors[sessionId] = 0;
+                reconexionIntentos = 0;
+              }, 30 * 60 * 1000);
             }
           }
         } else if (permitirGuardarQR) {
           console.log(`🔍 Sesión ${sessionId} desconectada pero está en proceso de generación de QR, no se reintenta automáticamente`);
         } else {
-          console.error(`🚫 Sesión ${sessionId} desconectada permanentemente, requiere escaneo manual de QR`);
+          console.error(`🚫 Sesión ${sessionId} desconectada permanentemente (errores: ${sessionErrors[sessionId]}/3), requiere escaneo manual de QR`);
         }
       }
     });
@@ -479,31 +439,50 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
     return client;
   } catch (err) {
-    console.error(`❌ Error creando sesión para ${sessionId}:`, err);
+    console.error(`❌ Error creando sesión para ${sessionId}:`, err.message);
+    console.error(`🔍 Tipo de error:`, err.name || 'Unknown');
+    
+    // Log detallado del error para debugging
+    if (err.stack) {
+      console.error(`📋 Stack trace:`, err.stack.split('\n').slice(0, 5).join('\n'));
+    }
     
     // Incrementar contador de errores para esta sesión
     sessionErrors[sessionId] = (sessionErrors[sessionId] || 0) + 1;
-    console.log(`📊 Errores acumulados para cliente ${sessionId}: ${sessionErrors[sessionId]}`);
+    console.log(`📊 Errores acumulados para cliente ${sessionId}: ${sessionErrors[sessionId]}/3`);
     
-    // Si hay demasiados errores consecutivos, limpiar y bloquear temporalmente
-    if (sessionErrors[sessionId] >= 5) {
-      console.log(`🚫 Cliente ${sessionId} bloqueado temporalmente por exceso de errores`);
+    // Limpiar sesión de memoria si existe (evitar estados inconsistentes)
+    if (sessions[sessionId]) {
+      try {
+        console.log(`🧹 Limpiando sesión en memoria para cliente ${sessionId}...`);
+        await sessions[sessionId].close();
+      } catch (e) {
+        console.log(`⚠️ Error cerrando sesión fallida para ${sessionId}:`, e.message);
+      }
+      delete sessions[sessionId];
+    }
+    
+    // Si hay demasiados errores consecutivos, limpiar completamente y bloquear temporalmente
+    if (sessionErrors[sessionId] >= 3) {
+      console.log(`🚫 Cliente ${sessionId} bloqueado temporalmente por exceso de errores (${sessionErrors[sessionId]}/3)`);
       
-      // Limpiar sesión de memoria si existe
-      if (sessions[sessionId]) {
+      // Limpiar carpeta de sesión si está corrupta
+      const sessionPath = path.join(sessionDir, sessionId);
+      if (fs.existsSync(sessionPath)) {
         try {
-          await sessions[sessionId].close();
-        } catch (e) {
-          // Ignorar errores al cerrar
+          console.log(`🧹 Eliminando carpeta de sesión corrupta: ${sessionPath}`);
+          fs.rmSync(sessionPath, { recursive: true, force: true });
+          console.log(`✅ Carpeta eliminada para cliente ${sessionId}`);
+        } catch (cleanupErr) {
+          console.error(`❌ Error limpiando carpeta para ${sessionId}:`, cleanupErr.message);
         }
-        delete sessions[sessionId];
       }
       
-      // Programar reset del contador de errores en 10 minutos
+      // Programar reset del contador de errores en 30 minutos
       setTimeout(() => {
-        console.log(`🔄 Reseteando contador de errores para cliente ${sessionId}`);
+        console.log(`� Desbloqueando y reseteando contador de errores para cliente ${sessionId}`);
         sessionErrors[sessionId] = 0;
-      }, 10 * 60 * 1000); // 10 minutos
+      }, 30 * 60 * 1000); // 30 minutos
     }
     
     throw err;
@@ -640,12 +619,6 @@ async function restaurarSesiones() {
       
       console.log(`\n🔄 Procesando cliente ${clienteId}...`);
       
-      // Verificar si el cliente está bloqueado por errores repetidos
-      if (sessionErrors[clienteId] && sessionErrors[clienteId] >= 2) {
-        console.log(`🚫 Cliente ${clienteId} está bloqueado por errores repetidos (${sessionErrors[clienteId]} errores), saltando...`);
-        continue;
-      }
-      
       // Solo restaurar si el cliente existe en la base de datos
       if (!clientesActivos.includes(clienteId)) {
         console.log(`⚠️ Cliente ${clienteId} no existe en DB (Clientes válidos: ${clientesActivos.join(', ')}), saltando...`);
@@ -659,36 +632,61 @@ async function restaurarSesiones() {
       console.log(`  - Ruta sesión: ${sessionPath}`);
       console.log(`  - Carpeta Default: ${fs.existsSync(defaultPath) ? '✅' : '❌'}`);
       
-      // Buscar cualquier archivo que indique que es una sesión válida
+      // Verificar archivos críticos de WhatsApp Web
       let tieneArchivosDeSession = false;
+      let archivosEsenciales = [];
+      let archivosEncontrados = [];
+      let archivosNoEncontrados = [];
+      
       if (fs.existsSync(defaultPath)) {
         const archivosDefault = fs.readdirSync(defaultPath);
         console.log(`  - Archivos en Default: [${archivosDefault.join(', ')}]`);
         
-        // Verificar si tiene archivos típicos de WhatsApp Web
-        const archivosEsenciales = [
+        // Verificar archivos críticos específicos para WhatsApp Web
+        archivosEsenciales = [
           'Local Storage',
           'Session Storage', 
           'IndexedDB',
-          'Preferences',
-          'cookies',
-          'Cookies'
+          'Preferences'
         ];
         
-        tieneArchivosDeSession = archivosEsenciales.some(archivo => 
-          archivosDefault.some(archivoReal => 
+        // Verificar cada archivo crítico
+        for (const archivo of archivosEsenciales) {
+          const existe = archivosDefault.some(archivoReal => 
             archivoReal.toLowerCase().includes(archivo.toLowerCase())
-          )
-        );
+          );
+          if (existe) {
+            archivosEncontrados.push(archivo);
+          } else {
+            archivosNoEncontrados.push(archivo);
+          }
+          console.log(`  - ${archivo}: ${existe ? '✅' : '❌'}`);
+        }
         
-        if (!tieneArchivosDeSession && archivosDefault.length > 0) {
-          // Si no tiene archivos típicos pero tiene algo, asumir que es válida
-          tieneArchivosDeSession = true;
-          console.log(`  - Asumiendo sesión válida por tener archivos en Default`);
+        // Solo considerar válida si tiene Local Storage (mínimo crítico) y al menos un archivo adicional
+        const tieneLocalStorage = archivosEncontrados.some(a => a.includes('Local Storage'));
+        const tienePreferences = archivosEncontrados.some(a => a.includes('Preferences'));
+        const tieneIndexedDB = archivosEncontrados.some(a => a.includes('IndexedDB'));
+        const tieneSessionStorage = archivosEncontrados.some(a => a.includes('Session Storage'));
+        
+        // Criterio MÁS ESTRICTO: requiere Local Storage + (Preferences O IndexedDB)
+        tieneArchivosDeSession = tieneLocalStorage && (tienePreferences || tieneIndexedDB);
+        
+        if (!tieneArchivosDeSession) {
+          console.log(`  - ❌ Sesión INCOMPLETA para cliente ${clienteId}:`);
+          console.log(`    - Local Storage: ${tieneLocalStorage ? '✅' : '❌'}`);
+          console.log(`    - Preferences: ${tienePreferences ? '✅' : '❌'}`);
+          console.log(`    - IndexedDB: ${tieneIndexedDB ? '✅' : '❌'}`);
+          console.log(`    - Session Storage: ${tieneSessionStorage ? '✅' : '❌'}`);
+          console.log(`    - Archivos encontrados: [${archivosEncontrados.join(', ')}]`);
+          console.log(`    - Archivos faltantes: [${archivosNoEncontrados.join(', ')}]`);
+          console.log(`    - 🔄 Requiere re-autenticación con QR`);
+        } else {
+          console.log(`  - ✅ Sesión VÁLIDA para cliente ${clienteId} (Local Storage + archivos adicionales)`);
         }
       }
       
-      console.log(`  - Tiene archivos de sesión: ${tieneArchivosDeSession ? '✅' : '❌'}`);
+      console.log(`  - Tiene sesión restaurable: ${tieneArchivosDeSession ? '✅' : '❌'}`);
       
       if (fs.existsSync(defaultPath) && tieneArchivosDeSession) {
         console.log(`🔄 Restaurando sesión para cliente ${clienteId}...`);
@@ -697,8 +695,6 @@ async function restaurarSesiones() {
           // Configurar la variable de entorno para esta sesión específica
           const originalSessionFolder = process.env.SESSION_FOLDER;
           process.env.SESSION_FOLDER = path.dirname(sessionPath);
-          
-          console.log(`🔧 Configurando SESSION_FOLDER para ${clienteId}: ${path.dirname(sessionPath)}`);
           
           await crearSesion(clienteId, false); // false = no regenerar QR
           console.log(`✅ Sesión restaurada para cliente ${clienteId}`);
@@ -713,75 +709,8 @@ async function restaurarSesiones() {
           // Esperar un poco entre restauraciones para no sobrecargar
           await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (err) {
-          console.error(`❌ Error restaurando sesión ${clienteId}:`, err?.message || 'Error desconocido');
-          
-          // Manejo específico para diferentes tipos de errores
-          if (err === undefined || err === null) {
-            console.error(`🔍 Error is ${err}, tipo: ${typeof err}`);
-            console.error(`🔍 Probablemente es un error interno de venom-bot`);
-            sessionErrors[clienteId] = (sessionErrors[clienteId] || 0) + 1;
-          } else if (typeof err === 'object') {
-            console.error(`🔍 Error objeto:`, JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
-            console.error(`🔍 Stack trace:`, err?.stack || 'No stack disponible');
-          } else {
-            console.error(`🔍 Error primitivo (${typeof err}):`, err);
-          }
-          
-          // Detectar patrones de errores problemáticos de venom-bot
-          const isVenomError = (
-            err === undefined || 
-            err === null ||
-            (err?.message && (
-              err.message.includes('Unknown error') || 
-              err.message.includes('Unknow error') ||
-              err.message.includes('Error: undefined') ||
-              err.message === ''
-            )) ||
-            (typeof err === 'string' && (
-              err.includes('Unknown error') ||
-              err.includes('Unknow error')
-            ))
-          );
-          
-          if (isVenomError) {
-            console.log(`🚫 Detectado error problemático de venom-bot para cliente ${clienteId}`);
-            
-            // Detectar bucle infinito ANTES de incrementar contadores
-            const esBucleInfinito = detectarBucleInfinito(clienteId);
-            if (esBucleInfinito) {
-              console.log(`🚨 BUCLE INFINITO: Cliente ${clienteId} bloqueado automáticamente`);
-              continue; // Saltar al siguiente cliente
-            }
-            
-            sessionErrors[clienteId] = (sessionErrors[clienteId] || 0) + 1;
-            console.log(`📊 Errores acumulados para cliente ${clienteId}: ${sessionErrors[clienteId]}`);
-            
-            if (sessionErrors[clienteId] >= 2) { // Reducir threshold a 2
-              console.log(`🚫 Cliente ${clienteId} bloqueado por errores repetidos (${sessionErrors[clienteId]} errores)`);
-              
-              // Limpiar inmediatamente la carpeta problemática 
-              const searchPaths = [sessionPath, path.join("/app/tokens", clienteId)];
-              for (const pathToClean of searchPaths) {
-                if (fs.existsSync(pathToClean)) {
-                  try {
-                    console.log(`🗑️ Eliminando carpeta problemática: ${pathToClean}`);
-                    fs.rmSync(pathToClean, { recursive: true, force: true });
-                    console.log(`✅ Carpeta eliminada exitosamente: ${pathToClean}`);
-                  } catch (cleanErr) {
-                    console.error(`❌ Error limpiando carpeta ${pathToClean}:`, cleanErr.message);
-                  }
-                }
-              }
-              
-              // Resetear contador después de limpiar
-              setTimeout(() => {
-                console.log(`🔄 Reseteando contador de errores para cliente ${clienteId}`);
-                sessionErrors[clienteId] = 0;
-              }, 3 * 60 * 1000); // 3 minutos para permitir reintento más rápido
-            }
-          } else {
-            console.log(`⚠️ Error normal (no venom), continuando con siguiente cliente...`);
-          }
+          console.error(`❌ Error restaurando sesión ${clienteId}:`, err.message);
+          console.error(`🔍 Stack trace:`, err.stack);
         }
       } else {
         console.log(`⚠️ No hay datos de sesión válidos para cliente ${clienteId} en ${sessionPath}`);
@@ -1008,45 +937,112 @@ app.get("/qr/:clienteId", (req, res) => {
   }
 });
 
-app.get("/estado", async (req, res) => {
+app.get("/diagnostico/:clienteId?", async (req, res) => {
+  const { clienteId } = req.params;
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  
   try {
-    // Obtener clientes de la DB
-    const result = await pool.query("SELECT id, comercio FROM tenants");
-    const clientesDB = result.rows.map(r => ({ id: String(r.id), comercio: r.comercio }));
-    
-    // Obtener carpetas existentes
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    const carpetas = fs.existsSync(sessionDir) ? 
-      fs.readdirSync(sessionDir).filter(item => {
-        const itemPath = path.join(sessionDir, item);
-        return fs.statSync(itemPath).isDirectory() && !isNaN(item);
-      }) : [];
-    
-    // Estado de sesiones activas
-    const sesionesActivas = Object.keys(sessions);
-    
-    // Análisis
-    const clientesConCarpeta = clientesDB.filter(c => carpetas.includes(c.id));
-    const clientesSinCarpeta = clientesDB.filter(c => !carpetas.includes(c.id));
-    const carpetasHuerfanas = carpetas.filter(c => !clientesDB.find(cl => cl.id === c));
-    
-    res.json({
+    const diagnostico = {
       timestamp: new Date().toISOString(),
-      clientes_en_db: clientesDB.length,
-      carpetas_en_disco: carpetas.length,
-      sesiones_activas: sesionesActivas.length,
-      clientes_db: clientesDB,
-      carpetas_existentes: carpetas,
-      sesiones_activas_ids: sesionesActivas,
-      analisis: {
-        clientes_con_carpeta: clientesConCarpeta,
-        clientes_sin_carpeta: clientesSinCarpeta,
-        carpetas_huerfanas: carpetasHuerfanas
+      session_folder: sessionDir,
+      clientes_solicitados: clienteId ? [clienteId] : 'todos'
+    };
+
+    // Si se especifica un cliente, hacer diagnóstico detallado
+    if (clienteId) {
+      const sessionPath = path.join(sessionDir, clienteId);
+      const defaultPath = path.join(sessionPath, "Default");
+      
+      diagnostico.cliente = {
+        id: clienteId,
+        carpeta_existe: fs.existsSync(sessionPath),
+        carpeta_default_existe: fs.existsSync(defaultPath),
+        sesion_activa: !!sessions[clienteId],
+        errores_acumulados: sessionErrors[clienteId] || 0,
+        bloqueado: (sessionErrors[clienteId] || 0) >= 3
+      };
+      
+      if (fs.existsSync(defaultPath)) {
+        const archivos = fs.readdirSync(defaultPath);
+        const archivosCriticos = ['Local Storage', 'Preferences', 'IndexedDB', 'Session Storage'];
+        
+        diagnostico.cliente.archivos = {
+          total_archivos: archivos.length,
+          archivos_encontrados: archivos,
+          archivos_criticos: {}
+        };
+        
+        archivosCriticos.forEach(archivo => {
+          const existe = archivos.some(a => a.toLowerCase().includes(archivo.toLowerCase()));
+          diagnostico.cliente.archivos.archivos_criticos[archivo] = existe;
+        });
+        
+        // Evaluar si es restaurable
+        const tieneLocalStorage = archivos.some(a => a.toLowerCase().includes('local storage'));
+        const tieneOtros = archivos.some(a => a.toLowerCase().includes('preferences') || a.toLowerCase().includes('indexeddb'));
+        diagnostico.cliente.es_restaurable = tieneLocalStorage && tieneOtros;
+      } else {
+        diagnostico.cliente.es_restaurable = false;
+        diagnostico.cliente.razon = "Carpeta Default no existe";
       }
-    });
+      
+      // Estado de conexión si está activa
+      if (sessions[clienteId]) {
+        try {
+          const isConnected = await sessions[clienteId].isConnected();
+          diagnostico.cliente.estado_conexion = isConnected ? 'CONNECTED' : 'DISCONNECTED';
+        } catch (err) {
+          diagnostico.cliente.estado_conexion = 'ERROR';
+          diagnostico.cliente.error_conexion = err.message;
+        }
+      } else {
+        diagnostico.cliente.estado_conexion = 'NO_ACTIVE';
+      }
+      
+    } else {
+      // Diagnóstico general de todos los clientes
+      const result = await pool.query("SELECT id, comercio FROM tenants ORDER BY id");
+      diagnostico.resumen = {
+        clientes_db: result.rows.length,
+        sesiones_activas: Object.keys(sessions).length,
+        sesiones_con_errores: Object.keys(sessionErrors).filter(id => sessionErrors[id] > 0).length,
+        sesiones_bloqueadas: Object.keys(sessionErrors).filter(id => sessionErrors[id] >= 3).length
+      };
+      
+      diagnostico.clientes = [];
+      
+      for (const row of result.rows) {
+        const id = String(row.id);
+        const sessionPath = path.join(sessionDir, id);
+        const defaultPath = path.join(sessionPath, "Default");
+        
+        const clienteInfo = {
+          id: id,
+          comercio: row.comercio,
+          carpeta_existe: fs.existsSync(sessionPath),
+          carpeta_default_existe: fs.existsSync(defaultPath),
+          sesion_activa: !!sessions[id],
+          errores_acumulados: sessionErrors[id] || 0,
+          bloqueado: (sessionErrors[id] || 0) >= 3,
+          es_restaurable: false
+        };
+        
+        if (fs.existsSync(defaultPath)) {
+          const archivos = fs.readdirSync(defaultPath);
+          const tieneLocalStorage = archivos.some(a => a.toLowerCase().includes('local storage'));
+          const tieneOtros = archivos.some(a => a.toLowerCase().includes('preferences') || a.toLowerCase().includes('indexeddb'));
+          clienteInfo.es_restaurable = tieneLocalStorage && tieneOtros;
+          clienteInfo.total_archivos = archivos.length;
+        }
+        
+        diagnostico.clientes.push(clienteInfo);
+      }
+    }
+    
+    res.json(diagnostico);
   } catch (err) {
-    console.error("❌ Error obteniendo estado:", err);
-    res.status(500).json({ error: "Error obteniendo estado" });
+    console.error("❌ Error en diagnóstico:", err);
+    res.status(500).json({ error: "Error generando diagnóstico", details: err.message });
   }
 });
 
@@ -1769,7 +1765,7 @@ app.post("/reset-errores/:clienteId", async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Error reseteando contador de errores",
-      details: error.message
+           details: error.message
     });
   }
 });
@@ -2038,7 +2034,7 @@ async function inicializarAplicacion() {
   }
 }
 
-// Intentar iniciar el servidor con manejo de errores
+// Intentar iniciar el servidor with manejo de errores
 const server = app.listen(PORT)
   .on('listening', async () => {
     console.log(`✅ Venom-service corriendo en puerto ${PORT}`);
@@ -2064,3 +2060,110 @@ const server = app.listen(PORT)
       process.exit(1);
     }
   });
+
+// Nuevos endpoints para limpieza y reparación
+app.post("/limpiar/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  
+  try {
+    console.log(`🧹 Iniciando limpieza completa para cliente ${clienteId}...`);
+    
+    // 1. Cerrar sesión activa si existe
+    if (sessions[clienteId]) {
+      try {
+        await sessions[clienteId].close();
+        console.log(`🔒 Sesión activa cerrada para cliente ${clienteId}`);
+      } catch (err) {
+        console.log(`⚠️ Error cerrando sesión activa para ${clienteId}:`, err.message);
+      }
+      delete sessions[clienteId];
+    }
+    
+    // 2. Resetear contador de errores
+    sessionErrors[clienteId] = 0;
+    console.log(`🔄 Contador de errores reseteado para cliente ${clienteId}`);
+    
+    // 3. Eliminar carpeta de sesión completa
+    const sessionPath = path.join(sessionDir, clienteId);
+    if (fs.existsSync(sessionPath)) {
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      console.log(`🗑️ Carpeta de sesión eliminada: ${sessionPath}`);
+    }
+    
+    // 4. Eliminar archivo QR HTML
+    const qrPath = path.join(sessionDir, `${clienteId}.html`);
+    if (fs.existsSync(qrPath)) {
+      fs.unlinkSync(qrPath);
+      console.log(`🗑️ Archivo QR eliminado: ${qrPath}`);
+    }
+    
+    // 5. Limpiar QR en base de datos
+    try {
+      const result = await pool.query("UPDATE tenants SET qr_code = NULL WHERE id = $1", [clienteId]);
+      console.log(`🧹 QR limpiado en DB para cliente ${clienteId}, filas afectadas: ${result.rowCount}`);
+    } catch (err) {
+      console.error(`❌ Error limpiando QR en DB para cliente ${clienteId}:`, err);
+    }
+    
+    // 6. Crear carpetas limpias
+    await crearCarpetasAutomaticamente();
+    
+    console.log(`✅ Limpieza completa finalizada para cliente ${clienteId}`);
+    
+    res.json({
+      success: true,
+      message: `Cliente ${clienteId} limpiado completamente`,
+      acciones: [
+        "Sesión activa cerrada",
+        "Contador de errores reseteado", 
+        "Carpeta de sesión eliminada",
+        "Archivo QR eliminado",
+        "QR limpiado en DB",
+        "Carpetas base recreadas"
+      ],
+      siguiente_paso: `Usar /iniciar/${clienteId} para generar nuevo QR`
+    });
+    
+  } catch (err) {
+    console.error(`❌ Error limpiando cliente ${clienteId}:`, err);
+    res.status(500).json({
+      success: false,
+      error: "Error durante la limpieza",
+      details: err.message
+    });
+  }
+});
+
+app.post("/reparar-automatico/:clienteId", async (req, res) => {
+  const { clienteId } = req.params;
+  
+  try {
+    console.log(`🔧 Iniciando reparación automática para cliente ${clienteId}...`);
+    
+    // 1. Limpiar completamente
+    await fetch(`http://localhost:${PORT}/limpiar/${clienteId}`, { method: 'POST' });
+    
+    // 2. Esperar un poco
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // 3. Iniciar nueva sesión
+    await crearSesionConTimeout(clienteId, 60000, true);
+    
+    console.log(`✅ Reparación automática completada para cliente ${clienteId}`);
+    
+    res.json({
+      success: true,
+      message: `Cliente ${clienteId} reparado automáticamente`,
+      qr_disponible_en: `/qr/${clienteId}`
+    });
+    
+  } catch (err) {
+    console.error(`❌ Error en reparación automática para cliente ${clienteId}:`, err);
+    res.status(500).json({
+      success: false,
+      error: "Error en reparación automática",
+      details: err.message
+    });
+  }
+});
