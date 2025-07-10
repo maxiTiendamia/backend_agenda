@@ -711,41 +711,6 @@ async function restaurarSesiones() {
     console.log(`  - Clientes sin carpeta: [${clientesSinCarpeta.join(', ')}]`);
     console.log(`  - Carpetas huérfanas: [${carpetasHuerfanas.join(', ')}]`);
     
-    // Verificar específicamente el cliente 35
-    if (clientesActivos.includes('35')) {
-      console.log(`🔍 DIAGNÓSTICO CLIENTE 35:`);
-      console.log(`  - Existe en BD: ✅`);
-      console.log(`  - Tiene carpeta en disco: ${carpetasIds.includes('35') ? '✅' : '❌'}`);
-      console.log(`  - Sesión en memoria: ${sesionesEnMemoria.includes('35') ? '✅' : '❌'}`);
-      
-      if (sessions['35']) {
-        try {
-          const estado35 = await sessions['35'].getConnectionState();
-          console.log(`  - Estado actual: ${estado35}`);
-        } catch (e) {
-          console.log(`  - Error verificando estado: ${e.message}`);
-        }
-      }
-      
-      // Buscar carpeta 35 manualmente en ambas ubicaciones
-      const paths35 = [
-        path.join(sessionDir, '35'),
-        '/app/tokens/35'
-      ];
-      
-      for (const pathToCheck of paths35) {
-        console.log(`  - Verificando ruta ${pathToCheck}: ${fs.existsSync(pathToCheck) ? '✅' : '❌'}`);
-        if (fs.existsSync(pathToCheck)) {
-          const defaultPath = path.join(pathToCheck, 'Default');
-          console.log(`    - Default folder: ${fs.existsSync(defaultPath) ? '✅' : '❌'}`);
-          if (fs.existsSync(pathToCheck)) {
-            const files = fs.readdirSync(pathToCheck);
-            console.log(`    - Archivos en carpeta: [${files.join(', ')}]`);
-          }
-        }
-      }
-    }
-    
     for (const sessionFolder of sessionFolders) {
       const clienteId = typeof sessionFolder === 'string' ? sessionFolder : sessionFolder.id;
       const sessionPath = typeof sessionFolder === 'string' ? 
@@ -830,6 +795,9 @@ async function restaurarSesiones() {
           const originalSessionFolder = process.env.SESSION_FOLDER;
           process.env.SESSION_FOLDER = path.dirname(sessionPath);
           
+          // LIMPIEZA DE SINGLETONLOCK ANTES DE RESTAURAR SESIÓN
+          await limpiarSingletonLock(clienteId);
+
           await crearSesion(clienteId, false); // false = no regenerar QR
           console.log(`✅ Sesión restaurada para cliente ${clienteId}`);
           
