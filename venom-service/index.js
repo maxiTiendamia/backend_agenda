@@ -18,6 +18,9 @@ const sessions = {};
 const reconnectIntervals = {}; // Para manejar intervalos de reconexión
 const sessionErrors = {}; // Para rastrear errores por sesión y evitar bucles infinitos
 
+// Al inicio del archivo
+const SESSION_FOLDER = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+
 // **NUEVA FUNCIÓN: Verificar conectividad del backend**
 async function verificarConectividadBackend() {
   try {
@@ -209,7 +212,7 @@ function crearSesionConTimeout(clienteId, timeoutMs = 60000, permitirGuardarQR =
 
 async function crearSesion(clienteId, permitirGuardarQR = true) {
   const sessionId = String(clienteId);
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const sessionDir = SESSION_FOLDER;
   const qrPath = path.join(sessionDir, `${sessionId}.html`);
 
   console.log(`⚙️ Iniciando crearSesion para cliente ${sessionId}, permitirGuardarQR: ${permitirGuardarQR}`);
@@ -468,7 +471,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
             
             // **NUEVO: Limpiar SingletonLock antes de recrear**
             await limpiarSingletonLock(sessionId);
-            
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Espera 1 segundo
             await crearSesion(sessionId, false); // false = NO generar QR en reconexión automática
             console.log(`✅ Sesión ${sessionId} reconectada automáticamente en intento ${reconexionIntentos}`);
           } catch (err) {
@@ -652,8 +655,6 @@ async function restaurarSesiones() {
     // **NUEVO: Crear carpetas automáticamente ANTES de restaurar**
     await crearCarpetasAutomaticamente();
     
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-    
     // Verificar cuáles clientes existen en la base de datos
     let result;
     try {
@@ -673,22 +674,22 @@ async function restaurarSesiones() {
     const clientesActivos = result.rows.map(row => String(row.id));
     
     // Buscar carpetas de sesión existentes SOLO en sessionDir
-    if (!fs.existsSync(sessionDir)) {
+    if (!fs.existsSync(SESSION_FOLDER)) {
       console.log("📁 No existe carpeta de sesiones, creándola...");
-      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.mkdirSync(SESSION_FOLDER, { recursive: true });
     }
 
     let sessionFolders = [];
     try {
-      const localFolders = fs.readdirSync(sessionDir).filter(item => {
-        const itemPath = path.join(sessionDir, item);
+      const localFolders = fs.readdirSync(SESSION_FOLDER).filter(item => {
+        const itemPath = path.join(SESSION_FOLDER, item);
         return fs.statSync(itemPath).isDirectory() && !isNaN(item) && clientesActivos.includes(item);
       });
-      console.log(`📂 Encontradas ${localFolders.length} carpetas válidas en ${sessionDir}:`, localFolders);
+      console.log(`📂 Encontradas ${localFolders.length} carpetas válidas en ${SESSION_FOLDER}:`, localFolders);
 
       sessionFolders = localFolders.map(folder => ({
         id: folder,
-        path: path.join(sessionDir, folder)
+        path: path.join(SESSION_FOLDER, folder)
       }));
     } catch (err) {
       console.error("❌ Error leyendo carpeta local:", err.message);
@@ -714,7 +715,7 @@ async function restaurarSesiones() {
     for (const sessionFolder of sessionFolders) {
       const clienteId = typeof sessionFolder === 'string' ? sessionFolder : sessionFolder.id;
       const sessionPath = typeof sessionFolder === 'string' ? 
-        path.join(sessionDir, sessionFolder) : sessionFolder.path;
+        path.join(SESSION_FOLDER, sessionFolder) : sessionFolder.path;
       
       console.log(`\n🔄 Procesando cliente ${clienteId}...`);
       
@@ -797,6 +798,7 @@ async function restaurarSesiones() {
           
           // LIMPIEZA DE SINGLETONLOCK ANTES DE RESTAURAR SESIÓN
           await limpiarSingletonLock(clienteId);
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Espera 1 segundo
 
           await crearSesion(clienteId, false); // false = no regenerar QR
           console.log(`✅ Sesión restaurada para cliente ${clienteId}`);
@@ -833,7 +835,7 @@ async function restaurarSesiones() {
     console.log("🧹 Limpiando carpetas huérfanas y archivos de bloqueo...");
     
     // Buscar y eliminar carpetas de clientes que ya no están en la BD
-    const searchPaths = [sessionDir];
+    const searchPaths = [SESSION_FOLDER];
     
     for (const searchPath of searchPaths) {
       if (!fs.existsSync(searchPath)) continue;
@@ -911,7 +913,7 @@ async function restaurarSesiones() {
 
 // Función para crear carpetas base automáticamente si no existen
 async function crearCarpetasAutomaticamente() {
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const sessionDir = SESSION_FOLDER;
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir, { recursive: true });
     console.log("📁 Carpeta de sesiones creada automáticamente:", sessionDir);
@@ -920,14 +922,20 @@ async function crearCarpetasAutomaticamente() {
 
 // Limpieza agresiva de archivos SingletonLock antes de crear/restaurar sesión
 async function limpiarSingletonLock(sessionId) {
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-  const singletonLockPath = path.join(sessionDir, sessionId, "SingletonLock");
-  if (fs.existsSync(singletonLockPath)) {
-    try {
-      fs.unlinkSync(singletonLockPath);
-      console.log(`🔓 SingletonLock eliminado para cliente ${sessionId}`);
-    } catch (err) {
-      console.error(`❌ Error eliminando SingletonLock para ${sessionId}:`, err.message);
+  const sessionDirs = [
+    SESSION_FOLDER,
+    "/app/sessions",
+    "/app/tokens"
+  ];
+  for (const dir of sessionDirs) {
+    const singletonLockPath = path.join(dir, sessionId, "SingletonLock");
+    if (fs.existsSync(singletonLockPath)) {
+      try {
+        fs.unlinkSync(singletonLockPath);
+        console.log(`🔓 SingletonLock eliminado en ${singletonLockPath} para cliente ${sessionId}`);
+      } catch (err) {
+        console.error(`❌ Error eliminando SingletonLock en ${singletonLockPath} para ${sessionId}:`, err.message);
+      }
     }
   }
 }
@@ -936,7 +944,7 @@ async function limpiarSingletonLock(sessionId) {
 async function guardarInformacionSesion(sessionId, client) {
   try {
     const info = await client.getHostDevice();
-    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+    const sessionDir = SESSION_FOLDER;
     const infoPath = path.join(sessionDir, sessionId, "session_info.json");
     fs.writeFileSync(infoPath, JSON.stringify(info, null, 2));
     console.log(`💾 Información de sesión guardada para cliente ${sessionId}`);
@@ -1012,7 +1020,7 @@ app.post('/reiniciar/:clienteId', async (req, res) => {
 
 app.get('/qr/:clienteId', async (req, res) => {
   const clienteId = req.params.clienteId;
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const sessionDir = SESSION_FOLDER;
   const qrPath = path.join(sessionDir, `${clienteId}.html`);
   if (fs.existsSync(qrPath)) {
     res.sendFile(qrPath);
@@ -1040,7 +1048,7 @@ app.get('/estado-sesiones', async (req, res) => {
         }
       }
       // Verifica si hay archivos de sesión en disco
-      const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+      const sessionDir = SESSION_FOLDER;
       const sessionPath = path.join(sessionDir, id);
       tieneArchivos = fs.existsSync(sessionPath);
       return {
