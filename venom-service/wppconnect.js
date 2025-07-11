@@ -18,6 +18,7 @@ async function createSession(sessionId, onQr, onMessage) {
     headless: true,
     useChrome: true,
     autoClose: 180000,
+    browserSessionToken: true, // Fuerza perfil temporal, sin disco local
     browserArgs: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
