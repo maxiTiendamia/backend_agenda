@@ -34,9 +34,6 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
     sessionId,
     async (base64Qr) => {
       if (permitirGuardarQR) {
-        const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;"><img src="${base64Qr}" /></body></html>`;
-        const qrPath = path.join(__dirname, 'tokens', `${sessionId}.html`);
-        fs.writeFileSync(qrPath, html);
         await guardarQR(sessionId, base64Qr);
       }
     },
@@ -62,15 +59,20 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
   return client;
 }
 
-// Restaurar sesiones desde Redis
+// Restaurar sesiones desde Redis SOLO si hay archivos guardados
 async function restaurarSesiones() {
   const result = await pool.query('SELECT id FROM tenants ORDER BY id');
   const clientes = result.rows.map(r => String(r.id));
   for (const clienteId of clientes) {
-    try {
-      await crearSesionWPP(clienteId, false);
-    } catch (err) {
-      console.error(`Error restaurando sesión ${clienteId}:`, err.message);
+    const sessionDir = path.join(__dirname, 'tokens', clienteId);
+    if (fs.existsSync(sessionDir)) {
+      try {
+        await crearSesionWPP(clienteId, false);
+      } catch (err) {
+        console.error(`Error restaurando sesión ${clienteId}:`, err.message);
+      }
+    } else {
+      console.log(`Cliente ${clienteId} no tiene archivos de sesión, no se intenta restaurar.`);
     }
   }
 }
@@ -78,11 +80,17 @@ async function restaurarSesiones() {
 // Endpoints
 app.get('/qr/:clienteId', async (req, res) => {
   const clienteId = req.params.clienteId;
-  const qrPath = path.join(__dirname, 'tokens', `${clienteId}.html`);
-  if (fs.existsSync(qrPath)) {
-    res.sendFile(qrPath);
-  } else {
-    res.status(404).send('QR no encontrado');
+  try {
+    const result = await pool.query('SELECT qr_code FROM tenants WHERE id = $1', [clienteId]);
+    if (result.rows.length && result.rows[0].qr_code) {
+      const qrCodeData = result.rows[0].qr_code;
+      const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;"><img src="data:image/png;base64,${qrCodeData}" /></body></html>`;
+      res.send(html);
+    } else {
+      res.status(404).send('QR no encontrado');
+    }
+  } catch (err) {
+    res.status(500).send('Error al buscar QR');
   }
 });
 
