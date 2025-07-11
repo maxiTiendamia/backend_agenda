@@ -184,6 +184,18 @@ app.get('/estado-sesiones', async (req, res) => {
 // Inicializar la aplicación: restaurar sesiones previas
 async function inicializarAplicacion() {
   try {
+    (async () => {
+  try {
+    await redisClient.ping();
+    console.log('✅ Conexión a Redis exitosa');
+    const keys = await redisClient.keys('wppconnect:*');
+    console.log(`🔑 Claves encontradas en Redis: ${keys.length}`);
+  } catch (err) {
+    console.error('❌ Error conectando a Redis:', err);
+    process.exit(1);
+  }
+})();
+
     await restaurarSesiones();
     console.log('🚀 Inicialización completa');
   } catch (err) {
