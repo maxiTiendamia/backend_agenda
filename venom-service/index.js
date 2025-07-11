@@ -949,7 +949,9 @@ async function limpiarSingletonLock(sessionId) {
   const sessionDirs = [
     SESSION_FOLDER,
     "/app/sessions",
-    "/app/tokens"
+    "/app/tokens",
+    `/app/tokens/${sessionId}`,
+    `/app/tokens/${sessionId}/Default`
   ];
   for (const dir of sessionDirs) {
     const singletonLockPath = path.join(dir, sessionId, "SingletonLock");
