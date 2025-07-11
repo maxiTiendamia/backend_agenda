@@ -38,7 +38,7 @@ WORKDIR /app
 COPY ./package*.json ./
 RUN npm install
 
-COPY ./venom-service ./
+COPY . ./
 
 # Hacer ejecutables los scripts si existen
 RUN chmod +x start.sh debug.sh 2>/dev/null || true
