@@ -35,7 +35,7 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true
 WORKDIR /app
 
 # Copiar solo lo que necesita venom-service
-COPY ./venom-service/package*.json ./
+COPY ./package*.json ./
 RUN npm install
 
 COPY ./venom-service ./
