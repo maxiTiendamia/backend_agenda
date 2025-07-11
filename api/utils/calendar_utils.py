@@ -45,7 +45,7 @@ def get_available_slots(
             end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00')).astimezone(URUGUAY_TZ)
             busy.append((start_dt, end_dt))
 
-    # Parsear y normalizar horarios laborales
+    # Parsear y normalizar horarios laborales .
     if isinstance(working_hours_json, str):
         try:
             working_hours = json.loads(working_hours_json)
