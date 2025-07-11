@@ -64,15 +64,11 @@ async function restaurarSesiones() {
   const result = await pool.query('SELECT id FROM tenants ORDER BY id');
   const clientes = result.rows.map(r => String(r.id));
   for (const clienteId of clientes) {
-    const sessionDir = path.join(__dirname, 'tokens', clienteId);
-    if (fs.existsSync(sessionDir)) {
-      try {
-        await crearSesionWPP(clienteId, false);
-      } catch (err) {
-        console.error(`Error restaurando sesión ${clienteId}:`, err.message);
-      }
-    } else {
-      console.log(`Cliente ${clienteId} no tiene archivos de sesión, no se intenta restaurar.`);
+    try {
+      await crearSesionWPP(clienteId, false);
+      console.log(`Intentando restaurar sesión para cliente ${clienteId} (usando Redis)`);
+    } catch (err) {
+      console.error(`Error restaurando sesión ${clienteId}:`, err.message);
     }
   }
 }
