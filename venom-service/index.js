@@ -227,7 +227,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
   console.log(`⚙️ Iniciando crearSesion para cliente ${sessionId}, permitirGuardarQR: ${permitirGuardarQR}`);
 
-  // **NUEVO: Limpieza más agresiva de SingletonLock**
+  // Limpieza agresiva de SingletonLock antes de restaurar
   await limpiarSingletonLock(sessionId);
 
   // Verificar si esta sesión está en bucle de errores (reducido a 3 intentos)
@@ -321,6 +321,7 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
   // Variable para controlar si ya se guardó el QR (evitar múltiples guardados)
   let qrGuardado = false;
+  let intentoExtraRestaurar = false;
 
   try {
     const client = await venom.create({
@@ -607,6 +608,21 @@ async function crearSesion(clienteId, permitirGuardarQR = true) {
 
     return client;
   } catch (err) {
+    // Detectar error de perfil bloqueado de Chrome
+    if (
+      err.message &&
+      err.message.includes('Failed to launch the browser process') &&
+      !intentoExtraRestaurar
+    ) {
+      console.error(`🔒 Error de perfil bloqueado detectado para cliente ${sessionId}. Intentando limpiar SingletonLock y reintentar...`);
+      await limpiarSingletonLock(sessionId);
+      intentoExtraRestaurar = true;
+      // Esperar un poco antes de reintentar
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Reintentar restaurar la sesión SIN borrar datos
+      return await crearSesion(sessionId, false);
+    }
+    
     console.error(`❌ Error creando sesión para ${sessionId}:`, err.message);
     console.error(`🔍 Tipo de error:`, err.name || 'Unknown');
     
