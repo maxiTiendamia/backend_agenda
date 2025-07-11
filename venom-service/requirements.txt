@@ -1,0 +1,6 @@
+wppconnect
+redis
+pg
+express
+axios
+dotenv
