@@ -813,7 +813,17 @@ async function restaurarSesiones() {
           // LIMPIEZA DE SINGLETONLOCK ANTES DE RESTAURAR SESIÓN
           await limpiarSingletonLock(clienteId);
           await new Promise(resolve => setTimeout(resolve, 1000)); // Espera 1 segundo
-
+          
+          // ELIMINAR carpeta Default antes de restaurar sesión para evitar locks de Chrome
+          if (fs.existsSync(defaultPath)) {
+            try {
+              fs.rmSync(defaultPath, { recursive: true, force: true });
+              console.log(`🧹 Carpeta Default eliminada para cliente ${clienteId} antes de restaurar sesión.`);
+            } catch (err) {
+              console.error(`❌ Error eliminando carpeta Default para cliente ${clienteId}:`, err.message);
+            }
+          }
+          
           await crearSesion(clienteId, false); // false = no regenerar QR
           console.log(`✅ Sesión restaurada para cliente ${clienteId}`);
           
