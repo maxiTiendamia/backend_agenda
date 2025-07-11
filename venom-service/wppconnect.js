@@ -40,8 +40,7 @@ async function createSession(sessionId, onQr, onMessage) {
       '--disable-translate',
       '--disable-plugins',
       '--disable-extensions',
-      '--disable-popup-blocking',
-      `--user-data-dir=/tmp/wppconnect/${sessionId}`
+      '--disable-popup-blocking'
     ]
   }).then(client => {
     client.onMessage(async (message) => {

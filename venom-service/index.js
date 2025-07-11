@@ -1,8 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
-const fs = require('fs');
-const path = require('path');
 const axios = require('axios');
 const redisClient = require('./redis');
 const { createSession } = require('./wppconnect');
@@ -59,14 +57,14 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
   return client;
 }
 
-// Restaurar sesiones desde Redis SOLO si hay archivos guardados
+// Restaurar sesiones desde Redis (sin depender de archivos locales)
 async function restaurarSesiones() {
   const result = await pool.query('SELECT id FROM tenants ORDER BY id');
   const clientes = result.rows.map(r => String(r.id));
   for (const clienteId of clientes) {
     try {
       await crearSesionWPP(clienteId, false);
-      console.log(`Intentando restaurar sesión para cliente ${clienteId} (usando Redis)`);
+      console.log(`Intentando restaurar sesión para cliente ${clienteId} (solo Redis)`);
     } catch (err) {
       console.error(`Error restaurando sesión ${clienteId}:`, err.message);
     }
@@ -139,24 +137,6 @@ app.get('/debug/errores', (req, res) => {
   res.json({ sessionErrors, sesionesEnMemoria: Object.keys(sessions), timestamp: new Date().toISOString() });
 });
 
-app.get('/debug/listar-sesiones', async (req, res) => {
-  let resultado = {};
-  try {
-    const carpetas = fs.existsSync(path.join(__dirname, 'tokens')) ? fs.readdirSync(path.join(__dirname, 'tokens')) : [];
-    resultado.carpetas = carpetas.map(carpeta => {
-      const carpetaPath = path.join(__dirname, 'tokens', carpeta);
-      let archivos = [];
-      if (fs.statSync(carpetaPath).isDirectory()) {
-        archivos = fs.readdirSync(carpetaPath);
-      }
-      return { carpeta, archivos };
-    });
-  } catch (err) {
-    resultado.error = err.message;
-  }
-  res.json(resultado);
-});
-
 app.get('/healthz', async (req, res) => {
   try {
     // Verifica conexión a Redis y PostgreSQL
@@ -177,7 +157,6 @@ app.get('/estado-sesiones', async (req, res) => {
         const id = String(row.id);
         let estado = 'NO_INICIADA';
         let enMemoria = false;
-        let tieneArchivos = false;
         if (sessions[id] && sessions[id].isConnected) {
           try {
             estado = (await sessions[id].isConnected()) ? 'CONNECTED' : 'DISCONNECTED';
@@ -186,16 +165,13 @@ app.get('/estado-sesiones', async (req, res) => {
             estado = 'ERROR';
           }
         }
-        // Verifica si hay archivos de sesión en disco
-        const sessionDir = path.join(__dirname, 'tokens', id);
-        tieneArchivos = fs.existsSync(sessionDir);
+        // Ya no se verifica archivos locales
         return {
           clienteId: id,
           nombre: row.nombre,
           comercio: row.comercio,
           estado,
-          enMemoria,
-          tieneArchivos,
+          enMemoria
         };
       })
     );
