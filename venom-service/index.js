@@ -3,7 +3,7 @@ const express = require('express');
 const { Pool } = require('pg');
 const axios = require('axios');
 const redisClient = require('./redis');
-const { createSession } = require('./wppconnect');
+const { createSession, getLoggedSessions } = require('./wppconnect');
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
@@ -57,16 +57,15 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
   return client;
 }
 
-// Restaurar sesiones desde Redis (sin depender de archivos locales)
+// Restaurar sesiones desde Redis (solo para clientes logueados)
 async function restaurarSesiones() {
-  const result = await pool.query('SELECT id FROM tenants ORDER BY id');
-  const clientes = result.rows.map(r => String(r.id));
-  for (const clienteId of clientes) {
+  const loggedSessions = await getLoggedSessions();
+  for (const sessionId of loggedSessions) {
     try {
-      await crearSesionWPP(clienteId, false);
-      console.log(`Intentando restaurar sesión para cliente ${clienteId} (solo Redis)`);
+      await crearSesionWPP(sessionId, false);
+      console.log(`Restaurando sesión para cliente logueado ${sessionId} (solo Redis)`);
     } catch (err) {
-      console.error(`Error restaurando sesión ${clienteId}:`, err.message);
+      console.error(`Error restaurando sesión ${sessionId}:`, err.message);
     }
   }
 }
