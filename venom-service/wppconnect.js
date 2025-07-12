@@ -31,6 +31,27 @@ async function getLoggedSessions() {
   return sessions;
 }
 
+// Guarda el flag de sesión activa en Redis
+async function setHasSession(sessionId, value) {
+  await redisClient.set(`wppconnect:${sessionId}:hasSession`, value ? 'true' : 'false');
+  console.log(`[REDIS] Flag hasSession guardado: sesión=${sessionId}, valor=${value}`);
+}
+
+// Obtiene los sessionId que tienen info previa en Redis
+async function getSessionsWithInfo() {
+  const keys = await redisClient.keys('wppconnect:*:hasSession');
+  const sessions = [];
+  for (const key of keys) {
+    const value = await redisClient.get(key);
+    if (value === 'true') {
+      const sessionId = key.split(':')[1];
+      sessions.push(sessionId);
+    }
+  }
+  console.log(`[REDIS] Sesiones con info previa encontradas: ${JSON.stringify(sessions)}`);
+  return sessions;
+}
+
 async function createSession(sessionId, onQr, onMessage) {
   return wppconnect.create({
     session: sessionId,
@@ -39,10 +60,18 @@ async function createSession(sessionId, onQr, onMessage) {
     },
     statusFind: async (statusSession, session) => {
       console.log(`Estado de la sesión ${session}: ${statusSession}`);
-      // Guardar estado en Redis
-      if (statusSession === 'isLogged') {
+      const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
+      if (estadosConectado.includes(statusSession)) {
         await setSessionState(session, 'loggedIn');
-      } else if (statusSession === 'desconnectedMobile' || statusSession === 'notLogged') {
+        await setHasSession(session, true); // Guardar flag de sesión activa
+      } else if (
+        statusSession === 'desconnectedMobile' ||
+        statusSession === 'notLogged' ||
+        statusSession === 'disconnected' ||
+        statusSession === 'browserClose' ||
+        statusSession === 'qrReadError' ||
+        statusSession === 'autocloseCalled'
+      ) {
         await setSessionState(session, 'disconnected');
       }
     },
@@ -95,6 +124,14 @@ async function reconnectLoggedSessions(onQr, onMessage) {
   }
 }
 
+// Restaurar sesiones desde Redis (para todas las que tienen info previa)
+async function reconnectSessionsWithInfo(onQr, onMessage) {
+  const sessions = await getSessionsWithInfo();
+  for (const sessionId of sessions) {
+    await createSession(sessionId, onQr, onMessage);
+  }
+}
+
 // Inicialización automática al arrancar el servicio
 async function startAllSessions(onQr, onMessage) {
   // Reconecta solo las sesiones logueadas
@@ -117,4 +154,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions };
+module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo };
