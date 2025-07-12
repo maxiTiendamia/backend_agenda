@@ -134,8 +134,8 @@ async function reconnectSessionsWithInfo(onQr, onMessage) {
 
 // Inicialización automática al arrancar el servicio
 async function startAllSessions(onQr, onMessage) {
-  // Reconecta solo las sesiones logueadas
-  await reconnectLoggedSessions(onQr, onMessage);
+  // Restaurar todas las sesiones que tienen info previa
+  await reconnectSessionsWithInfo(onQr, onMessage);
 }
 
 // Si ejecutas este archivo directamente, inicia las sesiones automáticamente
