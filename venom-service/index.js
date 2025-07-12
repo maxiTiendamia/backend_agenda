@@ -136,6 +136,19 @@ app.get('/debug/errores', (req, res) => {
   res.json({ sessionErrors, sesionesEnMemoria: Object.keys(sessions), timestamp: new Date().toISOString() });
 });
 
+app.get('/debug/redis', async (req, res) => {
+  try {
+    const keys = await redisClient.keys('wppconnect:*');
+    const datos = {};
+    for (const key of keys) {
+      datos[key] = await redisClient.get(key);
+    }
+    res.json({ claves: keys, datos });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/healthz', async (req, res) => {
   try {
     // Verifica conexión a Redis y PostgreSQL
