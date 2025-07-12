@@ -1,5 +1,6 @@
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
+const { cleanSessionFolder } = require('./sessionUtils');
 
 // Guarda el estado de la sesión en Redis
 async function setSessionState(sessionId, state) {
@@ -53,6 +54,8 @@ async function getSessionsWithInfo() {
 }
 
 async function createSession(sessionId, onQr, onMessage) {
+  // Limpiar carpeta de sesión antes de crearla para evitar errores de SingletonLock
+  cleanSessionFolder(sessionId);
   return wppconnect.create({
     session: sessionId,
     catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
