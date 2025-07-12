@@ -53,70 +53,108 @@ async function getSessionsWithInfo() {
   return sessions;
 }
 
+// Guarda el flag de que la sesión necesita QR en Redis
+async function setNeedsQr(sessionId, value) {
+  await redisClient.set(`wppconnect:${sessionId}:needsQr`, value ? 'true' : 'false');
+  console.log(`[REDIS] Flag needsQr guardado: sesión=${sessionId}, valor=${value}`);
+}
+
+// Obtiene el flag de que la sesión necesita QR desde Redis
+async function getNeedsQr(sessionId) {
+  const value = await redisClient.get(`wppconnect:${sessionId}:needsQr`);
+  console.log(`[REDIS] Flag needsQr consultado: sesión=${sessionId}, valor=${value}`);
+  return value === 'true';
+}
+
+// Devuelve el estado completo de la sesión
+async function getSessionStatus(sessionId) {
+  const state = await getSessionState(sessionId);
+  const hasSession = await redisClient.get(`wppconnect:${sessionId}:hasSession`);
+  const needsQr = await getNeedsQr(sessionId);
+  return {
+    sessionId,
+    state,
+    hasSession: hasSession === 'true',
+    needsQr
+  };
+}
+
 async function createSession(sessionId, onQr, onMessage) {
   // Limpiar carpeta de sesión antes de crearla para evitar errores de SingletonLock
   cleanSessionFolder(sessionId);
-  return wppconnect.create({
-    session: sessionId,
-    catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
-      if (onQr) await onQr(base64Qr, sessionId);
-    },
-    statusFind: async (statusSession, session) => {
-      console.log(`Estado de la sesión ${session}: ${statusSession}`);
-      const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
-      if (estadosConectado.includes(statusSession)) {
-        await setSessionState(session, 'loggedIn');
-        await setHasSession(session, true); // Guardar flag de sesión activa
-      } else if (
-        statusSession === 'desconnectedMobile' ||
-        statusSession === 'notLogged' ||
-        statusSession === 'disconnected' ||
-        statusSession === 'browserClose' ||
-        statusSession === 'qrReadError' ||
-        statusSession === 'autocloseCalled'
-      ) {
-        await setSessionState(session, 'disconnected');
-      }
-    },
-    storage: {
-      type: 'redis',
-      redisClient,
-      prefix: `wppconnect:${sessionId}:`
-    },
-    headless: 'new', // Usar el nuevo modo headless
-    useChrome: true,
-    autoClose: 180000,
-    browserSessionToken: true, // Fuerza perfil temporal, sin disco local
-    browserArgs: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--disable-features=TranslateUI',
-      '--disable-web-security',
-      '--disable-features=VizDisplayCompositor',
-      '--single-process',
-      '--no-default-browser-check',
-      '--disable-default-apps',
-      '--disable-background-networking',
-      '--disable-sync',
-      '--disable-translate',
-      '--disable-plugins',
-      '--disable-extensions',
-      '--disable-popup-blocking'
-    ]
-  }).then(client => {
-    client.onMessage(async (message) => {
-      if (onMessage) await onMessage(message, client);
+  try {
+    return wppconnect.create({
+      session: sessionId,
+      catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
+        if (onQr) await onQr(base64Qr, sessionId);
+      },
+      statusFind: async (statusSession, session) => {
+        console.log(`Estado de la sesión ${session}: ${statusSession}`);
+        const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
+        if (estadosConectado.includes(statusSession)) {
+          await setSessionState(session, 'loggedIn');
+          await setHasSession(session, true); // Guardar flag de sesión activa
+          await setNeedsQr(session, false); // No necesita QR
+        } else if (
+          statusSession === 'desconnectedMobile' ||
+          statusSession === 'notLogged' ||
+          statusSession === 'disconnected' ||
+          statusSession === 'browserClose' ||
+          statusSession === 'qrReadError' ||
+          statusSession === 'autocloseCalled'
+        ) {
+          await setSessionState(session, 'disconnected');
+          await setNeedsQr(session, true); // Marcar que necesita QR
+        }
+      },
+      storage: {
+        type: 'redis',
+        redisClient,
+        prefix: `wppconnect:${sessionId}:`
+      },
+      headless: 'new', // Usar el nuevo modo headless
+      useChrome: true,
+      autoClose: 180000,
+      browserSessionToken: true, // Fuerza perfil temporal, sin disco local
+      browserArgs: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-features=TranslateUI',
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor',
+        '--single-process',
+        '--no-default-browser-check',
+        '--disable-default-apps',
+        '--disable-background-networking',
+        '--disable-sync',
+        '--disable-translate',
+        '--disable-plugins',
+        '--disable-extensions',
+        '--disable-popup-blocking'
+      ]
+    }).then(client => {
+      client.onMessage(async (message) => {
+        if (onMessage) await onMessage(message, client);
+      });
+      return client;
+    }).catch(async (err) => {
+      console.error(`[ERROR] Error restaurando sesión ${sessionId}:`, err);
+      await setNeedsQr(sessionId, true); // Marcar que necesita QR
+      throw err;
     });
-    return client;
-  });
+  } catch (err) {
+    console.error(`[ERROR] Error creando sesión ${sessionId}:`, err);
+    await setNeedsQr(sessionId, true); // Marcar que necesita QR
+    throw err;
+  }
 }
 
 // Función para reconectar solo sesiones logueadas
@@ -157,4 +195,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo };
+module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus };
