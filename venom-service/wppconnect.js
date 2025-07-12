@@ -1,6 +1,36 @@
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
 
+// Guarda el estado de la sesión en Redis
+async function setSessionState(sessionId, state) {
+  await redisClient.set(`wppconnect:${sessionId}:state`, state);
+  console.log(`[REDIS] Estado guardado: sesión=${sessionId}, estado=${state}`);
+}
+
+// Obtiene el estado de la sesión desde Redis
+async function getSessionState(sessionId) {
+  const state = await redisClient.get(`wppconnect:${sessionId}:state`);
+  console.log(`[REDIS] Estado consultado: sesión=${sessionId}, estado=${state}`);
+  return state;
+}
+
+// Obtiene todos los sessionId logueados
+async function getLoggedSessions() {
+  const keys = await redisClient.keys('wppconnect:*:state');
+  const sessions = [];
+  console.log(`[REDIS] Claves encontradas: ${JSON.stringify(keys)}`);
+  for (const key of keys) {
+    const state = await redisClient.get(key);
+    const sessionId = key.split(':')[1];
+    console.log(`[REDIS] Estado de sesión consultado: sesión=${sessionId}, estado=${state}`);
+    if (state === 'loggedIn') {
+      sessions.push(sessionId);
+    }
+  }
+  console.log(`[REDIS] Sesiones logueadas encontradas: ${JSON.stringify(sessions)}`);
+  return sessions;
+}
+
 async function createSession(sessionId, onQr, onMessage) {
   return wppconnect.create({
     session: sessionId,
@@ -9,13 +39,19 @@ async function createSession(sessionId, onQr, onMessage) {
     },
     statusFind: async (statusSession, session) => {
       console.log(`Estado de la sesión ${session}: ${statusSession}`);
+      // Guardar estado en Redis
+      if (statusSession === 'isLogged') {
+        await setSessionState(session, 'loggedIn');
+      } else if (statusSession === 'desconnectedMobile' || statusSession === 'notLogged') {
+        await setSessionState(session, 'disconnected');
+      }
     },
     storage: {
       type: 'redis',
       redisClient,
       prefix: `wppconnect:${sessionId}:`
     },
-    headless: true,
+    headless: 'new', // Usar el nuevo modo headless
     useChrome: true,
     autoClose: 180000,
     browserSessionToken: true, // Fuerza perfil temporal, sin disco local
@@ -51,4 +87,34 @@ async function createSession(sessionId, onQr, onMessage) {
   });
 }
 
-module.exports = { createSession };
+// Función para reconectar solo sesiones logueadas
+async function reconnectLoggedSessions(onQr, onMessage) {
+  const sessions = await getLoggedSessions();
+  for (const sessionId of sessions) {
+    await createSession(sessionId, onQr, onMessage);
+  }
+}
+
+// Inicialización automática al arrancar el servicio
+async function startAllSessions(onQr, onMessage) {
+  // Reconecta solo las sesiones logueadas
+  await reconnectLoggedSessions(onQr, onMessage);
+}
+
+// Si ejecutas este archivo directamente, inicia las sesiones automáticamente
+if (require.main === module) {
+  // Puedes personalizar estos callbacks según tu lógica
+  const onQr = (base64Qr, sessionId) => {
+    console.log(`QR para sesión ${sessionId}:`);
+    // Aquí podrías guardar el QR, enviarlo por API, etc.
+  };
+  const onMessage = (message, client) => {
+    console.log(`Mensaje recibido en sesión ${client.session}:`, message);
+    // Aquí tu lógica de mensajes
+  };
+  startAllSessions(onQr, onMessage).then(() => {
+    console.log('Sesiones restauradas automáticamente desde Redis.');
+  });
+}
+
+module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions };
