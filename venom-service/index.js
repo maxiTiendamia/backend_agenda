@@ -193,21 +193,26 @@ app.get('/estado-sesiones', async (req, res) => {
   }
 });
 
-// Inicializar la aplicación: restaurar sesiones previas
+
+const { cleanInvalidSessions } = require('./wppconnect');
+
+// Inicializar la aplicación: limpiar sesiones inválidas y restaurar sesiones previas
 async function inicializarAplicacion() {
   try {
     (async () => {
-  try {
-    await redisClient.ping();
-    console.log('✅ Conexión a Redis exitosa');
-    const keys = await redisClient.keys('wppconnect:*');
-    console.log(`🔑 Claves encontradas en Redis: ${keys.length}`);
-  } catch (err) {
-    console.error('❌ Error conectando a Redis:', err);
-    process.exit(1);
-  }
-})();
+      try {
+        await redisClient.ping();
+        console.log('✅ Conexión a Redis exitosa');
+        const keys = await redisClient.keys('wppconnect:*');
+        console.log(`🔑 Claves encontradas en Redis: ${keys.length}`);
+      } catch (err) {
+        console.error('❌ Error conectando a Redis:', err);
+        process.exit(1);
+      }
+    })();
 
+    // Limpiar sesiones inválidas antes de restaurar
+    await cleanInvalidSessions();
     await restaurarSesiones();
     console.log('🚀 Inicialización completa');
   } catch (err) {

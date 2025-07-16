@@ -195,4 +195,25 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus };
+
+// Limpia sesiones inválidas (needsQr=true) de Redis y tokens
+async function cleanInvalidSessions() {
+  const keys = await redisClient.keys('wppconnect:*:needsQr');
+  for (const key of keys) {
+    const needsQr = await redisClient.get(key);
+    if (needsQr === 'true') {
+      const sessionId = key.split(':')[1];
+      // Eliminar carpeta de tokens
+      cleanSessionFolder(sessionId);
+      // Eliminar todas las claves de la sesión en Redis
+      const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
+      for (const sk of sessionKeys) {
+        await redisClient.del(sk);
+        console.log(`[REDIS] Clave eliminada: ${sk}`);
+      }
+      console.log(`[CLEAN] Sesión inválida limpiada: ${sessionId}`);
+    }
+  }
+}
+
+module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus, cleanInvalidSessions };
