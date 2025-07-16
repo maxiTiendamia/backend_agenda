@@ -14,7 +14,7 @@ import threading
 
 print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
-VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
+VENOM_URL = os.getenv("VENOM_URL", "http://195.26.250.62:3000")
 
 basic_auth = BasicAuth()
 

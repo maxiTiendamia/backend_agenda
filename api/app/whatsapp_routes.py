@@ -14,8 +14,8 @@ import json
 import httpx
 from datetime import datetime, timedelta
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-VENOM_URL = os.getenv("VENOM_URL", "https://backend-agenda-us92.onrender.com")
+REDIS_URL = os.getenv("REDIS_URL", "rediss://default:AcOQAAIjcDEzOGI2OWU1MzYxZDQ0YWQ2YWU3ODJlNWNmMGY5MjIzY3AxMA@literate-toucan-50064.upstash.io:6379")
+VENOM_URL = os.getenv("VENOM_URL", "http://195.26.250.62:3000")
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 SESSION_TTL = 300  # segundos
 class DateTimeEncoder(json.JSONEncoder):
