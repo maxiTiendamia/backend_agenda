@@ -1,6 +1,3 @@
-# Archivos sensibles
-.env
-
 # Carpeta de sesiones y tokens temporales
 sessions/
 venom-service/sessions/
