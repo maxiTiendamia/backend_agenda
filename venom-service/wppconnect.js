@@ -79,6 +79,13 @@ async function getSessionStatus(sessionId) {
   };
 }
 
+// Guarda el motivo y fecha de desconexión en Redis
+async function setDisconnectReason(sessionId, reason) {
+  const timestamp = new Date().toISOString();
+  await redisClient.set(`wppconnect:${sessionId}:lastDisconnect`, JSON.stringify({ reason, timestamp }));
+  console.log(`[REDIS] Desconexión guardada: sesión=${sessionId}, motivo=${reason}, fecha=${timestamp}`);
+}
+
 async function createSession(sessionId, onQr, onMessage) {
   // Limpiar carpeta de sesión antes de crearla para evitar errores de SingletonLock
   cleanSessionFolder(sessionId);
@@ -105,6 +112,8 @@ async function createSession(sessionId, onQr, onMessage) {
         ) {
           await setSessionState(session, 'disconnected');
           await setNeedsQr(session, true); // Marcar que necesita QR
+          // NUEVO: guardar motivo y fecha de desconexión
+          await setDisconnectReason(session, statusSession);
         }
       },
       storage: {
@@ -147,12 +156,16 @@ async function createSession(sessionId, onQr, onMessage) {
       return client;
     }).catch(async (err) => {
       console.error(`[ERROR] Error restaurando sesión ${sessionId}:`, err);
-      await setNeedsQr(sessionId, true); // Marcar que necesita QR
+      await setNeedsQr(sessionId, true);
+      // NUEVO: guardar motivo y fecha de desconexión por error
+      await setDisconnectReason(sessionId, err.message || 'unknown error');
       throw err;
     });
   } catch (err) {
     console.error(`[ERROR] Error creando sesión ${sessionId}:`, err);
-    await setNeedsQr(sessionId, true); // Marcar que necesita QR
+    await setNeedsQr(sessionId, true);
+    // NUEVO: guardar motivo y fecha de desconexión por error
+    await setDisconnectReason(sessionId, err.message || 'unknown error');
     throw err;
   }
 }
