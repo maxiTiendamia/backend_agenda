@@ -153,6 +153,13 @@ async function createSession(sessionId, onQr, onMessage) {
       client.onMessage(async (message) => {
         if (onMessage) await onMessage(message, client);
       });
+      // Lógica de reconexión automática
+      client.onStateChange(async (state) => {
+        console.log(`[STATE CHANGE] Sesión ${sessionId}: ${state}`);
+        if (state === 'DISCONNECTED' || state === 'TIMEOUT' || state === 'CONFLICT' || state === 'UNPAIRED') {
+          await reconnectSession(sessionId);
+        }
+      });
       return client;
     }).catch(async (err) => {
       console.error(`[ERROR] Error restaurando sesión ${sessionId}:`, err);
@@ -161,6 +168,16 @@ async function createSession(sessionId, onQr, onMessage) {
       await setDisconnectReason(sessionId, err.message || 'unknown error');
       throw err;
     });
+// Reintenta crear la sesión si se desconecta
+async function reconnectSession(sessionId) {
+  console.log(`[RECONNECT] Reintentando sesión ${sessionId}`);
+  await cleanSessionFolder(sessionId); // Limpia la carpeta de sesión
+  try {
+    await createSession(sessionId);
+  } catch (err) {
+    console.error(`[RECONNECT] Falló la reconexión de la sesión ${sessionId}:`, err);
+  }
+}
   } catch (err) {
     console.error(`[ERROR] Error creando sesión ${sessionId}:`, err);
     await setNeedsQr(sessionId, true);

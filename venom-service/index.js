@@ -240,6 +240,16 @@ async function inicializarAplicacion() {
 const server = app.listen(PORT).on('listening', async () => {
   console.log(`✅ WPPConnect-service corriendo en puerto ${PORT}`);
   await inicializarAplicacion();
+  // Restaurar sesiones logueadas desde Redis
+  const sesionesLogueadas = await getLoggedSessions();
+  for (const sessionId of sesionesLogueadas) {
+    try {
+      await crearSesionWPP(sessionId, false);
+      console.log(`[INIT] Sesión logueada restaurada: ${sessionId}`);
+    } catch (err) {
+      console.error(`[INIT] Error restaurando sesión logueada ${sessionId}:`, err);
+    }
+  }
 }).on('error', (error) => {
   if (error.code === 'EADDRINUSE') {
     console.error(`Puerto ${PORT} ya está en uso. Intentando puerto alternativo...`);
