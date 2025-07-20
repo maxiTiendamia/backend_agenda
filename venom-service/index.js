@@ -4,6 +4,8 @@ const { Pool } = require('pg');
 const axios = require('axios');
 const redisClient = require('./redis');
 const { createSession, getLoggedSessions, getSessionsWithInfo, reconnectSessionsWithInfo } = require('./wppconnect');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
@@ -25,8 +27,23 @@ async function guardarQR(sessionId, base64Qr) {
   );
 }
 
+// Limpiar archivo SingletonLock si existe
+async function limpiarSingletonLock(sessionId) {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
+  const singletonLockPath = path.join(sessionDir, sessionId, "SingletonLock");
+  if (fs.existsSync(singletonLockPath)) {
+    try {
+      fs.unlinkSync(singletonLockPath);
+      console.log(`🔓 SingletonLock eliminado en ${singletonLockPath} para cliente ${sessionId}`);
+    } catch (err) {
+      console.error(`❌ Error eliminando SingletonLock en ${singletonLockPath} para ${sessionId}:`, err.message);
+    }
+  }
+}
+
 // Crear sesión y manejar QR/mensajes
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
+  await limpiarSingletonLock(sessionId); // <-- Agrega esta línea al inicio
   if (sessions[sessionId]) return sessions[sessionId];
   const client = await createSession(
     sessionId,
