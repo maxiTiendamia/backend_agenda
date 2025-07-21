@@ -185,8 +185,24 @@ app.get('/sesiones', async (req, res) => {
 app.post('/reiniciar/:clienteId', async (req, res) => {
   const clienteId = req.params.clienteId;
   try {
+    // 1. Limpiar claves de Redis
+    const keys = await redisClient.keys(`wppconnect:${clienteId}:*`);
+    for (const key of keys) {
+      await redisClient.del(key);
+    }
+    // 2. Limpiar archivos locales (tokens, SingletonLock)
+    const fs = require('fs');
+    const path = require('path');
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
+    const dirPath = path.join(sessionDir, String(clienteId));
+    if (fs.existsSync(dirPath)) {
+      fs.rmSync(dirPath, { recursive: true, force: true });
+    }
+    // 3. Limpiar QR en base de datos
+    await pool.query('UPDATE tenants SET qr_code = NULL WHERE id = $1', [clienteId]);
+    // 4. Forzar generación de nuevo QR (esto también lo guarda en la base)
     await crearSesionWPP(clienteId, true);
-    res.json({ ok: true, mensaje: `Sesión reiniciada y QR regenerado para cliente ${clienteId}` });
+    res.json({ ok: true, mensaje: `Sesión completamente reiniciada y QR regenerado para cliente ${clienteId}` });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
