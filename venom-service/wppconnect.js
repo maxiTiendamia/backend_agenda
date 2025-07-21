@@ -10,12 +10,15 @@ async function saveSessionFileToRedis(sessionId, fileName) {
   if (fs.existsSync(filePath)) {
     const data = fs.readFileSync(filePath);
     await redisClient.set(`wppconnect:${sessionId}:file:${fileName}`, data);
+    console.log(`[SESSION][REDIS] Guardado ${fileName} de sesión ${sessionId} en Redis (size: ${data.length})`);
     // Opcional: eliminar el archivo local después de guardar
     fs.unlinkSync(filePath);
     // Si la carpeta queda vacía, eliminarla
     try {
       fs.rmdirSync(path.join(sessionDir, String(sessionId)));
     } catch {}
+  } else {
+    console.log(`[SESSION][REDIS] No existe ${fileName} para sesión ${sessionId}, no se guarda en Redis`);
   }
 }
 
@@ -29,7 +32,10 @@ async function restoreSessionFileFromRedis(sessionId, fileName) {
     }
     const filePath = path.join(dirPath, fileName);
     fs.writeFileSync(filePath, data);
+    console.log(`[SESSION][REDIS] Restaurado ${fileName} de sesión ${sessionId} desde Redis (size: ${data.length})`);
     return true;
+  } else {
+    console.log(`[SESSION][REDIS] No existe ${fileName} en Redis para sesión ${sessionId}, no se restaura`);
   }
   return false;
 }
