@@ -124,7 +124,7 @@ async function createSession(sessionId, onQr, onMessage) {
       headless: 'new', // Usar el nuevo modo headless
       useChrome: true,
       autoClose: false,
-      browserSessionToken: true, // Fuerza perfil temporal, sin disco local
+      browserSessionToken: false, // Fuerza perfil temporal, sin disco local
       browserArgs: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
