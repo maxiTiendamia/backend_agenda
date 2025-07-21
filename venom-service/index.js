@@ -3,20 +3,7 @@ const express = require('express');
 const { Pool } = require('pg');
 const axios = require('axios');
 
-// Endpoint para ver todas las claves y valores de Redis de una sesión específica
-app.get('/debug/redis/:clienteId', async (req, res) => {
-  const clienteId = req.params.clienteId;
-  try {
-    const keys = await redisClient.keys(`wppconnect:${clienteId}:*`);
-    const datos = {};
-    for (const key of keys) {
-      datos[key] = await redisClient.get(key);
-    }
-    res.json({ claves: keys, datos });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+
 // Configuración de reconexión automática para Redis
 const { createClient } = require('redis');
 const redisClient = createClient({
@@ -134,6 +121,22 @@ async function restaurarSesiones() {
 }
 
 // Endpoints
+
+// Endpoint para ver todas las claves y valores de Redis de una sesión específica
+app.get('/debug/redis/:clienteId', async (req, res) => {
+  const clienteId = req.params.clienteId;
+  try {
+    const keys = await redisClient.keys(`wppconnect:${clienteId}:*`);
+    const datos = {};
+    for (const key of keys) {
+      datos[key] = await redisClient.get(key);
+    }
+    res.json({ claves: keys, datos });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/qr/:clienteId', async (req, res) => {
   const clienteId = req.params.clienteId;
   try {
