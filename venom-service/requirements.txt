@@ -1,6 +1,6 @@
-wppconnect
-redis
-pg
+@wppconnect-team/wppconnect
 express
-axios
 dotenv
+axios
+pg
+redis
