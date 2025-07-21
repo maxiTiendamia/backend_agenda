@@ -1,8 +1,41 @@
+// Endpoint para ver todas las claves y valores de Redis de una sesión específica
+app.get('/debug/redis/:clienteId', async (req, res) => {
+  const clienteId = req.params.clienteId;
+  try {
+    const keys = await redisClient.keys(`wppconnect:${clienteId}:*`);
+    const datos = {};
+    for (const key of keys) {
+      datos[key] = await redisClient.get(key);
+    }
+    res.json({ claves: keys, datos });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const axios = require('axios');
-const redisClient = require('./redis');
+// Configuración de reconexión automática para Redis
+const { createClient } = require('redis');
+const redisClient = createClient({
+  url: process.env.REDIS_URL,
+  socket: {
+    reconnectStrategy: (retries) => {
+      // Espera exponencial hasta 30s
+      return Math.min(retries * 100, 30000);
+    }
+  }
+});
+redisClient.on('error', (err) => {
+  console.error('❌ Redis error:', err);
+});
+redisClient.on('reconnecting', () => {
+  console.warn('🔄 Reintentando conexión a Redis...');
+});
+redisClient.connect().catch((err) => {
+  console.error('❌ Error conectando a Redis:', err);
+});
 const { createSession, getLoggedSessions, getSessionsWithInfo, reconnectSessionsWithInfo } = require('./wppconnect');
 const fs = require('fs');
 const path = require('path');
@@ -17,6 +50,8 @@ const pool = new Pool({
 
 const sessions = {};
 const sessionErrors = {};
+// Lock para evitar restauraciones simultáneas
+const restaurandoSesiones = {};
 
 // Guardar QR en base de datos
 async function guardarQR(sessionId, base64Qr) {
@@ -43,35 +78,45 @@ async function limpiarSingletonLock(sessionId) {
 
 // Crear sesión y manejar QR/mensajes
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
-  await limpiarSingletonLock(sessionId); // <-- Agrega esta línea al inicio
-  if (sessions[sessionId]) return sessions[sessionId];
-  const client = await createSession(
-    sessionId,
-    async (base64Qr) => {
-      if (permitirGuardarQR) {
-        await guardarQR(sessionId, base64Qr);
-      }
-    },
-    async (message, client) => {
-      try {
-        const telefono = message.from.replace("@c.us", "");
-        const mensaje = message.body;
-        const cliente_id = sessionId;
-        const backendResponse = await axios.post(
-          "https://backend-agenda-2.onrender.com/api/webhook",
-          { telefono, mensaje, cliente_id }
-        );
-        const respuesta = backendResponse.data && backendResponse.data.mensaje;
-        if (respuesta) {
-          await client.sendText(`${telefono}@c.us`, respuesta);
+  // Lock para evitar restauraciones simultáneas
+  if (restaurandoSesiones[sessionId]) {
+    console.log(`[LOCK] Ya se está restaurando la sesión ${sessionId}, omitiendo duplicado.`);
+    return sessions[sessionId];
+  }
+  restaurandoSesiones[sessionId] = true;
+  try {
+    await limpiarSingletonLock(sessionId);
+    if (sessions[sessionId]) return sessions[sessionId];
+    const client = await createSession(
+      sessionId,
+      async (base64Qr) => {
+        if (permitirGuardarQR) {
+          await guardarQR(sessionId, base64Qr);
         }
-      } catch (err) {
-        console.error("Error reenviando mensaje a backend o enviando respuesta:", err);
+      },
+      async (message, client) => {
+        try {
+          const telefono = message.from.replace("@c.us", "");
+          const mensaje = message.body;
+          const cliente_id = sessionId;
+          const backendResponse = await axios.post(
+            "https://backend-agenda-2.onrender.com/api/webhook",
+            { telefono, mensaje, cliente_id }
+          );
+          const respuesta = backendResponse.data && backendResponse.data.mensaje;
+          if (respuesta) {
+            await client.sendText(`${telefono}@c.us`, respuesta);
+          }
+        } catch (err) {
+          console.error("Error reenviando mensaje a backend o enviando respuesta:", err);
+        }
       }
-    }
-  );
-  sessions[sessionId] = client;
-  return client;
+    );
+    sessions[sessionId] = client;
+    return client;
+  } finally {
+    delete restaurandoSesiones[sessionId];
+  }
 }
 
 // Restaurar sesiones desde Redis (para todas las que tienen info previa)
