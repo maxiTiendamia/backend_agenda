@@ -1,3 +1,8 @@
+require('dotenv').config();
+const express = require('express');
+const { Pool } = require('pg');
+const axios = require('axios');
+
 // Endpoint para ver todas las claves y valores de Redis de una sesión específica
 app.get('/debug/redis/:clienteId', async (req, res) => {
   const clienteId = req.params.clienteId;
@@ -12,10 +17,6 @@ app.get('/debug/redis/:clienteId', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-require('dotenv').config();
-const express = require('express');
-const { Pool } = require('pg');
-const axios = require('axios');
 // Configuración de reconexión automática para Redis
 const { createClient } = require('redis');
 const redisClient = createClient({
