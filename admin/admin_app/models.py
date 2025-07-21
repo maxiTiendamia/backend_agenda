@@ -28,6 +28,8 @@ class Tenant(db.Model):
     calendar_id_general = db.Column(db.String, nullable=True)  # <-- Nuevo campo
     servicios = db.relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = db.relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")
+    working_hours_general = Column(Text, nullable=True)  # <-- NUEVO
+    intervalo_entre_turnos = Column(Integer, default=20) 
 
     def __repr__(self):
         return f"<Tenant {self.nombre}>"

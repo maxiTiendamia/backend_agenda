@@ -180,9 +180,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return JSONResponse(content={"mensaje": "❌ Debes escribir: cancelar + código"})
             fake_id = partes[1].strip().upper()
             try:
-                reserva = db.query(Reserva).filter_by(fake_id=fake_id).first()
+                reserva = db.query(Reserva).filter_by(fake_id=fake_id, estado="activo").first()
                 if not reserva:
                     return JSONResponse(content={"mensaje": "❌ No se encontró la reserva. Verifica el código."})
+                ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                # Validar que falte al menos 1 hora para el turno
+                if reserva.fecha_reserva - ahora < timedelta(hours=1):
+                    return JSONResponse(content={"mensaje": "⏰ No podés cancelar un turno con menos de 1 hora de anticipación. Contactá al local si necesitás ayuda."})
                 exito = cancelar_evento_google(
                     calendar_id=reserva.empleado_calendar_id,
                     reserva_id=reserva.event_id,
@@ -235,9 +239,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     slots = get_available_slots(
                         calendar_id=tenant.calendar_id_general,
                         credentials_json=GOOGLE_CREDENTIALS_JSON,
-                        working_hours_json=None,  # o un horario general si tienes
+                        working_hours_json=tenant.working_hours_general,
                         service_duration=duracion,
-                        intervalo_entre_turnos=20,
+                        intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,  # <-- usa el valor de la base
                         max_turnos=25
                     )
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
@@ -321,9 +325,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     slots = get_available_slots(
                         calendar_id=tenant.calendar_id_general,
                         credentials_json=GOOGLE_CREDENTIALS_JSON,
-                        working_hours_json=None,
+                        working_hours_json=tenant.working_hours_general,
                         service_duration=duracion,
-                        intervalo_entre_turnos=20,
+                        intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,  # <-- usa el valor de la base
                         max_turnos=25
                     )
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
@@ -719,9 +723,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 slots = get_available_slots(
                     calendar_id=tenant.calendar_id_general,
                     credentials_json=GOOGLE_CREDENTIALS_JSON,
-                    working_hours_json=None,  # o un horario general si tienes
+                    working_hours_json=tenant.working_hours_general,
                     service_duration=duracion,
-                    intervalo_entre_turnos=20,
+                    intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,  # <-- usa el valor de la base
                     max_turnos=25
                 )
                 ahora = datetime.now(pytz.timezone("America/Montevideo"))

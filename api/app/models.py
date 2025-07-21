@@ -15,8 +15,10 @@ class Tenant(Base):
     fecha_creada = Column(DateTime, default=datetime.now(timezone.utc))
     direccion = Column(String(200), nullable=True)
     qr_code = Column(Text, nullable=True)
-    informacion_local = Column(Text, nullable=True)  # Nueva columna para información del local
-    calendar_id_general = Column(String, nullable=True)  # <-- Nuevo campo
+    informacion_local = Column(Text, nullable=True) 
+    calendar_id_general = Column(String, nullable=True) 
+    working_hours_general = Column(Text, nullable=True) 
+    intervalo_entre_turnos = Column(Integer, default=20) 
 
     servicios = relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")

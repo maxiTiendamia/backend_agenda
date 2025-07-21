@@ -179,9 +179,12 @@ class InformacionLocalField(Field):
 
 
 class TenantModelView(SecureModelView):
-    form_overrides = {'working_hours': WorkingHoursField, 'informacion_local': InformacionLocalField}
+    form_columns = (
+        'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
+        'informacion_local', 'calendar_id_general', 'working_hours_general', 'intervalo_entre_turnos'
+    )
     inline_models = [
-        (Servicio, dict(form_columns=['id', 'nombre', 'precio', 'duracion'])),
+        (Servicio, dict(form_columns=['id', 'nombre', 'precio', 'duracion', 'cantidad'])), 
         (Empleado, dict(
             form_overrides={'working_hours': WorkingHoursField},
             form_columns=['id', 'nombre', 'calendar_id', 'working_hours']
@@ -189,7 +192,8 @@ class TenantModelView(SecureModelView):
     ]
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
     form_columns = (
-        'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'informacion_local', 'calendar_id_general'
+        'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
+        'informacion_local', 'calendar_id_general', 'working_hours_general'
     )
 
     column_formatters = {
