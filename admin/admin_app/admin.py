@@ -179,6 +179,9 @@ class InformacionLocalField(Field):
 
 
 class TenantModelView(SecureModelView):
+    form_overrides = {
+        'working_hours_general': WorkingHoursField,  
+    }
     form_columns = (
         'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
         'informacion_local', 'calendar_id_general', 'working_hours_general', 'intervalo_entre_turnos'
@@ -326,7 +329,7 @@ class BlockedNumberModelView(SecureModelView):
     form_columns = ('empleado', 'cliente', 'telefono')
     
     def on_model_change(self, form, model, is_created):
-        """Validar que el empleado pertenezca al cliente seleccionado"""
+        """Validar que el empleado pertenzca al cliente seleccionado"""
         if model.empleado and model.cliente:
             if model.empleado.tenant_id != model.cliente.id:
                 raise ValueError("El empleado seleccionado no pertenece al cliente/comercio seleccionado")
