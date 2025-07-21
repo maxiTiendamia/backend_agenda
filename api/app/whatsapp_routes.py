@@ -221,9 +221,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["empleados"] = [e.id for e in empleados]
                     set_user_state(telefono, state)
                     return JSONResponse(content={"mensaje": msg})
-                # Si no hay empleados pero hay calendar_id_general, mostrar turnos generales
+                # Si NO hay empleados pero hay calendar_id_general, mostrar turnos generales
                 elif tenant.calendar_id_general:
-                    # Busca turnos en el calendar general
                     duracion = 30  # o el valor por defecto que prefieras
                     slots = get_available_slots(
                         calendar_id=tenant.calendar_id_general,
@@ -530,9 +529,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["empleados"] = [e.id for e in empleados]
                 set_user_state(telefono, state)
                 return JSONResponse(content={"mensaje": msg})
-            # Si no hay empleados pero hay calendar_id_general, mostrar turnos generales
+            # Si NO hay empleados pero hay calendar_id_general, mostrar turnos generales
             elif tenant.calendar_id_general:
-                # Busca turnos en el calendar general
                 duracion = 30  # o el valor por defecto que prefieras
                 slots = get_available_slots(
                     calendar_id=tenant.calendar_id_general,
