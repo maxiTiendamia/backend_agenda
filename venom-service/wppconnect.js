@@ -20,7 +20,7 @@ async function saveSessionFileToRedis(sessionId, fileName) {
 }
 
 async function restoreSessionFileFromRedis(sessionId, fileName) {
-  const data = await redisClient.getBuffer(`wppconnect:${sessionId}:file:${fileName}`);
+  const data = await redisClient.get(`wppconnect:${sessionId}:file:${fileName}`);
   if (data) {
     const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
     const dirPath = path.join(sessionDir, String(sessionId));
