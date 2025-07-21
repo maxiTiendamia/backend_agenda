@@ -23,6 +23,14 @@ class DateTimeEncoder(json.JSONEncoder):
         if isinstance(obj, datetime):
             return obj.isoformat()
         return super().default(obj)
+    
+def hay_disponibilidad(db, servicio, slot):
+    # Cuenta reservas activas para ese servicio y ese horario
+    return db.query(Reserva).filter(
+        Reserva.servicio == servicio.nombre,
+        Reserva.fecha_reserva == slot,
+        Reserva.estado == "activo"
+    ).count() < (servicio.cantidad or 1)
 
 def set_user_state(user_id, state):
     try:
@@ -309,16 +317,28 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 if 0 <= idx < len(servicios_ids):
                     servicio_id = servicios_ids[idx]
                     servicio = db.query(Servicio).get(servicio_id)
-                    empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
-                    if not empleados:
-                        return JSONResponse(content={"mensaje": "⚠️ No hay empleados disponibles."})
-                    msg = f"¿Con qué empleado?\n"
-                    for i, e in enumerate(empleados, 1):
-                        msg += f"🔹{i}. {e.nombre}\n"
-                    msg += "\nResponde con el número del empleado."
-                    state["step"] = "waiting_empleado"
+                    duracion = servicio.duracion
+                    slots = get_available_slots(
+                        calendar_id=tenant.calendar_id_general,
+                        credentials_json=GOOGLE_CREDENTIALS_JSON,
+                        working_hours_json=None,
+                        service_duration=duracion,
+                        intervalo_entre_turnos=20,
+                        max_turnos=25
+                    )
+                    ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                    slots_futuros = [s for s in slots if s > ahora]
+                    # Filtrar slots según la cantidad de canchas
+                    slots_disponibles = [s for s in slots_futuros if hay_disponibilidad(db, servicio, s)]
+                    if not slots_disponibles:
+                        return JSONResponse(content={"mensaje": "⚠️ No hay turnos disponibles para este servicio."})
+                    msg = "📅 Estos son los próximos turnos disponibles:\n"
+                    for i, slot in enumerate(slots_disponibles, 1):
+                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
+                    state["step"] = "waiting_turno_final_canchas"
                     state["servicio_id"] = servicio_id
-                    state["empleados"] = [e.id for e in empleados]
+                    state["slots"] = [s.isoformat() for s in slots_disponibles]
                     set_user_state(telefono, state)
                     return JSONResponse(content={"mensaje": msg})
                 else:
@@ -393,6 +413,106 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 state["empleados"] = [e.id for e in empleados]
                 set_user_state(telefono, state)
                 return JSONResponse(content={"mensaje": msg})
+        
+        if state.get("step") == "waiting_turno_final_canchas":
+            if mensaje.isdigit():
+                idx = int(mensaje) - 1
+                slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                
+                if 0 <= idx < len(slots):
+                    slot = slots[idx]
+                    state["slot"] = slot.isoformat()
+                    state["step"] = "waiting_nombre_canchas"
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": "Por favor, escribe tu nombre y apellido para confirmar la reserva."})
+                else:
+                    slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                    msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
+                    for i, slot in enumerate(slots, 1):
+                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
+                    state["step"] = "waiting_turno_final_canchas"
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": msg})
+            else:
+                slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
+                for i, slot in enumerate(slots, 1):
+                    msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
+                    state["step"] = "waiting_turno_final_canchas"
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": msg})
+        
+        if state.get("step") == "waiting_nombre_general":
+            nombre_apellido = mensaje.strip().title()
+            slot = state.get("slot")
+            if isinstance(slot, str):
+                slot = datetime.fromisoformat(slot)
+            # Verifica disponibilidad en calendar general
+            from api.utils.calendar_utils import build_service
+            service = build_service(GOOGLE_CREDENTIALS_JSON)
+            start_time = slot.isoformat()
+            end_time = (slot + timedelta(minutes=30)).isoformat()  # Puedes ajustar la duración si lo deseas
+            events_result = service.events().list(
+                calendarId=tenant.calendar_id_general,
+                timeMin=start_time,
+                timeMax=end_time,
+                singleEvents=True
+            ).execute()
+            events = events_result.get('items', [])
+            if events:
+                slots_actuales = get_available_slots(
+                    calendar_id=tenant.calendar_id_general,
+                    credentials_json=GOOGLE_CREDENTIALS_JSON,
+                    working_hours_json=None,
+                    service_duration=30,
+                    intervalo_entre_turnos=20,
+                    max_turnos=10
+                )
+                ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                slots_futuros = [s for s in slots_actuales if s > ahora]
+                msg = "❌ El turno seleccionado ya no está disponible. Por favor, elige otro:\n"
+                for i, s in enumerate(slots_futuros, 1):
+                    msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"
+                msg += "\nResponde con el número del turno."
+                state["step"] = "waiting_turno_final_general"
+                state["slots"] = [s.isoformat() for s in slots_futuros]
+                set_user_state(telefono, state)
+                return JSONResponse(content={"mensaje": msg})
+
+            # Crear evento en Google Calendar general
+            event_id = create_event(
+                calendar_id=tenant.calendar_id_general,
+                slot_dt=slot,
+                user_phone=telefono,
+                service_account_info=GOOGLE_CREDENTIALS_JSON,
+                duration_minutes=30,  # Puedes ajustar la duración si lo deseas
+                client_service=f"Cliente: {nombre_apellido} - Tel: {telefono}"
+            )
+            fake_id = generar_fake_id()
+            reserva = Reserva(
+                fake_id=fake_id,
+                event_id=event_id,
+                empresa=tenant.comercio,
+                empleado_id=None,
+                empleado_nombre="(Sin asignar)",
+                empleado_calendar_id=tenant.calendar_id_general,
+                cliente_nombre=nombre_apellido,
+                cliente_telefono=telefono,
+                fecha_reserva=slot,
+                servicio="(General)",
+                estado="activo"
+            )
+            db.add(reserva)
+            db.commit()
+            state.clear()
+            set_user_state(telefono, state)
+            return JSONResponse(content={"mensaje": (
+                f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')}.\n"
+                f"\nDirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
+                f"\nSi querés cancelar, escribí: cancelar {fake_id}"
+            )})
 
         if state.get("step") == "waiting_turno_final":
             if mensaje.isdigit():
@@ -498,6 +618,70 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 f"\nSi querés cancelar, escribí: cancelar {fake_id}"
             )})
 
+        # Nuevo paso: esperar nombre para reservas sin empleado
+        if state.get("step") == "waiting_nombre_canchas":
+            nombre_apellido = mensaje.strip().title()
+            slot = state.get("slot")
+            if isinstance(slot, str):
+                slot = datetime.fromisoformat(slot)
+            servicio = db.query(Servicio).get(state["servicio_id"])
+            # Verifica disponibilidad antes de crear la reserva
+            if not hay_disponibilidad(db, servicio, slot):
+                # Mostrar turnos actualizados
+                slots = get_available_slots(
+                    calendar_id=tenant.calendar_id_general,
+                    credentials_json=GOOGLE_CREDENTIALS_JSON,
+                    working_hours_json=None,
+                    service_duration=servicio.duracion,
+                    intervalo_entre_turnos=20,
+                    max_turnos=10
+                )
+                ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                slots_futuros = [s for s in slots if s > ahora]
+                slots_disponibles = [s for s in slots_futuros if hay_disponibilidad(db, servicio, s)]
+                msg = "❌ El turno seleccionado ya no está disponible. Por favor, elige otro:\n"
+                for i, s in enumerate(slots_disponibles, 1):
+                    msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"
+                msg += "\nResponde con el número del turno."
+                state["step"] = "waiting_turno_final_canchas"
+                state["slots"] = [s.isoformat() for s in slots_disponibles]
+                set_user_state(telefono, state)
+                return JSONResponse(content={"mensaje": msg})
+
+            # Crear evento en Google Calendar
+            event_id = create_event(
+                calendar_id=tenant.calendar_id_general,
+                slot_dt=slot,
+                user_phone=telefono,
+                service_account_info=GOOGLE_CREDENTIALS_JSON,
+                duration_minutes=servicio.duracion,
+                client_service=f"Cliente: {nombre_apellido} - Tel: {telefono} - Servicio: {servicio.nombre}"
+            )
+            fake_id = generar_fake_id()
+            reserva = Reserva(
+                fake_id=fake_id,
+                event_id=event_id,
+                empresa=tenant.comercio,
+                empleado_id=None,
+                empleado_nombre="(Sin asignar)",
+                empleado_calendar_id=tenant.calendar_id_general,
+                cliente_nombre=nombre_apellido,
+                cliente_telefono=telefono,
+                fecha_reserva=slot,
+                servicio=servicio.nombre,
+                estado="activo"
+            )
+            db.add(reserva)
+            db.commit()
+            state.clear()
+            set_user_state(telefono, state)
+            return JSONResponse(content={"mensaje": (
+                f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')}.\n"
+                f"\nServicio: {servicio.nombre}\n"
+                f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
+                f"\nSi querés cancelar, escribí: cancelar {fake_id}"
+            )})
+
         # Mensaje genérico por defecto - manejar saludos
         if mensaje in ["hola", "hello", "hi", "buenas", "buen dia", "buenas tardes", "buenas noches"]:
             state["step"] = "welcome"
@@ -582,3 +766,5 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             state["error_sent"] = True
             set_user_state(telefono, state)
         return JSONResponse(content={"mensaje": "❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde."})
+
+

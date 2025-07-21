@@ -43,10 +43,11 @@ class Reserva(Base):
 class Servicio(Base):
     __tablename__ = "servicios"
     id = Column(Integer, primary_key=True)
-    tenant_id = Column(Integer, ForeignKey('tenants.id'), nullable=False)
-    nombre = Column(String(150), nullable=False)
-    precio = Column(Float, nullable=False)
-    duracion = Column(Integer, nullable=False) 
+    nombre = Column(String)
+    duracion = Column(Integer)
+    precio = Column(Float)
+    tenant_id = Column(Integer, ForeignKey('tenants.id'))
+    cantidad = Column(Integer, default=1)  # <-- NUEVO CAMPO
     tenant = relationship('Tenant', back_populates='servicios')
 
 class Empleado(Base):
