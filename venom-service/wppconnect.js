@@ -1,6 +1,51 @@
+
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
-const { cleanSessionFolder } = require('./sessionUtils');
+const fs = require('fs');
+const path = require('path');
+// Utilidades para guardar y restaurar archivos de sesión en Redis
+async function saveSessionFileToRedis(sessionId, fileName) {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
+  const filePath = path.join(sessionDir, String(sessionId), fileName);
+  if (fs.existsSync(filePath)) {
+    const data = fs.readFileSync(filePath);
+    await redisClient.set(`wppconnect:${sessionId}:file:${fileName}`, data);
+    // Opcional: eliminar el archivo local después de guardar
+    fs.unlinkSync(filePath);
+    // Si la carpeta queda vacía, eliminarla
+    try {
+      fs.rmdirSync(path.join(sessionDir, String(sessionId)));
+    } catch {}
+  }
+}
+
+async function restoreSessionFileFromRedis(sessionId, fileName) {
+  const data = await redisClient.getBuffer(`wppconnect:${sessionId}:file:${fileName}`);
+  if (data) {
+    const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
+    const dirPath = path.join(sessionDir, String(sessionId));
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+    const filePath = path.join(dirPath, fileName);
+    fs.writeFileSync(filePath, data);
+    return true;
+  }
+  return false;
+}
+
+// Guardar ambos archivos comunes de sesión
+async function saveAllSessionFilesToRedis(sessionId) {
+  await saveSessionFileToRedis(sessionId, 'tokens.json');
+  await saveSessionFileToRedis(sessionId, 'sessionData.json');
+}
+
+// Restaurar ambos archivos comunes de sesión
+async function restoreAllSessionFilesFromRedis(sessionId) {
+  await restoreSessionFileFromRedis(sessionId, 'tokens.json');
+  await restoreSessionFileFromRedis(sessionId, 'sessionData.json');
+}
+
 
 // Guarda el estado de la sesión en Redis
 async function setSessionState(sessionId, state) {
@@ -87,13 +132,15 @@ async function setDisconnectReason(sessionId, reason) {
 }
 
 async function createSession(sessionId, onQr, onMessage) {
-  // Limpiar carpeta de sesión antes de crearla para evitar errores de SingletonLock
-  cleanSessionFolder(sessionId);
+  // Restaurar archivos de sesión desde Redis antes de crear la sesión
+  await restoreAllSessionFilesFromRedis(sessionId);
   try {
-    return wppconnect.create({
+    const clientPromise = wppconnect.create({
       session: sessionId,
       catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
         if (onQr) await onQr(base64Qr, sessionId);
+        // Guardar archivos de sesión en Redis cada vez que se reciba un QR (posible cambio de estado)
+        await saveAllSessionFilesToRedis(sessionId);
       },
       statusFind: async (statusSession, session) => {
         console.log(`Estado de la sesión ${session}: ${statusSession}`);
@@ -102,6 +149,8 @@ async function createSession(sessionId, onQr, onMessage) {
           await setSessionState(session, 'loggedIn');
           await setHasSession(session, true); // Guardar flag de sesión activa
           await setNeedsQr(session, false); // No necesita QR
+          // Guardar archivos de sesión en Redis al estar logueado
+          await saveAllSessionFilesToRedis(session);
         } else if (
           statusSession === 'desconnectedMobile' ||
           statusSession === 'notLogged' ||
@@ -114,6 +163,8 @@ async function createSession(sessionId, onQr, onMessage) {
           await setNeedsQr(session, true); // Marcar que necesita QR
           // NUEVO: guardar motivo y fecha de desconexión
           await setDisconnectReason(session, statusSession);
+          // Guardar archivos de sesión en Redis al desconectarse
+          await saveAllSessionFilesToRedis(session);
         }
       },
       storage: {
@@ -149,7 +200,9 @@ async function createSession(sessionId, onQr, onMessage) {
         '--disable-extensions',
         '--disable-popup-blocking'
       ]
-    }).then(client => {
+    });
+    // Manejar eventos después de la creación del cliente
+    return clientPromise.then(client => {
       client.onMessage(async (message) => {
         if (onMessage) await onMessage(message, client);
       });
@@ -157,6 +210,7 @@ async function createSession(sessionId, onQr, onMessage) {
       client.onStateChange(async (state) => {
         console.log(`[STATE CHANGE] Sesión ${sessionId}: ${state}`);
         if (state === 'DISCONNECTED' || state === 'TIMEOUT' || state === 'CONFLICT' || state === 'UNPAIRED') {
+          await saveAllSessionFilesToRedis(sessionId);
           await reconnectSession(sessionId);
         }
       });
@@ -166,12 +220,13 @@ async function createSession(sessionId, onQr, onMessage) {
       await setNeedsQr(sessionId, true);
       // NUEVO: guardar motivo y fecha de desconexión por error
       await setDisconnectReason(sessionId, err.message || 'unknown error');
+      await saveAllSessionFilesToRedis(sessionId);
       throw err;
     });
 // Reintenta crear la sesión si se desconecta
 async function reconnectSession(sessionId) {
   console.log(`[RECONNECT] Reintentando sesión ${sessionId}`);
-  await cleanSessionFolder(sessionId); // Limpia la carpeta de sesión
+
   try {
     await createSession(sessionId);
   } catch (err) {
@@ -233,8 +288,7 @@ async function cleanInvalidSessions() {
     const needsQr = await redisClient.get(key);
     if (needsQr === 'true') {
       const sessionId = key.split(':')[1];
-      // Eliminar carpeta de tokens
-      cleanSessionFolder(sessionId);
+      // Ya no se elimina carpeta de tokens, solo Redis
       // Eliminar todas las claves de la sesión en Redis
       const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
       for (const sk of sessionKeys) {
