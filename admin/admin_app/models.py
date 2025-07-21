@@ -48,6 +48,7 @@ class Reserva(db.Model):
     fecha_reserva = db.Column(DateTime, default=datetime.utcnow)
     servicio = db.Column(String(150), nullable=False)
     estado = db.Column(String(20), nullable=False, default="activo") 
+    cantidad = Column(Integer, default=1)  # <-- NUEVO CAMPO
 
     empleado = relationship('Empleado')
 
@@ -62,7 +63,7 @@ class Servicio(db.Model):
     nombre = db.Column(db.String(150), nullable=False)
     precio = db.Column(db.Float, nullable=False)
     duracion = db.Column(db.Integer, nullable=False)  # minutos
-
+    cantidad = Column(Integer, default=1)
     tenant = db.relationship('Tenant', back_populates='servicios')
 
     def __repr__(self):

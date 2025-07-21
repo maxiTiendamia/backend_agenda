@@ -37,6 +37,7 @@ class Reserva(Base):
     fecha_reserva = Column(DateTime, default=datetime.now(timezone.utc))
     servicio = Column(String(150), nullable=False)
     estado = Column(String(20), nullable=False, default="activo") 
+    cantidad = Column(Integer, default=1)
 
     empleado = relationship('Empleado')
 
