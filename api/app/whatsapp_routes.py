@@ -193,77 +193,115 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return JSONResponse(content={"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."})
 
         if state.get("step") == "welcome":
-            # Si es primer contacto, siempre enviar mensaje inicial sin importar qué escriba
             if state.get("is_first_contact"):
-                state["is_first_contact"] = False  # Marcar que ya no es primer contacto
+                state["is_first_contact"] = False
                 set_user_state(telefono, state)
                 return JSONResponse(content={"mensaje": generar_mensaje_bienvenida(tenant)})
-            
-            # Para contactos posteriores, procesar normalmente
+
             if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
                 servicios = tenant.servicios
-                if not servicios:
-                    return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
-                msg = "¿Qué servicio deseas reservar?\n"
-                for i, s in enumerate(servicios, 1):
-                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-                msg += "\nResponde con el número del servicio."
-                state["step"] = "waiting_servicio"
-                state["servicios"] = [s.id for s in servicios]
-                set_user_state(telefono, state)
-                return JSONResponse(content={"mensaje": msg})
-            elif "informacion" in mensaje or "info" in mensaje:
-                if tenant.informacion_local:
-                    state["step"] = "after_info"
+                empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+                # Si hay servicios, mostrar servicios
+                if servicios:
+                    msg = "¿Qué servicio deseas reservar?\n"
+                    for i, s in enumerate(servicios, 1):
+                        msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                    msg += "\nResponde con el número del servicio."
+                    state["step"] = "waiting_servicio"
+                    state["servicios"] = [s.id for s in servicios]
                     set_user_state(telefono, state)
-                    return JSONResponse(content={"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
-                else:
-                    return JSONResponse(content={"mensaje": "⚠️ No hay información disponible en este momento."})
-            else:
-                # Usuario escribió algo que no entendemos en el paso welcome
-                return JSONResponse(content={"mensaje": "🤔 No entiendo lo que necesitas.\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar una cita\n🔹 Escribe \"Información\" para conocer más\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
-
-        # --- MANEJO DE USUARIOS EN CONVERSACIÓN ---
-        # Si el usuario ya recibió la bienvenida pero escribe algo que no entendemos
-        if state.get("step") == "welcome" and not state.get("is_first_contact"):
-            if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
-                servicios = tenant.servicios
-                if not servicios:
-                    return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
-                msg = "¿Qué servicio deseas reservar?\n"
-                for i, s in enumerate(servicios, 1):
-                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-                msg += "\nResponde con el número del servicio."
-                state["step"] = "waiting_servicio"
-                state["servicios"] = [s.id for s in servicios]
-                set_user_state(telefono, state)
-                return JSONResponse(content={"mensaje": msg})
-            elif "informacion" in mensaje or "info" in mensaje:
-                if tenant.informacion_local:
-                    state["step"] = "after_info"
+                    return JSONResponse(content={"mensaje": msg})
+                # Si no hay servicios pero sí empleados, mostrar empleados
+                elif empleados:
+                    msg = "¿Con qué empleado deseas reservar?\n"
+                    for i, e in enumerate(empleados, 1):
+                        msg += f"🔹{i}. {e.nombre}\n"
+                    msg += "\nResponde con el número del empleado."
+                    state["step"] = "waiting_empleado_sin_servicio"
+                    state["empleados"] = [e.id for e in empleados]
                     set_user_state(telefono, state)
-                    return JSONResponse(content={"mensaje": f"{tenant.informacion_local}\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
+                    return JSONResponse(content={"mensaje": msg})
+                # Si no hay empleados pero hay calendar_id_general, mostrar turnos generales
+                elif tenant.calendar_id_general:
+                    # Busca turnos en el calendar general
+                    duracion = 30  # o el valor por defecto que prefieras
+                    slots = get_available_slots(
+                        calendar_id=tenant.calendar_id_general,
+                        credentials_json=GOOGLE_CREDENTIALS_JSON,
+                        working_hours_json=None,  # o un horario general si tienes
+                        service_duration=duracion,
+                        intervalo_entre_turnos=20,
+                        max_turnos=25
+                    )
+                    ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                    slots_futuros = [s for s in slots if s > ahora]
+                    slots_mostrar = slots_futuros[:25]
+                    if not slots_mostrar:
+                        return JSONResponse(content={"mensaje": "⚠️ No hay turnos disponibles en este momento."})
+                    msg = "📅 Estos son los próximos turnos disponibles:\n"
+                    for i, slot in enumerate(slots_mostrar, 1):
+                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
+                    state["step"] = "waiting_turno_final_general"
+                    state["slots"] = [s.isoformat() for s in slots_mostrar]
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": msg})
                 else:
-                    return JSONResponse(content={"mensaje": "⚠️ No hay información disponible en este momento."})
-            else:
-                # Usuario en conversación escribió algo que no entendemos
-                return JSONResponse(content={"mensaje": "🤔 No entiendo lo que necesitas.\n\n¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar una cita\n🔹 Escribe \"Información\" para conocer más\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
+                    return JSONResponse(content={"mensaje": "⚠️ No hay servicios ni empleados disponibles para reservar turnos en este momento."})
 
-        if state.get("step") == "after_info":
-            if "turno" in mensaje:
-                servicios = tenant.servicios
-                if not servicios:
-                    return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
-                msg = "¿Qué servicio deseas reservar?\n"
-                for i, s in enumerate(servicios, 1):
-                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-                msg += "\nResponde con el número del servicio."
-                state["step"] = "waiting_servicio"
-                state["servicios"] = [s.id for s in servicios]
+        # Nuevo paso: elegir empleado sin servicio
+        if state.get("step") == "waiting_empleado_sin_servicio":
+            if mensaje.isdigit():
+                idx = int(mensaje) - 1
+                empleados_ids = state.get("empleados", [])
+                if 0 <= idx < len(empleados_ids):
+                    empleado_id = empleados_ids[idx]
+                    empleado = db.query(Empleado).get(empleado_id)
+                    # Buscar el primer servicio disponible para ese empleado, o usar un valor por defecto de duración
+                    servicio = db.query(Servicio).filter_by(tenant_id=tenant.id).first()
+                    duracion = servicio.duracion if servicio else 30  # 30 min por defecto si no hay servicios
+                    slots = get_available_slots(
+                        calendar_id=empleado.calendar_id,
+                        credentials_json=GOOGLE_CREDENTIALS_JSON,
+                        working_hours_json=empleado.working_hours,
+                        service_duration=duracion,
+                        intervalo_entre_turnos=20,
+                        max_turnos=25
+                    )
+                    ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                    slots_futuros = [s for s in slots if s > ahora]
+                    slots_mostrar = slots_futuros[:25]
+                    if not slots_mostrar:
+                        return JSONResponse(content={"mensaje": "⚠️ No hay turnos disponibles para este empleado."})
+                    msg = "📅 Estos son los próximos turnos disponibles:\n"
+                    for i, slot in enumerate(slots_mostrar, 1):
+                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
+                    state["step"] = "waiting_turno_final"
+                    state["empleado_id"] = empleado_id
+                    state["slots"] = [s.isoformat() for s in slots_mostrar]
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": msg})
+                else:
+                    empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+                    msg = "❌ Opción inválida.\n¿Con qué empleado deseas reservar?\n"
+                    for i, e in enumerate(empleados, 1):
+                        msg += f"🔹{i}. {e.nombre}\n"
+                    msg += "\nResponde con el número del empleado."
+                    state["step"] = "waiting_empleado_sin_servicio"
+                    state["empleados"] = [e.id for e in empleados]
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": msg})
+            else:
+                empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+                msg = "❌ Opción inválida.\n¿Con qué empleado deseas reservar?\n"
+                for i, e in enumerate(empleados, 1):
+                    msg += f"🔹{i}. {e.nombre}\n"
+                msg += "\nResponde con el número del empleado."
+                state["step"] = "waiting_empleado_sin_servicio"
+                state["empleados"] = [e.id for e in empleados]
                 set_user_state(telefono, state)
                 return JSONResponse(content={"mensaje": msg})
-            else:
-                return JSONResponse(content={"mensaje": "¿Qué deseas hacer?\n🔹 Escribe \"Turno\" para agendar\n🔹 Escribe \"Ayuda\" para hablar con un asesor"})
 
         if state.get("step") == "waiting_servicio":
             if mensaje.isdigit():
@@ -471,16 +509,54 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         # Manejar palabras clave básicas en cualquier momento de la conversación
         if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
             servicios = tenant.servicios
-            if not servicios:
-                return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles."})
-            msg = "¿Qué servicio deseas reservar?\n"
-            for i, s in enumerate(servicios, 1):
-                msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-            msg += "\nResponde con el número del servicio."
-            state["step"] = "waiting_servicio"
-            state["servicios"] = [s.id for s in servicios]
-            set_user_state(telefono, state)
-            return JSONResponse(content={"mensaje": msg})
+            empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+            # Si hay servicios, mostrar servicios
+            if servicios:
+                msg = "¿Qué servicio deseas reservar?\n"
+                for i, s in enumerate(servicios, 1):
+                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                msg += "\nResponde con el número del servicio."
+                state["step"] = "waiting_servicio"
+                state["servicios"] = [s.id for s in servicios]
+                set_user_state(telefono, state)
+                return JSONResponse(content={"mensaje": msg})
+            # Si no hay servicios pero sí empleados, mostrar empleados
+            elif empleados:
+                msg = "¿Con qué empleado deseas reservar?\n"
+                for i, e in enumerate(empleados, 1):
+                    msg += f"🔹{i}. {e.nombre}\n"
+                msg += "\nResponde con el número del empleado."
+                state["step"] = "waiting_empleado_sin_servicio"
+                state["empleados"] = [e.id for e in empleados]
+                set_user_state(telefono, state)
+                return JSONResponse(content={"mensaje": msg})
+            # Si no hay empleados pero hay calendar_id_general, mostrar turnos generales
+            elif tenant.calendar_id_general:
+                # Busca turnos en el calendar general
+                duracion = 30  # o el valor por defecto que prefieras
+                slots = get_available_slots(
+                    calendar_id=tenant.calendar_id_general,
+                    credentials_json=GOOGLE_CREDENTIALS_JSON,
+                    working_hours_json=None,  # o un horario general si tienes
+                    service_duration=duracion,
+                    intervalo_entre_turnos=20,
+                    max_turnos=25
+                )
+                ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                slots_futuros = [s for s in slots if s > ahora]
+                slots_mostrar = slots_futuros[:25]
+                if not slots_mostrar:
+                    return JSONResponse(content={"mensaje": "⚠️ No hay turnos disponibles en este momento."})
+                msg = "📅 Estos son los próximos turnos disponibles:\n"
+                for i, slot in enumerate(slots_mostrar, 1):
+                    msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                msg += "\nResponde con el número del turno."
+                state["step"] = "waiting_turno_final_general"
+                state["slots"] = [s.isoformat() for s in slots_mostrar]
+                set_user_state(telefono, state)
+                return JSONResponse(content={"mensaje": msg})
+            else:
+                return JSONResponse(content={"mensaje": "⚠️ No hay servicios ni empleados disponibles para reservar turnos en este momento."})
         
         if "informacion" in mensaje or "info" in mensaje:
             if tenant.informacion_local:

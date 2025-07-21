@@ -189,7 +189,7 @@ class TenantModelView(SecureModelView):
     ]
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
     form_columns = (
-        'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'informacion_local'
+        'nombre', 'apellido', 'comercio', 'telefono', 'direccion', 'informacion_local', 'calendar_id_general'
     )
 
     column_formatters = {

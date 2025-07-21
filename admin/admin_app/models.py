@@ -25,6 +25,7 @@ class Tenant(db.Model):
     direccion = db.Column(db.String(200), nullable=True)
     qr_code = db.Column(db.Text)
     informacion_local = db.Column(db.Text, nullable=True)  # Nueva columna para información del local
+    calendar_id_general = db.Column(db.String, nullable=True)  # <-- Nuevo campo
     servicios = db.relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = db.relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")
 

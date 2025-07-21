@@ -16,6 +16,7 @@ class Tenant(Base):
     direccion = Column(String(200), nullable=True)
     qr_code = Column(Text, nullable=True)
     informacion_local = Column(Text, nullable=True)  # Nueva columna para información del local
+    calendar_id_general = Column(String, nullable=True)  # <-- Nuevo campo
 
     servicios = relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")
