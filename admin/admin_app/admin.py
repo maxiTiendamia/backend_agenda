@@ -184,8 +184,7 @@ class TenantModelView(SecureModelView):
     }
     form_columns = (
         'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
-        'informacion_local', 'calendar_id_general', 'working_hours_general',
-        'intervalo_entre_turnos', 
+        'informacion_local','intervalo_entre_turnos', 'calendar_id_general', 'working_hours_general' 
     )
     inline_models = [
         (Servicio, dict(form_columns=['id', 'nombre', 'precio', 'duracion', 'cantidad'])), 
