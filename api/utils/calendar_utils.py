@@ -43,8 +43,17 @@ def get_available_slots(
         start = e['start'].get('dateTime') or e['start'].get('date')
         end = e['end'].get('dateTime') or e['end'].get('date')
         if start and end:
-            start_dt = datetime.datetime.fromisoformat(start.replace('Z', '+00:00')).astimezone(URUGUAY_TZ)
-            end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00')).astimezone(URUGUAY_TZ)
+            start_dt = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
+            end_dt = datetime.datetime.fromisoformat(end.replace('Z', '+00:00'))
+            # Si no tiene tzinfo, agrégala
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=URUGUAY_TZ)
+            else:
+                start_dt = start_dt.astimezone(URUGUAY_TZ)
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=URUGUAY_TZ)
+            else:
+                end_dt = end_dt.astimezone(URUGUAY_TZ)
             busy.append((start_dt, end_dt))
 
     # Parsear y normalizar horarios laborales .
