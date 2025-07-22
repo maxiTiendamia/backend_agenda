@@ -29,7 +29,7 @@ class Reserva(Base):
     fake_id = Column(String(12), unique=True, nullable=False)  
     event_id = Column(String(200), nullable=False) 
     empresa = Column(String(100), nullable=False)  
-    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=False)
+    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=True)
     empleado_nombre = Column(String(100), nullable=False)
     empleado_calendar_id = Column(String(200), nullable=False)
     cliente_nombre = Column(String(100), nullable=False)  

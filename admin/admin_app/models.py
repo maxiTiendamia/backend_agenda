@@ -40,7 +40,7 @@ class Reserva(db.Model):
     fake_id = db.Column(String(12), unique=True, nullable=False) 
     event_id = db.Column(String(200), nullable=False)  
     empresa = db.Column(String(100), nullable=False) 
-    empleado_id = db.Column(Integer, ForeignKey('empleados.id'), nullable=False)
+    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=True)
     empleado_nombre = db.Column(String(100), nullable=False)
     empleado_calendar_id = db.Column(String(200), nullable=False)
     cliente_nombre = db.Column(String(100), nullable=False) 
