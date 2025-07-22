@@ -183,9 +183,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 reserva = db.query(Reserva).filter_by(fake_id=fake_id, estado="activo").first()
                 if not reserva:
                     return JSONResponse(content={"mensaje": "❌ No se encontró la reserva. Verifica el código."})
-                ahora = datetime.now(pytz.timezone("America/Montevideo"))
-                # Validar que falte al menos 1 hora para el turno
-                if reserva.fecha_reserva - ahora < timedelta(hours=1):
+                
+                zona_uy = pytz.timezone("America/Montevideo")
+                ahora = datetime.now(zona_uy)
+                # Asegurar que reserva.fecha_reserva sea timezone-aware
+                
+                if reserva.fecha_reserva.tzinfo is None:
+                    reserva_dt = zona_uy.localize(reserva.fecha_reserva)
+                else:
+                    reserva_dt = reserva.fecha_reserva.astimezone(zona_uy)
+                    
+                if reserva_dt - ahora < timedelta(hours=1):
                     return JSONResponse(content={"mensaje": "⏰ No podés cancelar un turno con menos de 1 hora de anticipación. Contactá al local si necesitás ayuda."})
                 exito = cancelar_evento_google(
                     calendar_id=reserva.empleado_calendar_id,
