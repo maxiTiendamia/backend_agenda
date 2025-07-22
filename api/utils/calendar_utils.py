@@ -2,6 +2,7 @@ import datetime
 import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from api.app.models import Tenant
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 URUGUAY_TZ = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 Montevideo
@@ -19,7 +20,7 @@ def get_available_slots(
     working_hours_json,
     service_duration,
     intervalo_entre_turnos=20,
-    max_days=7,
+    max_days=14,
     max_turnos=25
 ):
     service = build_service(credentials_json)
