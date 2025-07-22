@@ -3,6 +3,9 @@ const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
 const fs = require('fs');
 const path = require('path');
+const { getSessionFolder } = require('./sessionUtils');
+const { cleanSessionFolder } = require('./sessionUtils');
+
 // Utilidades para guardar y restaurar archivos de sesión en Redis
 async function saveSessionFileToRedis(sessionId, fileName) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
