@@ -184,7 +184,7 @@ class TenantModelView(SecureModelView):
     }
 
     inline_models = [
-        (Servicio, dict(form_columns=['id', 'nombre', 'precio', 'duracion', 'cantidad'])), 
+        (Servicio, dict(form_columns=['id', 'nombre', 'precio', 'duracion', 'cantidad','solo_horas_exactas'])), 
         (Empleado, dict(
             form_overrides={'working_hours': WorkingHoursField},
             form_columns=['id', 'nombre', 'calendar_id', 'working_hours']

@@ -65,6 +65,8 @@ class Servicio(db.Model):
     duracion = db.Column(db.Integer, nullable=False)  # minutos
     cantidad = Column(Integer, default=1)
     tenant = db.relationship('Tenant', back_populates='servicios')
+    solo_horas_exactas = db.Column(db.Boolean, default=False)  # nuevo campo
+
 
     def __repr__(self):
         return f"<Servicio {self.nombre}>"

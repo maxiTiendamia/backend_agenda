@@ -52,6 +52,8 @@ class Servicio(Base):
     tenant_id = Column(Integer, ForeignKey('tenants.id'))
     cantidad = Column(Integer, default=1)  # <-- NUEVO CAMPO
     tenant = relationship('Tenant', back_populates='servicios')
+    solo_horas_exactas = db.Column(db.Boolean, default=False)  # nuevo campo
+
 
 class Empleado(Base):
     __tablename__ = "empleados"

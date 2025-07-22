@@ -22,7 +22,8 @@ def get_available_slots(
     intervalo_entre_turnos=20,
     max_days=14,
     max_turnos=25,
-    cantidad=1 
+    cantidad=1 ,
+    solo_horas_exactas=False
 ):
     service = build_service(credentials_json)
     now = datetime.datetime.now(tz=URUGUAY_TZ)
@@ -96,6 +97,11 @@ def get_available_slots(
                 delta = datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
                 
                 while slot_start + datetime.timedelta(minutes=service_duration) <= slot_end:
+                    if solo_horas_exactas:
+                        minutos = slot_start.minute
+                        if minutos not in (0, 30):  # o (0, 15, 30, 45) según lo que quieras
+                            slot_start += delta
+                            continue
                     # No ofrecer turnos que empiecen antes de 20 minutos desde ahora
                     if slot_start < now + datetime.timedelta(minutes=20):
                         slot_start += delta
