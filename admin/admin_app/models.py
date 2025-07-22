@@ -28,8 +28,8 @@ class Tenant(db.Model):
     calendar_id_general = db.Column(db.String, nullable=True)  # <-- Nuevo campo
     servicios = db.relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = db.relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")
-    working_hours_general = Column(Text, nullable=True)  # <-- NUEVO
-    intervalo_entre_turnos = Column(Integer, default=20) 
+    working_hours_general = db.Column(Text, nullable=True)  # <-- NUEVO
+    intervalo_entre_turnos = db.Column(Integer, default=20) 
 
     def __repr__(self):
         return f"<Tenant {self.nombre}>"
@@ -48,7 +48,7 @@ class Reserva(db.Model):
     fecha_reserva = db.Column(DateTime, default=datetime.utcnow)
     servicio = db.Column(String(150), nullable=False)
     estado = db.Column(String(20), nullable=False, default="activo") 
-    cantidad = Column(Integer, default=1)  # <-- NUEVO CAMPO
+    cantidad = db.Column(Integer, default=1)  # <-- NUEVO CAMPO
 
     empleado = relationship('Empleado')
 
