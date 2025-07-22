@@ -242,7 +242,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         working_hours_json=tenant.working_hours_general,
                         service_duration=duracion,
                         intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,  # <-- usa el valor de la base
-                        max_turnos=25
+                        max_turnos=25,
+                        cantidad=servicio.cantidad or 1
                     )
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
                     slots_futuros = [s for s in slots if s > ahora]
@@ -277,7 +278,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         working_hours_json=empleado.working_hours,
                         service_duration=duracion,
                         intervalo_entre_turnos=20,
-                        max_turnos=25
+                        max_turnos=25,
+                        cantidad=servicio.cantidad or 1
                     )
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
                     slots_futuros = [s for s in slots if s > ahora]
@@ -328,7 +330,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         working_hours_json=tenant.working_hours_general,
                         service_duration=duracion,
                         intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,  # <-- usa el valor de la base
-                        max_turnos=25
+                        max_turnos=25,
+                        cantidad=servicio.cantidad or 1
                     )
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
                     slots_futuros = [s for s in slots if s > ahora]
@@ -380,7 +383,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         working_hours_json=empleado.working_hours,
                         service_duration=servicio.duracion,    
                         intervalo_entre_turnos=20,             
-                        max_turnos=25
+                        max_turnos=25,
+                        cantidad=servicio.cantidad or 1
                     )
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
                     slots_futuros = [s for s in slots if s > ahora]
@@ -638,7 +642,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     working_hours_json=None,
                     service_duration=servicio.duracion,
                     intervalo_entre_turnos=20,
-                    max_turnos=10
+                    max_turnos=10,
+                    cantidad=servicio.cantidad or 1
                 )
                 ahora = datetime.now(pytz.timezone("America/Montevideo"))
                 slots_futuros = [s for s in slots if s > ahora]
@@ -726,7 +731,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     working_hours_json=tenant.working_hours_general,
                     service_duration=duracion,
                     intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,  # <-- usa el valor de la base
-                    max_turnos=25
+                    max_turnos=25,
+                    cantidad=servicio.cantidad or 1
                 )
                 ahora = datetime.now(pytz.timezone("America/Montevideo"))
                 slots_futuros = [s for s in slots if s > ahora]

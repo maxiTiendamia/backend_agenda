@@ -21,7 +21,8 @@ def get_available_slots(
     service_duration,
     intervalo_entre_turnos=20,
     max_days=14,
-    max_turnos=25
+    max_turnos=25,
+    cantidad=1 
 ):
     service = build_service(credentials_json)
     now = datetime.datetime.now(tz=URUGUAY_TZ)
@@ -92,9 +93,9 @@ def get_available_slots(
                         continue
 
                     slot_final = slot_start + datetime.timedelta(minutes=service_duration)
-                    overlap = any(
+                    overlap_count = sum(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
-                    )
+                        )
 
                     # Nuevo filtro: no ofrecer turnos si el anterior ocupado terminó hace menos del intervalo
                     hay_cerca = any(
@@ -102,7 +103,7 @@ def get_available_slots(
                         for b_start, b_end in busy if b_end <= slot_start
                     )
 
-                    if not overlap and not hay_cerca:
+                    if overlap_count < cantidad and not hay_cerca:
                         available.append(slot_start)
                         turnos_generados += 1
                         if turnos_generados >= max_turnos:
