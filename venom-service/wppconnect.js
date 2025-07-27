@@ -291,7 +291,6 @@ if (require.main === module) {
   });
 }
 
-
 // Limpia sesiones inválidas (needsQr=true) de Redis y tokens
 async function cleanInvalidSessions() {
   const keys = await redisClient.keys('wppconnect:*:needsQr');
@@ -309,6 +308,27 @@ async function cleanInvalidSessions() {
       console.log(`[CLEAN] Sesión inválida limpiada: ${sessionId}`);
     }
   }
+}
+
+// Elimina todo lo relacionado a una sesión y la reinicia
+async function resetSession(sessionId, onQr, onMessage) {
+  // 1. Eliminar carpeta de tokens
+  const folder = getSessionFolder(sessionId);
+  if (fs.existsSync(folder)) {
+    fs.rmSync(folder, { recursive: true, force: true });
+    console.log(`[RESET] Carpeta de sesión ${sessionId} eliminada`);
+  }
+
+  // 2. Eliminar todas las claves de Redis para esa sesión
+  const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
+  for (const sk of sessionKeys) {
+    await redisClient.del(sk);
+    console.log(`[RESET] Clave Redis eliminada: ${sk}`);
+  }
+
+  // 3. Reiniciar la sesión desde cero
+  await createSession(sessionId, onQr, onMessage);
+  console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero`);
 }
 
 module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus, cleanInvalidSessions, resetSession };
