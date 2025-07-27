@@ -331,12 +331,16 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return JSONResponse(content={"mensaje": msg})
 
         if state.get("step") == "waiting_servicio":
+            print("🔹 Paso: waiting_servicio")
             if mensaje.isdigit():
                 idx = int(mensaje) - 1
                 servicios_ids = state.get("servicios", [])
+                print("🔹 Servicios IDs:", servicios_ids)
                 if 0 <= idx < len(servicios_ids):
                     servicio_id = servicios_ids[idx]
+                    print("🔹 Servicio seleccionado:", servicio_id)
                     servicio = db.query(Servicio).get(servicio_id)
+                    print("🔹 Servicio obtenido:", servicio)
                     duracion = servicio.duracion
                     slots = get_available_slots(
                         calendar_id=tenant.calendar_id_general,

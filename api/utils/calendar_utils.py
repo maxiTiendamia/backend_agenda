@@ -120,6 +120,7 @@ def get_available_slots(
                         available.append(slot_start)
                         turnos_generados += 1
                         if turnos_generados >= max_turnos:
+                            print(f"🔹 Se alcanzó el máximo de turnos: {max_turnos}")
                             break
 
                     # Avanza al próximo horario exacto (en punto o y media)
