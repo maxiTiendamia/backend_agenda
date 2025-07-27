@@ -316,9 +316,9 @@ async function startAllSessions(onQr, onMessage) {
 // Si ejecutas este archivo directamente, inicia las sesiones automáticamente
 if (require.main === module) {
   // Puedes personalizar estos callbacks según tu lógica
-  const onQr = (base64Qr, sessionId) => {
+  const onQr = async (base64Qr, sessionId) => {
     console.log(`QR para sesión ${sessionId}:`);
-    // Aquí podrías guardar el QR, enviarlo por API, etc.
+    await guardarQR(sessionId, base64Qr); 
   };
   const onMessage = (message, client) => {
     console.log(`Mensaje recibido en sesión ${client.session}:`, message);
