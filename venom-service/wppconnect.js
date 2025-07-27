@@ -170,8 +170,8 @@ async function createSession(sessionId, onQr, onMessage) {
       // Ahora sigue con la nueva sesión normalmente
     }
     if (sessionLocks[sessionId]) {
-      console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado.`);
-      return;
+      console.log(`[LOCK] Sesión ${sessionId} está bloqueada, pero se fuerza la creación/restauración para obtener QR.`);
+      // No retornes, sigue el flujo para que se genere el QR aunque esté bloqueada
     }
     sessionLocks[sessionId] = true;
     try {
