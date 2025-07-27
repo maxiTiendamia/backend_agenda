@@ -331,3 +331,5 @@ app.get('/debug/desconexiones/:clienteId', async (req, res) => {
   const data = await redisClient.get(`wppconnect:${clienteId}:lastDisconnect`);
   res.json(data ? JSON.parse(data) : { mensaje: 'Sin desconexiones registradas' });
 });
+
+module.exports = { pool };
