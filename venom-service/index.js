@@ -74,6 +74,7 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
         }
       },
       async (message, client) => {
+        console.log(`[BOT] Mensaje recibido:`, message);
         try {
           const telefono = message.from.replace("@c.us", "");
           const mensaje = message.body;
