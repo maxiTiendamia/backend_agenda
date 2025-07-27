@@ -200,8 +200,12 @@ async function createSession(sessionId, onQr, onMessage) {
           // Guardar QR en la base de datos usando qrUtils.js (evita dependencia circular)
           try {
             const { guardarQR } = require('./qrUtils');
-            await guardarQR(pool, sessionId, base64Qr);
-            console.log(`[QR][DB] Guardado QR para sesión ${sessionId} en la base de datos`);
+            if (pool && typeof pool.query === 'function') {
+              await guardarQR(pool, sessionId, base64Qr);
+              console.log(`[QR][DB] Guardado QR para sesión ${sessionId} en la base de datos`);
+            } else {
+              console.warn(`[QR][DB] pool no está disponible, no se guarda QR para sesión ${sessionId}`);
+            }
           } catch (err) {
             console.error(`[QR][DB] Error guardando QR en la base de datos para sesión ${sessionId}:`, err);
           }
