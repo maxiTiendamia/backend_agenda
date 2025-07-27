@@ -12,8 +12,8 @@ const clients = {}; // Clientes activos en memoria
 // Utilidades para guardar y restaurar archivos de sesión en Redis
 async function saveSessionFileToRedis(sessionId, fileName) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
-  // Buscar en la subcarpeta <sessionId>/<sessionId>/fileName
-  const filePath = path.join(sessionDir, String(sessionId), String(sessionId), fileName);
+  // Buscar en la carpeta <sessionId>/fileName
+  const filePath = path.join(sessionDir, String(sessionId), fileName);
   if (fs.existsSync(filePath)) {
     const data = fs.readFileSync(filePath);
     await redisClient.set(`wppconnect:${sessionId}:file:${fileName}`, data);
@@ -33,8 +33,8 @@ async function restoreSessionFileFromRedis(sessionId, fileName) {
   const data = await redisClient.get(`wppconnect:${sessionId}:file:${fileName}`);
   if (data) {
     const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
-    // Restaurar en la subcarpeta <sessionId>/<sessionId>/fileName
-    const dirPath = path.join(sessionDir, String(sessionId), String(sessionId));
+    // Restaurar en la carpeta <sessionId>/fileName
+    const dirPath = path.join(sessionDir, String(sessionId));
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
     }
