@@ -330,6 +330,7 @@ async function createSession(sessionId, onQr, onMessage) {
       const client = await clientPromise;
       clients[sessionId] = client; // Guarda el cliente en memoria
       client.onMessage(async (message) => {
+        console.log(`[BOT][DEBUG] Mensaje recibido en sesión ${sessionId}:`, message);
         if (onMessage) await onMessage(message, client);
       });
       client.onStateChange(async (state) => {
