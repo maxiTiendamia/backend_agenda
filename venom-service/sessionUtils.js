@@ -17,7 +17,6 @@ function cleanSessionFolder(sessionId) {
     fs.rmSync(folder, { recursive: true, force: true });
     console.log(`[SESSION] Carpeta de sesión ${sessionId} eliminada`);
   }
-  console.log(`[DEBUG] sessionId=${sessionId}, folder=${getSessionFolder(sessionId)}`);
 }
 
 module.exports = { getSessionFolder, cleanSessionFolder };
