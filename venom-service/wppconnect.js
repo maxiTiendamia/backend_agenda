@@ -183,8 +183,10 @@ async function createSession(sessionId, onQr, onMessage) {
         session: sessionId,
         folderNameToken: getSessionFolder(sessionId),
         catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
-          // Marca que esta sesión está esperando QR
           sessionWaitingQr = sessionId;
+          // Elimina el QR anterior antes de guardar el nuevo
+          await redisClient.del(`wppconnect:${sessionId}:qrCode`);
+          await redisClient.set(`wppconnect:${sessionId}:qrCode`, base64Qr); // Guarda el nuevo QR en Redis
           if (onQr) await onQr(base64Qr, sessionId);
           await saveAllSessionFilesToRedis(sessionId);
         },
@@ -193,6 +195,7 @@ async function createSession(sessionId, onQr, onMessage) {
           const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
           if (estadosConectado.includes(statusSession)) {
             sessionWaitingQr = null;
+            await redisClient.del(`wppconnect:${session}:qrCode`);
             await setSessionState(session, 'loggedIn');
             await setHasSession(session, true); // Guardar flag de sesión activa
             await setNeedsQr(session, false); // No necesita QR
@@ -400,4 +403,4 @@ function enqueueSessionTask(sessionId, task) {
   return sessionQueues[sessionId];
 }
 
-module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus, cleanInvalidSessions, resetSession };
+module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus, cleanInvalidSessions, resetSession, getQrCode };
