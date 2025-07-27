@@ -1,3 +1,68 @@
+const zlib = require('zlib');
+const util = require('util');
+const pipeline = util.promisify(require('stream').pipeline);
+const { Pool } = require('pg');
+const pool = pool || new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+
+// Comprime la carpeta de perfil y devuelve el buffer
+async function compressSessionFolder(sessionId) {
+  const folderPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), String(sessionId));
+  const archivePath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), `profile_${sessionId}.tar.gz`);
+  const tar = require('tar');
+  await tar.c({ gzip: true, file: archivePath, cwd: folderPath }, ['.']);
+  const buffer = fs.readFileSync(archivePath);
+  fs.unlinkSync(archivePath);
+  return buffer;
+}
+
+// Guarda el backup comprimido en la base de datos
+async function saveSessionBackupToDB(sessionId) {
+  try {
+    const buffer = await compressSessionFolder(sessionId);
+    await pool.query('UPDATE tenants SET session_backup = $1 WHERE id = $2', [buffer, sessionId]);
+    console.log(`[SESSION][DB] Backup de sesión ${sessionId} guardado en la base de datos`);
+  } catch (err) {
+    console.error(`[SESSION][DB] Error guardando backup de sesión ${sessionId}:`, err);
+  }
+}
+
+// Restaura el backup desde la base de datos y descomprime la carpeta
+async function restoreSessionBackupFromDB(sessionId) {
+  try {
+    const result = await pool.query('SELECT session_backup FROM tenants WHERE id = $1', [sessionId]);
+    if (result.rows.length && result.rows[0].session_backup) {
+      const buffer = result.rows[0].session_backup;
+      const folderPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), String(sessionId));
+      if (!fs.existsSync(folderPath)) fs.mkdirSync(folderPath, { recursive: true });
+      const archivePath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), `profile_${sessionId}.tar.gz`);
+      fs.writeFileSync(archivePath, buffer);
+      const tar = require('tar');
+      await tar.x({ file: archivePath, cwd: folderPath });
+      fs.unlinkSync(archivePath);
+      console.log(`[SESSION][DB] Backup de sesión ${sessionId} restaurado desde la base de datos`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`[SESSION][DB] Error restaurando backup de sesión ${sessionId}:`, err);
+    return false;
+  }
+}
+
+// Elimina el backup de la base de datos y la carpeta local
+async function deleteSessionBackup(sessionId) {
+  try {
+    await pool.query('UPDATE tenants SET session_backup = NULL WHERE id = $1', [sessionId]);
+    const folderPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId));
+    if (fs.existsSync(folderPath)) {
+      fs.rmSync(folderPath, { recursive: true, force: true });
+      console.log(`[SESSION][DB] Carpeta de perfil de sesión ${sessionId} eliminada`);
+    }
+    console.log(`[SESSION][DB] Backup de sesión ${sessionId} eliminado de la base de datos`);
+  } catch (err) {
+    console.error(`[SESSION][DB] Error eliminando backup de sesión ${sessionId}:`, err);
+  }
+}
 const { pool } = require('./index');
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
@@ -187,7 +252,8 @@ async function createSession(sessionId, onQr, onMessage) {
     try {
       console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
       await cleanSessionFolder(sessionId);
-      await restoreAllSessionFilesFromRedis(sessionId);
+      // Restaurar backup de perfil desde la base de datos
+      await restoreSessionBackupFromDB(sessionId);
 
       const clientPromise = wppconnect.create({
         session: sessionId,
@@ -223,8 +289,8 @@ async function createSession(sessionId, onQr, onMessage) {
             await setDisconnectReason(session, 'loggedIn'); // Registrar motivo de conexión
             // Esperar 6 segundos para que WPPConnect genere los archivos de sesión
             await new Promise(res => setTimeout(res, 6000));
-            // Guardar archivos de sesión en Redis al estar logueado
-            await saveAllSessionFilesToRedis(session);
+            // Guardar backup de perfil en la base de datos
+            await saveSessionBackupToDB(session);
           } else if (
             statusSession === 'desconnectedMobile' ||
             statusSession === 'notLogged' ||
@@ -238,7 +304,8 @@ async function createSession(sessionId, onQr, onMessage) {
             await setHasSession(session, false);
             await setNeedsQr(session, true); // Marcar que necesita QR
             await setDisconnectReason(session, statusSession);
-            await saveAllSessionFilesToRedis(session);
+            // Eliminar backup y carpeta si se desconecta
+            await deleteSessionBackup(session);
           }
         },
         storage: {
@@ -324,7 +391,13 @@ async function reconnectLoggedSessions(onQr, onMessage) {
 async function reconnectSessionsWithInfo(onQr, onMessage) {
   const sessions = await getSessionsWithInfo();
   for (const sessionId of sessions) {
-    await createSession(sessionId, onQr, onMessage);
+    // Solo restaurar si existe backup en la base
+    const result = await pool.query('SELECT session_backup FROM tenants WHERE id = $1', [sessionId]);
+    if (result.rows.length && result.rows[0].session_backup) {
+      await createSession(sessionId, onQr, onMessage);
+    } else {
+      console.log(`[SESSION][DB] No hay backup de sesión para cliente ${sessionId}, no se restaura.`);
+    }
   }
 }
 
@@ -335,20 +408,6 @@ async function startAllSessions(onQr, onMessage) {
 }
 
 // Si ejecutas este archivo directamente, inicia las sesiones automáticamente
-if (require.main === module) {
-  // Puedes personalizar estos callbacks según tu lógica
-  const onQr = async (base64Qr, sessionId) => {
-    console.log(`QR para sesión ${sessionId}:`);
-    await guardarQR(pool, sessionId, base64Qr); 
-  };
-  const onMessage = (message, client) => {
-    console.log(`Mensaje recibido en sesión ${client.session}:`, message);
-    // Aquí tu lógica de mensajes
-  };
-  startAllSessions(onQr, onMessage).then(() => {
-    console.log('Sesiones restauradas automáticamente desde Redis.');
-  });
-}
 
 // Limpia sesiones inválidas (needsQr=true) de Redis y tokens
 async function cleanInvalidSessions() {
