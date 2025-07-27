@@ -346,6 +346,10 @@ async function cleanInvalidSessions() {
   }
 }
 
+async function getQrCode(sessionId) {
+  return await redisClient.get(`wppconnect:${sessionId}:qrCode`);
+}
+
 // Elimina todo lo relacionado a una sesión y la reinicia
 async function resetSession(sessionId, onQr, onMessage) {
   return enqueueSessionTask(sessionId, async () => {
