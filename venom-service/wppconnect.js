@@ -196,9 +196,11 @@ async function createSession(sessionId, onQr, onMessage) {
           if (estadosConectado.includes(statusSession)) {
             sessionWaitingQr = null;
             await redisClient.del(`wppconnect:${session}:qrCode`);
+            // Setear flags de sesión logueada
             await setSessionState(session, 'loggedIn');
-            await setHasSession(session, true); // Guardar flag de sesión activa
-            await setNeedsQr(session, false); // No necesita QR
+            await setHasSession(session, true);
+            await setNeedsQr(session, false);
+            await setDisconnectReason(session, 'loggedIn'); // Registrar motivo de conexión
             // Guardar archivos de sesión en Redis al estar logueado
             await saveAllSessionFilesToRedis(session);
           } else if (
@@ -211,10 +213,9 @@ async function createSession(sessionId, onQr, onMessage) {
           ) {
             sessionWaitingQr = null;
             await setSessionState(session, 'disconnected');
+            await setHasSession(session, false);
             await setNeedsQr(session, true); // Marcar que necesita QR
-            // NUEVO: guardar motivo y fecha de desconexión
             await setDisconnectReason(session, statusSession);
-            // Guardar archivos de sesión en Redis al desconectarse
             await saveAllSessionFilesToRedis(session);
           }
         },
