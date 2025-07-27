@@ -148,7 +148,7 @@ async function createSession(sessionId, onQr, onMessage) {
   try {
     const clientPromise = wppconnect.create({
       session: sessionId,
-      folderNameToken: process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'),
+      folderNameToken: getSessionFolder(sessionId), // <-- CORRECTO
       catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
         if (onQr) await onQr(base64Qr, sessionId);
         // Guardar archivos de sesión en Redis cada vez que se reciba un QR (posible cambio de estado)
