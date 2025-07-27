@@ -185,12 +185,10 @@ async function createSession(sessionId, onQr, onMessage) {
         catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
           if (attempts === 1) {
             sessionWaitingQr = sessionId;
-            // Guardar en la base de datos solo una vez
-            await guardarQRBaseDatos(sessionId, base64Qr);
-            // El resto de tu lógica (Redis, etc.)
+            // Usar el callback que ya guarda el QR en la base
+            if (onQr) await onQr(base64Qr, sessionId);
             await redisClient.del(`wppconnect:${sessionId}:qrCode`);
             await redisClient.set(`wppconnect:${sessionId}:qrCode`, base64Qr);
-            if (onQr) await onQr(base64Qr, sessionId);
             await saveAllSessionFilesToRedis(sessionId);
           }
         },
