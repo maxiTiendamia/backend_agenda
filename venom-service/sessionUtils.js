@@ -10,7 +10,7 @@ function cleanSessionFolder(sessionId) {
   const folder = getSessionFolder(sessionId);
   if (fs.existsSync(folder)) {
     fs.rmSync(folder, { recursive: true, force: true });
-    console.log(`[FS] Carpeta de sesión eliminada: ${folder}`);
+    console.log(`[SESSION] Carpeta de sesión ${sessionId} eliminada`);
   }
 }
 

@@ -1,4 +1,3 @@
-
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
 const fs = require('fs');
@@ -141,6 +140,9 @@ async function setDisconnectReason(sessionId, reason) {
 }
 
 async function createSession(sessionId, onQr, onMessage) {
+  // Limpia la carpeta de la sesión antes de restaurar archivos
+  await cleanSessionFolder(sessionId);
+
   // Restaurar archivos de sesión desde Redis antes de crear la sesión
   await restoreAllSessionFilesFromRedis(sessionId);
   try {
