@@ -14,6 +14,13 @@ async function saveSessionFileToRedis(sessionId, fileName) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
   // Buscar en la carpeta <sessionId>/fileName
   const filePath = path.join(sessionDir, String(sessionId), fileName);
+  // Log de todos los archivos en la carpeta de la sesión
+  try {
+    const files = fs.readdirSync(path.join(sessionDir, String(sessionId)));
+    console.log(`[SESSION][DISK] Archivos en la carpeta de sesión ${sessionId}: ${JSON.stringify(files)}`);
+  } catch (e) {
+    console.log(`[SESSION][DISK] No se pudo leer la carpeta de sesión ${sessionId}:`, e.message);
+  }
   if (fs.existsSync(filePath)) {
     const data = fs.readFileSync(filePath);
     await redisClient.set(`wppconnect:${sessionId}:file:${fileName}`, data);
