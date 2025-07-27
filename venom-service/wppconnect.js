@@ -142,12 +142,31 @@ async function setDisconnectReason(sessionId, reason) {
   console.log(`[REDIS] Desconexión guardada: sesión=${sessionId}, motivo=${reason}, fecha=${timestamp}`);
 }
 
+async function cancelWaitingQrSession() {
+  if (sessionWaitingQr) {
+    const sessionId = sessionWaitingQr;
+    console.log(`[QR CANCEL] Cancelando sesión esperando QR: ${sessionId}`);
+    // Elimina carpeta y claves de Redis
+    const folder = getSessionFolder(sessionId);
+    if (fs.existsSync(folder)) {
+      fs.rmSync(folder, { recursive: true, force: true });
+      console.log(`[QR CANCEL] Carpeta de sesión ${sessionId} eliminada`);
+    }
+    const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
+    for (const sk of sessionKeys) {
+      await redisClient.del(sk);
+      console.log(`[QR CANCEL] Clave Redis eliminada: ${sk}`);
+    }
+    sessionWaitingQr = null;
+  }
+}
+
+// Modifica createSession para cancelar la anterior si hay QR pendiente
 async function createSession(sessionId, onQr, onMessage) {
   return enqueueSessionTask(sessionId, async () => {
-    // Si ya hay una sesión esperando QR y no es esta, bloquea el proceso
     if (sessionWaitingQr && sessionWaitingQr !== sessionId) {
-      console.log(`[QR BLOCK] Ya hay una sesión (${sessionWaitingQr}) esperando QR. No se puede iniciar la sesión ${sessionId} hasta que se escanee o cancele el QR anterior.`);
-      return;
+      await cancelWaitingQrSession(); // Cancela la anterior
+      // Ahora sigue con la nueva sesión normalmente
     }
     if (sessionLocks[sessionId]) {
       console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado.`);
