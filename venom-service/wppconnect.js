@@ -61,7 +61,7 @@ async function deleteSessionBackup(sessionId) {
     console.error(`[SESSION][DB] Error eliminando backup de sesión ${sessionId}:`, err);
   }
 }
-const { pool } = require('./index');
+const { pool } = require('./db');
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
 const fs = require('fs');

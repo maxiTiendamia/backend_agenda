@@ -4,3 +4,4 @@ dotenv
 axios
 pg
 redis
+tar
