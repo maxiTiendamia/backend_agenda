@@ -198,6 +198,14 @@ async function createSession(sessionId, onQr, onMessage) {
           await redisClient.del(`wppconnect:${sessionId}:qrCode`);
           await redisClient.set(`wppconnect:${sessionId}:qrCode`, base64Qr);
           console.log(`[QR][REDIS] Guardado QR para sesión ${sessionId} (length: ${base64Qr.length}, intento: ${attempts})`);
+          // Guardar QR en la base de datos (reutiliza la función existente)
+          try {
+            const { guardarQR } = require('./index');
+            await guardarQR(sessionId, base64Qr);
+            console.log(`[QR][DB] Guardado QR para sesión ${sessionId} en la base de datos`);
+          } catch (err) {
+            console.error(`[QR][DB] Error guardando QR en la base de datos para sesión ${sessionId}:`, err);
+          }
         },
         statusFind: async (statusSession, session) => {
           // Si la sesión se loguea, libera el bloqueo
