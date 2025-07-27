@@ -2,8 +2,8 @@ const fs = require('fs');
 const path = require('path');
 
 function getSessionFolder(sessionId) {
-  const base = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
-  return path.join(base, String(sessionId));
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
+  return path.join(sessionDir, String(sessionId));
 }
 
 function cleanSessionFolder(sessionId) {
