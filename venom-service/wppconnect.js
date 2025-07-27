@@ -1,12 +1,12 @@
 const zlib = require('zlib');
 const util = require('util');
 const pipeline = util.promisify(require('stream').pipeline);
+const tar = require('tar'); // Reemplaza unzipper por tar
 
 // Comprime la carpeta de perfil y devuelve el buffer
 async function compressSessionFolder(sessionId) {
   const folderPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), String(sessionId));
   const archivePath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), `profile_${sessionId}.tar.gz`);
-  const tar = require('tar');
   await tar.c({ gzip: true, file: archivePath, cwd: folderPath }, ['.']);
   const buffer = fs.readFileSync(archivePath);
   fs.unlinkSync(archivePath);
@@ -25,7 +25,6 @@ async function saveSessionBackupToDB(sessionId) {
 }
 
 // Restaura el backup desde la base de datos y descomprime en la carpeta correcta
-const unzipper = require('unzipper');
 async function restoreSessionBackupFromDB(sessionId) {
   const folder = getSessionFolder(sessionId);
   const result = await pool.query(
@@ -37,8 +36,11 @@ async function restoreSessionBackupFromDB(sessionId) {
     return;
   }
   const buffer = result.rows[0].session_backup;
-  await unzipper.Open.buffer(buffer)
-    .then(d => d.extract({ path: folder, concurrency: 5 }));
+  const archivePath = path.join(folder, `profile_${sessionId}.tar.gz`);
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(archivePath, buffer);
+  await tar.x({ file: archivePath, cwd: folder });
+  fs.unlinkSync(archivePath);
   console.log(`[SESSION][DB] Archivos restaurados:`, fs.readdirSync(folder));
 }
 
