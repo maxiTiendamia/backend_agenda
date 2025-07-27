@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { getSessionFolder, cleanSessionFolder } = require('./sessionUtils');
 
+const sessionLocks = {}; // Lock por sesión
+
 // Utilidades para guardar y restaurar archivos de sesión en Redis
 async function saveSessionFileToRedis(sessionId, fileName) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
@@ -139,6 +141,14 @@ async function setDisconnectReason(sessionId, reason) {
 }
 
 async function createSession(sessionId, onQr, onMessage) {
+  // --- INICIO: LOCK POR SESIÓN ---
+  if (sessionLocks[sessionId]) {
+    console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado.`);
+    return;
+  }
+  sessionLocks[sessionId] = true;
+  // --- FIN: LOCK POR SESIÓN ---
+
   console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
   // Limpia la carpeta de la sesión antes de restaurar archivos
   await cleanSessionFolder(sessionId);
@@ -251,6 +261,8 @@ async function reconnectSession(sessionId) {
     // NUEVO: guardar motivo y fecha de desconexión por error
     await setDisconnectReason(sessionId, err.message || 'unknown error');
     throw err;
+  } finally {
+    sessionLocks[sessionId] = false; // Libera el lock al terminar
   }
 }
 
@@ -313,23 +325,32 @@ async function cleanInvalidSessions() {
 
 // Elimina todo lo relacionado a una sesión y la reinicia
 async function resetSession(sessionId, onQr, onMessage) {
-  // 1. Eliminar carpeta de tokens
-  const folder = getSessionFolder(sessionId);
-  if (fs.existsSync(folder)) {
-    fs.rmSync(folder, { recursive: true, force: true });
-    console.log(`[RESET] Carpeta de sesión ${sessionId} eliminada`);
+  if (sessionLocks[sessionId]) {
+    console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado de reset.`);
+    return;
   }
+  sessionLocks[sessionId] = true;
+  try {
+    // 1. Eliminar carpeta de tokens
+    const folder = getSessionFolder(sessionId);
+    if (fs.existsSync(folder)) {
+      fs.rmSync(folder, { recursive: true, force: true });
+      console.log(`[RESET] Carpeta de sesión ${sessionId} eliminada`);
+    }
 
-  // 2. Eliminar todas las claves de Redis para esa sesión
-  const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
-  for (const sk of sessionKeys) {
-    await redisClient.del(sk);
-    console.log(`[RESET] Clave Redis eliminada: ${sk}`);
+    // 2. Eliminar todas las claves de Redis para esa sesión
+    const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
+    for (const sk of sessionKeys) {
+      await redisClient.del(sk);
+      console.log(`[RESET] Clave Redis eliminada: ${sk}`);
+    }
+
+    // 3. Reiniciar la sesión desde cero
+    await createSession(sessionId, onQr, onMessage);
+    console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero`);
+  } finally {
+    sessionLocks[sessionId] = false;
   }
-
-  // 3. Reiniciar la sesión desde cero
-  await createSession(sessionId, onQr, onMessage);
-  console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero`);
 }
 
 module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus, cleanInvalidSessions, resetSession };
