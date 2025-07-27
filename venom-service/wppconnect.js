@@ -382,14 +382,15 @@ async function resetSession(sessionId, onQr, onMessage) {
           console.log(`[RESET] Error cerrando cliente de sesión ${sessionId}:`, e);
         }
         delete clients[sessionId];
-        // Actualiza estado en Redis
-        await setSessionState(sessionId, 'disconnected');
-        await setHasSession(sessionId, false);
-        await setNeedsQr(sessionId, true);
-        await setDisconnectReason(sessionId, 'reset');
       }
 
-      // 4. Reiniciar la sesión desde cero
+      // 4. Actualizar flags en Redis SIEMPRE
+      await setSessionState(sessionId, 'disconnected');
+      await setHasSession(sessionId, false);
+      await setNeedsQr(sessionId, true);
+      await setDisconnectReason(sessionId, 'reset');
+
+      // 5. Reiniciar la sesión desde cero
       await createSession(sessionId, onQr, onMessage);
       console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero`);
     } finally {
