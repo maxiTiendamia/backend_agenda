@@ -181,7 +181,7 @@ async function createSession(sessionId, onQr, onMessage) {
 
       const clientPromise = wppconnect.create({
         session: sessionId,
-        folderNameToken: process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'),
+        folderNameToken: path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId)),
         catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
           sessionWaitingQr = sessionId;
           // Guarda el QR en la base en cada intento
