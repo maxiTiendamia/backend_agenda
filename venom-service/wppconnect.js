@@ -403,4 +403,20 @@ function enqueueSessionTask(sessionId, task) {
   return sessionQueues[sessionId];
 }
 
-module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus, cleanInvalidSessions, resetSession, getQrCode };
+module.exports = {
+  createSession,
+  setSessionState,
+  getSessionState,
+  getLoggedSessions,
+  reconnectLoggedSessions,
+  startAllSessions,
+  setHasSession,
+  getSessionsWithInfo,
+  reconnectSessionsWithInfo,
+  setNeedsQr,
+  getNeedsQr,
+  getSessionStatus,
+  cleanInvalidSessions,
+  resetSession,
+  getQrCode
+};
