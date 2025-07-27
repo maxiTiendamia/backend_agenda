@@ -826,9 +826,16 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         db.add(log)
         db.commit()
         print("❌ Error general procesando mensaje:", e)
-        if not state.get("error_sent"):
-            state["error_sent"] = True
-            set_user_state(telefono, state)
-        return JSONResponse(content={"mensaje": "❌ Ocurrió un error inesperado. Por favor, intenta nuevamente más tarde."})
+        # Reiniciar el estado para que el usuario pueda seguir interactuando
+        state = {"step": "welcome", "last_interaction": time.time(), "mode": "bot", "is_first_contact": False}
+        set_user_state(telefono, state)
+        return JSONResponse(content={
+            "mensaje": (
+                "❌ Ocurrió un error inesperado. Volvé a intentar tu reserva.\n\n"
+                "¿Qué deseas hacer?\n"
+                "🔹 Escribe \"Turno\" para agendar\n"
+                "🔹 Escribe \"Ayuda\" para hablar con un asesor"
+            )
+        })
 
 
