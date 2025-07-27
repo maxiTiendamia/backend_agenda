@@ -183,14 +183,12 @@ async function createSession(sessionId, onQr, onMessage) {
         session: sessionId,
         folderNameToken: process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'),
         catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
-          if (attempts === 1) {
-            sessionWaitingQr = sessionId;
-            // Usar el callback que ya guarda el QR en la base
-            if (onQr) await onQr(base64Qr, sessionId);
-            await redisClient.del(`wppconnect:${sessionId}:qrCode`);
-            await redisClient.set(`wppconnect:${sessionId}:qrCode`, base64Qr);
-            await saveAllSessionFilesToRedis(sessionId);
-          }
+          sessionWaitingQr = sessionId;
+          // Guarda el QR en la base en cada intento
+          if (onQr) await onQr(base64Qr, sessionId);
+          await redisClient.del(`wppconnect:${sessionId}:qrCode`);
+          await redisClient.set(`wppconnect:${sessionId}:qrCode`, base64Qr);
+          await saveAllSessionFilesToRedis(sessionId);
         },
         statusFind: async (statusSession, session) => {
           // Si la sesión se loguea, libera el bloqueo
