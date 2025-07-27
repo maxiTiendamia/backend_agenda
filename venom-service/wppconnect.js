@@ -24,43 +24,31 @@ async function saveSessionBackupToDB(sessionId) {
   }
 }
 
-// Restaura el backup desde la base de datos y descomprime la carpeta
+// Restaura el backup desde la base de datos y descomprime en la carpeta correcta
+const unzipper = require('unzipper');
 async function restoreSessionBackupFromDB(sessionId) {
-  try {
-    const result = await pool.query('SELECT session_backup FROM tenants WHERE id = $1', [sessionId]);
-    if (result.rows.length && result.rows[0].session_backup) {
-      const buffer = result.rows[0].session_backup;
-      const folderPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), String(sessionId));
-      if (!fs.existsSync(folderPath)) fs.mkdirSync(folderPath, { recursive: true });
-      const archivePath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), `profile_${sessionId}.tar.gz`);
-      fs.writeFileSync(archivePath, buffer);
-      const tar = require('tar');
-      await tar.x({ file: archivePath, cwd: folderPath });
-      fs.unlinkSync(archivePath);
-      console.log(`[SESSION][DB] Backup de sesión ${sessionId} restaurado desde la base de datos`);
-      return true;
-    }
-    return false;
-  } catch (err) {
-    console.error(`[SESSION][DB] Error restaurando backup de sesión ${sessionId}:`, err);
-    return false;
+  const folder = getSessionFolder(sessionId);
+  const result = await pool.query(
+    'SELECT backup_data FROM session_backups WHERE session_id = $1',
+    [sessionId]
+  );
+  if (!result.rows.length) {
+    console.log(`[SESSION][DB] No hay backup en BD para sesión ${sessionId}`);
+    return;
   }
+  const buffer = result.rows[0].backup_data;
+  await unzipper.Open.buffer(buffer)
+    .then(d => d.extract({ path: folder, concurrency: 5 }));
+  console.log(`[SESSION][DB] Archivos restaurados:`, fs.readdirSync(folder));
 }
 
 // Elimina el backup de la base de datos y la carpeta local
 async function deleteSessionBackup(sessionId) {
-  try {
-    await pool.query('UPDATE tenants SET session_backup = NULL WHERE id = $1', [sessionId]);
-    const folderPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId));
-    if (fs.existsSync(folderPath)) {
-      fs.rmSync(folderPath, { recursive: true, force: true });
-      console.log(`[SESSION][DB] Carpeta de perfil de sesión ${sessionId} eliminada`);
-    }
-    console.log(`[SESSION][DB] Backup de sesión ${sessionId} eliminado de la base de datos`);
-  } catch (err) {
-    console.error(`[SESSION][DB] Error eliminando backup de sesión ${sessionId}:`, err);
-  }
+  // Solo elimina la carpeta local, NO el backup en la BD
+  cleanSessionFolder(sessionId);
+  console.log(`[SESSION][DB] Backup DB retenido para sesión ${sessionId}`);
 }
+
 const { pool } = require('./db');
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
