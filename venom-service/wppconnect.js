@@ -460,6 +460,7 @@ async function resetSession(sessionId, onQr, onMessage) {
 
       // 5. Reiniciar la sesión desde cero y forzar generación de QR
       await createSession(sessionId, async (base64Qr, sessionId) => {
+        console.log(`[DEBUG][QR][RESET] Callback QR ejecutado para sesión ${sessionId}`);
         // Forzar guardado del QR en la base de datos aunque la sesión esté desconectada
         try {
           const { guardarQR } = require('./qrUtils');
