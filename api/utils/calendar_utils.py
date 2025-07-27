@@ -98,14 +98,14 @@ def get_available_slots(
                 
                 while slot_start + datetime.timedelta(minutes=service_duration) <= slot_end:
                     if solo_horas_exactas:
-                        minutos = slot_start.minute
-                        if minutos not in (0, 30):  # o (0, 15, 30, 45) si quieres cuartos de hora
-                            # Avanza al próximo horario exacto
-                            next_minute = 30 if minutos < 30 else 60
-                            slot_start = slot_start.replace(minute=next_minute % 60, second=0, microsecond=0)
-                            if next_minute == 60:
-                                slot_start += datetime.timedelta(hours=1)
-                            continue
+                        # Avanza al próximo horario exacto (en punto o y media)
+                        if slot_start.minute == 0:
+                            slot_start = slot_start.replace(minute=30)
+                        else:
+                            slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
+                    else:
+                        slot_start += delta
+                    
                     # No ofrecer turnos que empiecen antes de 20 minutos desde ahora
                     if slot_start < now + datetime.timedelta(minutes=20):
                         slot_start += delta
