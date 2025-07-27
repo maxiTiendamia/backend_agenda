@@ -620,24 +620,31 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 singleEvents=True
             ).execute()
             events = events_result.get('items', [])
-            if events:
+            # Si el slot ya no está disponible, mostrar turnos actualizados y volver al paso anterior
+            if events or not hay_disponibilidad(db, servicio, slot):
                 slots_actuales = get_available_slots(
                     calendar_id=empleado.calendar_id,
                     credentials_json=GOOGLE_CREDENTIALS_JSON,
                     working_hours_json=empleado.working_hours,
                     service_duration=servicio.duracion,
                     intervalo_entre_turnos=20,
-                    max_turnos=10
+                    max_turnos=10,
+                    cantidad=servicio.cantidad or 1,
+                    solo_horas_exactas=servicio.solo_horas_exactas
                 )
+                ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                slots_futuros = [s for s in slots_actuales if s > ahora]
+                slots_disponibles = [s for s in slots_futuros if hay_disponibilidad(db, servicio, s)]
                 msg = "❌ El turno seleccionado ya no está disponible. Por favor, elige otro:\n"
-                for i, s in enumerate(slots_actuales, 1):
+                for i, s in enumerate(slots_disponibles, 1):
                     msg += f"🔹{i}. {s.strftime('%d/%m %H:%M')}\n"
                 msg += "\nResponde con el número del turno."
                 state["step"] = "waiting_turno_final"
-                state["slots"] = [s.isoformat() for s in slots_actuales]
+                state["slots"] = [s.isoformat() for s in slots_disponibles]
                 set_user_state(telefono, state)
                 return JSONResponse(content={"mensaje": msg})
 
+            # Si está disponible, crear evento y continuar flujo normalmente
             # Crear evento en Google Calendar
             event_id = create_event(
                 calendar_id=empleado.calendar_id,
