@@ -470,9 +470,23 @@ async function resetSession(sessionId, onQr, onMessage) {
       await setNeedsQr(sessionId, true);
       await setDisconnectReason(sessionId, 'reset');
 
-      // 5. Reiniciar la sesión desde cero
-      await createSession(sessionId, onQr, onMessage);
-      console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero`);
+      // 5. Reiniciar la sesión desde cero y forzar generación de QR
+      await createSession(sessionId, async (base64Qr, sessionId) => {
+        // Forzar guardado del QR en la base de datos aunque la sesión esté desconectada
+        try {
+          const { guardarQR } = require('./qrUtils');
+          if (pool && typeof pool.query === 'function') {
+            await guardarQR(pool, sessionId, base64Qr);
+            console.log(`[QR][DB][RESET] Guardado QR para sesión ${sessionId} en la base de datos (reset)`);
+          } else {
+            console.warn(`[QR][DB][RESET] pool no está disponible, no se guarda QR para sesión ${sessionId}`);
+          }
+        } catch (err) {
+          console.error(`[QR][DB][RESET] Error guardando QR en la base de datos para sesión ${sessionId}:`, err);
+        }
+        if (onQr) await onQr(base64Qr, sessionId);
+      }, onMessage);
+      console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero y QR forzado`);
     } finally {
       sessionLocks[sessionId] = false;
     }
