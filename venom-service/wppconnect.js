@@ -7,6 +7,7 @@ const { getSessionFolder, cleanSessionFolder } = require('./sessionUtils');
 const sessionLocks = {}; // Lock por sesión
 const sessionQueues = {}; // Cola de promesas por sesión
 let sessionWaitingQr = null; // sessionId que está esperando QR
+const clients = {}; // Clientes activos en memoria
 
 // Utilidades para guardar y restaurar archivos de sesión en Redis
 async function saveSessionFileToRedis(sessionId, fileName) {
@@ -250,6 +251,7 @@ async function createSession(sessionId, onQr, onMessage) {
       });
 
       const client = await clientPromise;
+      clients[sessionId] = client; // Guarda el cliente en memoria
       client.onMessage(async (message) => {
         if (onMessage) await onMessage(message, client);
       });
@@ -364,7 +366,23 @@ async function resetSession(sessionId, onQr, onMessage) {
         console.log(`[RESET] Clave Redis eliminada: ${sk}`);
       }
 
-      // 3. Reiniciar la sesión desde cero
+      // 3. Cerrar cliente si existe
+      if (clients[sessionId]) {
+        try {
+          await clients[sessionId].close();
+          console.log(`[RESET] Cliente de sesión ${sessionId} cerrado`);
+        } catch (e) {
+          console.log(`[RESET] Error cerrando cliente de sesión ${sessionId}:`, e);
+        }
+        delete clients[sessionId];
+        // Actualiza estado en Redis
+        await setSessionState(sessionId, 'disconnected');
+        await setHasSession(sessionId, false);
+        await setNeedsQr(sessionId, true);
+        await setDisconnectReason(sessionId, 'reset');
+      }
+
+      // 4. Reiniciar la sesión desde cero
       await createSession(sessionId, onQr, onMessage);
       console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero`);
     } finally {
