@@ -195,9 +195,7 @@ async function createSession(sessionId, onQr, onMessage) {
           sessionWaitingQr = sessionId;
           // Guarda el QR en la base en cada intento
           if (onQr) await onQr(base64Qr, sessionId);
-          await redisClient.del(`wppconnect:${sessionId}:qrCode`);
-          await redisClient.set(`wppconnect:${sessionId}:qrCode`, base64Qr);
-          console.log(`[QR][REDIS] Guardado QR para sesión ${sessionId} (length: ${base64Qr.length}, intento: ${attempts})`);
+          // Guardado solo en la base de datos
           // Guardar QR en la base de datos usando qrUtils.js (evita dependencia circular)
           try {
             const { guardarQR } = require('./qrUtils');
