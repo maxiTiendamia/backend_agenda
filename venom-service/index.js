@@ -92,24 +92,26 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
 async function restaurarSesiones() {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
   const sesionesLocales = fs.readdirSync(sessionDir).filter(f => fs.statSync(path.join(sessionDir, f)).isDirectory());
+  // Obtén los IDs válidos desde la base de datos
+  const result = await pool.query('SELECT id FROM tenants');
+  const idsValidos = result.rows.map(row => String(row.id));
   for (const sessionId of sesionesLocales) {
-    try {
-      // Verifica si existe en la base de datos
-      const result = await pool.query('SELECT id FROM tenants WHERE id = $1', [sessionId]);
-      if (result.rows.length === 0) {
-        // No existe: elimina la carpeta y no intentes restaurar
-        const dirPath = path.join(sessionDir, String(sessionId));
-        if (fs.existsSync(dirPath)) {
-          fs.rmSync(dirPath, { recursive: true, force: true });
-          console.log(`[CLEAN] Carpeta de sesión eliminada para cliente inexistente: ${sessionId}`);
-        }
-        continue;
+    if (!idsValidos.includes(sessionId)) {
+      // No existe: elimina la carpeta y las claves Redis
+      const dirPath = path.join(sessionDir, String(sessionId));
+      if (fs.existsSync(dirPath)) {
+        fs.rmSync(dirPath, { recursive: true, force: true });
+        console.log(`[CLEAN] Carpeta de sesión eliminada para cliente inexistente: ${sessionId}`);
       }
-      await crearSesionWPP(sessionId, false);
-      console.log(`Restaurando sesión local ${sessionId}`);
-    } catch (err) {
-      console.error(`Error restaurando sesión local ${sessionId}:`, err.message);
+      const keys = await redisClient.keys(`wppconnect:${sessionId}:*`);
+      for (const key of keys) {
+        await redisClient.del(key);
+      }
+      continue;
     }
+    // Si existe, restaurar la sesión
+    await crearSesionWPP(sessionId, false);
+    console.log(`Restaurando sesión local ${sessionId}`);
   }
 }
 
@@ -298,16 +300,6 @@ async function inicializarAplicacion() {
 const server = app.listen(PORT).on('listening', async () => {
   console.log(`✅ WPPConnect-service corriendo en puerto ${PORT}`);
   await inicializarAplicacion();
-  // Restaurar sesiones logueadas desde Redis
-  const sesionesLogueadas = await getLoggedSessions();
-  for (const sessionId of sesionesLogueadas) {
-    try {
-      await crearSesionWPP(sessionId, false);
-      console.log(`[INIT] Sesión logueada restaurada: ${sessionId}`);
-    } catch (err) {
-      console.error(`[INIT] Error restaurando sesión logueada ${sessionId}:`, err);
-    }
-  }
 }).on('error', (error) => {
   if (error.code === 'EADDRINUSE') {
     console.error(`Puerto ${PORT} ya está en uso. Intentando puerto alternativo...`);
