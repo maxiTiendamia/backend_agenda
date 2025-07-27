@@ -42,13 +42,7 @@ const sessionErrors = {};
 const restaurandoSesiones = {};
 
 // Guardar QR en base de datos
-async function guardarQR(sessionId, base64Qr) {
-  const qrCodeData = base64Qr.replace(/^data:image\/\w+;base64,/, "");
-  await pool.query(
-    'UPDATE tenants SET qr_code = $1 WHERE id = $2',
-    [qrCodeData, sessionId]
-  );
-}
+const { guardarQR } = require('./qrUtils');
 
 // Limpiar archivo SingletonLock si existe
 async function limpiarSingletonLock(sessionId) {
