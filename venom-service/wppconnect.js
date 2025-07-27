@@ -33,15 +33,31 @@ async function restoreSessionBackupFromDB(sessionId) {
   );
   if (!result.rows.length || !result.rows[0].session_backup) {
     console.log(`[SESSION][DB] No hay backup en BD para sesión ${sessionId}`);
-    return;
+    return false; // Indica que no se restauró
   }
   const buffer = result.rows[0].session_backup;
   const archivePath = path.join(folder, `profile_${sessionId}.tar.gz`);
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(archivePath, buffer);
-  await tar.x({ file: archivePath, cwd: folder });
-  fs.unlinkSync(archivePath);
-  console.log(`[SESSION][DB] Archivos restaurados:`, fs.readdirSync(folder));
+  try {
+    await tar.x({ file: archivePath, cwd: folder });
+    fs.unlinkSync(archivePath);
+    console.log(`[SESSION][DB] Archivos restaurados:`, fs.readdirSync(folder));
+    return true; // Restauración exitosa
+  } catch (err) {
+    console.error(`[SESSION][DB] Error restaurando backup de sesión ${sessionId}:`, err);
+    // Limpiar todo lo relacionado a la sesión
+    try {
+      if (fs.existsSync(folder)) fs.rmSync(folder, { recursive: true, force: true });
+      await pool.query('UPDATE tenants SET session_backup = NULL WHERE id = $1', [sessionId]);
+      const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
+      for (const sk of sessionKeys) await redisClient.del(sk);
+      console.log(`[SESSION][CLEAN] Todo eliminado para sesión ${sessionId} por error de restauración`);
+    } catch (cleanErr) {
+      console.error(`[SESSION][CLEAN] Error limpiando sesión ${sessionId}:`, cleanErr);
+    }
+    return false; // Indica que no se restauró
+  }
 }
 
 // Elimina el backup de la base de datos y la carpeta local
@@ -241,7 +257,11 @@ async function createSession(sessionId, onQr, onMessage) {
       console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
       await cleanSessionFolder(sessionId);
       // Restaurar backup de perfil desde la base de datos
-      await restoreSessionBackupFromDB(sessionId);
+      const restored = await restoreSessionBackupFromDB(sessionId);
+      if (!restored) {
+        console.log(`[SESSION][RESET] Restauración fallida, creando sesión ${sessionId} desde cero con QR nuevo`);
+        // Aquí puedes continuar con la creación normal, el QR se generará automáticamente
+      }
 
       const clientPromise = wppconnect.create({
         session: sessionId,
