@@ -29,14 +29,14 @@ const unzipper = require('unzipper');
 async function restoreSessionBackupFromDB(sessionId) {
   const folder = getSessionFolder(sessionId);
   const result = await pool.query(
-    'SELECT backup_data FROM session_backup WHERE session_id = $1',
+    'SELECT session_backup FROM tenants WHERE id = $1',
     [sessionId]
   );
-  if (!result.rows.length) {
+  if (!result.rows.length || !result.rows[0].session_backup) {
     console.log(`[SESSION][DB] No hay backup en BD para sesión ${sessionId}`);
     return;
   }
-  const buffer = result.rows[0].backup_data;
+  const buffer = result.rows[0].session_backup;
   await unzipper.Open.buffer(buffer)
     .then(d => d.extract({ path: folder, concurrency: 5 }));
   console.log(`[SESSION][DB] Archivos restaurados:`, fs.readdirSync(folder));
