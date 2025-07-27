@@ -323,4 +323,14 @@ app.get('/debug/desconexiones/:clienteId', async (req, res) => {
   res.json(data ? JSON.parse(data) : { mensaje: 'Sin desconexiones registradas' });
 });
 
+app.get('/iniciar/:clienteId', async (req, res) => {
+  const clienteId = req.params.clienteId;
+  try {
+    await crearSesionWPP(clienteId, true); // true para forzar QR si no existe
+    res.json({ ok: true, mensaje: `Sesión creada/iniciada para cliente ${clienteId}` });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 module.exports = { pool };
