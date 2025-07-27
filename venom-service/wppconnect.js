@@ -5,6 +5,7 @@ const path = require('path');
 const { getSessionFolder, cleanSessionFolder } = require('./sessionUtils');
 
 const sessionLocks = {}; // Lock por sesión
+const sessionQueues = {}; // Cola de promesas por sesión
 
 // Utilidades para guardar y restaurar archivos de sesión en Redis
 async function saveSessionFileToRedis(sessionId, fileName) {
@@ -141,110 +142,108 @@ async function setDisconnectReason(sessionId, reason) {
 }
 
 async function createSession(sessionId, onQr, onMessage) {
-  // --- INICIO: LOCK POR SESIÓN ---
-  if (sessionLocks[sessionId]) {
-    console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado.`);
-    return;
-  }
-  sessionLocks[sessionId] = true;
-  // --- FIN: LOCK POR SESIÓN ---
+  return enqueueSessionTask(sessionId, async () => {
+    if (sessionLocks[sessionId]) {
+      console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado.`);
+      return;
+    }
+    sessionLocks[sessionId] = true;
+    try {
+      console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
+      await cleanSessionFolder(sessionId);
+      await restoreAllSessionFilesFromRedis(sessionId);
 
-  console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
-  // Limpia la carpeta de la sesión antes de restaurar archivos
-  await cleanSessionFolder(sessionId);
+      const clientPromise = wppconnect.create({
+        session: sessionId,
+        folderNameToken: getSessionFolder(sessionId),
+        catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
+          if (onQr) await onQr(base64Qr, sessionId);
+          await saveAllSessionFilesToRedis(sessionId);
+        },
+        statusFind: async (statusSession, session) => {
+          console.log(`Estado de la sesión ${session}: ${statusSession}`);
+          const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
+          if (estadosConectado.includes(statusSession)) {
+            await setSessionState(session, 'loggedIn');
+            await setHasSession(session, true); // Guardar flag de sesión activa
+            await setNeedsQr(session, false); // No necesita QR
+            // Guardar archivos de sesión en Redis al estar logueado
+            await saveAllSessionFilesToRedis(session);
+          } else if (
+            statusSession === 'desconnectedMobile' ||
+            statusSession === 'notLogged' ||
+            statusSession === 'disconnected' ||
+            statusSession === 'browserClose' ||
+            statusSession === 'qrReadError' ||
+            statusSession === 'autocloseCalled'
+          ) {
+            await setSessionState(session, 'disconnected');
+            await setNeedsQr(session, true); // Marcar que necesita QR
+            // NUEVO: guardar motivo y fecha de desconexión
+            await setDisconnectReason(session, statusSession);
+            // Guardar archivos de sesión en Redis al desconectarse
+            await saveAllSessionFilesToRedis(session);
+          }
+        },
+        storage: {
+          type: 'redis',
+          redisClient,
+          prefix: `wppconnect:${sessionId}:`
+        },
+        headless: 'new', // Usar el nuevo modo headless
+        useChrome: true,
+        autoClose: false,
+        browserSessionToken: false, // Fuerza perfil temporal, sin disco local
+        browserArgs: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-features=TranslateUI',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
+          '--single-process',
+          '--no-default-browser-check',
+          '--disable-default-apps',
+          '--disable-background-networking',
+          '--disable-sync',
+          '--disable-translate',
+          '--disable-plugins',
+          '--disable-extensions',
+          '--disable-popup-blocking'
+        ]
+      });
 
-  // Restaurar archivos de sesión desde Redis antes de crear la sesión
-  await restoreAllSessionFilesFromRedis(sessionId);
-  try {
-    const clientPromise = wppconnect.create({
-      session: sessionId,
-      folderNameToken: getSessionFolder(sessionId), // <-- CORRECTO
-      catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
-        if (onQr) await onQr(base64Qr, sessionId);
-        // Guardar archivos de sesión en Redis cada vez que se reciba un QR (posible cambio de estado)
-        await saveAllSessionFilesToRedis(sessionId);
-      },
-      statusFind: async (statusSession, session) => {
-        console.log(`Estado de la sesión ${session}: ${statusSession}`);
-        const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
-        if (estadosConectado.includes(statusSession)) {
-          await setSessionState(session, 'loggedIn');
-          await setHasSession(session, true); // Guardar flag de sesión activa
-          await setNeedsQr(session, false); // No necesita QR
-          // Guardar archivos de sesión en Redis al estar logueado
-          await saveAllSessionFilesToRedis(session);
-        } else if (
-          statusSession === 'desconnectedMobile' ||
-          statusSession === 'notLogged' ||
-          statusSession === 'disconnected' ||
-          statusSession === 'browserClose' ||
-          statusSession === 'qrReadError' ||
-          statusSession === 'autocloseCalled'
-        ) {
-          await setSessionState(session, 'disconnected');
-          await setNeedsQr(session, true); // Marcar que necesita QR
-          // NUEVO: guardar motivo y fecha de desconexión
-          await setDisconnectReason(session, statusSession);
-          // Guardar archivos de sesión en Redis al desconectarse
-          await saveAllSessionFilesToRedis(session);
-        }
-      },
-      storage: {
-        type: 'redis',
-        redisClient,
-        prefix: `wppconnect:${sessionId}:`
-      },
-      headless: 'new', // Usar el nuevo modo headless
-      useChrome: true,
-      autoClose: false,
-      browserSessionToken: false, // Fuerza perfil temporal, sin disco local
-      browserArgs: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--disable-features=TranslateUI',
-        '--disable-web-security',
-        '--disable-features=VizDisplayCompositor',
-        '--single-process',
-        '--no-default-browser-check',
-        '--disable-default-apps',
-        '--disable-background-networking',
-        '--disable-sync',
-        '--disable-translate',
-        '--disable-plugins',
-        '--disable-extensions',
-        '--disable-popup-blocking'
-      ]
-    });
-    // Manejar eventos después de la creación del cliente
-    return clientPromise.then(client => {
+      const client = await clientPromise;
       client.onMessage(async (message) => {
         if (onMessage) await onMessage(message, client);
       });
-      // Lógica de reconexión automática
       client.onStateChange(async (state) => {
         console.log(`[STATE CHANGE] Sesión ${sessionId}: ${state}`);
         if (state === 'DISCONNECTED' || state === 'TIMEOUT' || state === 'CONFLICT' || state === 'UNPAIRED') {
           await saveAllSessionFilesToRedis(sessionId);
-          await reconnectSession(sessionId, onQr, onMessage); // <-- PASA LOS CALLBACKS
+          await reconnectSession(sessionId, onQr, onMessage);
         }
       });
       return client;
-    }).catch(async (err) => {
-      console.error(`[ERROR] Error restaurando sesión ${sessionId}:`, err);
+    } catch (err) {
+      console.error(`[ERROR] Error creando/restaurando sesión ${sessionId}:`, err);
       await setNeedsQr(sessionId, true);
-      // NUEVO: guardar motivo y fecha de desconexión por error
       await setDisconnectReason(sessionId, err.message || 'unknown error');
       await saveAllSessionFilesToRedis(sessionId);
       throw err;
-    });
+    } finally {
+      sessionLocks[sessionId] = false;
+    }
+  });
+}
+
 // Reintenta crear la sesión si se desconecta
 async function reconnectSession(sessionId, onQr, onMessage) {
   console.log(`[RECONNECT] Reintentando sesión ${sessionId}`);
@@ -252,16 +251,6 @@ async function reconnectSession(sessionId, onQr, onMessage) {
     await createSession(sessionId, onQr, onMessage);
   } catch (err) {
     console.error(`[RECONNECT] Falló la reconexión de la sesión ${sessionId}:`, err);
-  }
-}
-  } catch (err) {
-    console.error(`[ERROR] Error creando sesión ${sessionId}:`, err);
-    await setNeedsQr(sessionId, true);
-    // NUEVO: guardar motivo y fecha de desconexión por error
-    await setDisconnectReason(sessionId, err.message || 'unknown error');
-    throw err;
-  } finally {
-    sessionLocks[sessionId] = false; // Libera el lock al terminar
   }
 }
 
@@ -324,32 +313,43 @@ async function cleanInvalidSessions() {
 
 // Elimina todo lo relacionado a una sesión y la reinicia
 async function resetSession(sessionId, onQr, onMessage) {
-  if (sessionLocks[sessionId]) {
-    console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado de reset.`);
-    return;
-  }
-  sessionLocks[sessionId] = true;
-  try {
-    // 1. Eliminar carpeta de tokens
-    const folder = getSessionFolder(sessionId);
-    if (fs.existsSync(folder)) {
-      fs.rmSync(folder, { recursive: true, force: true });
-      console.log(`[RESET] Carpeta de sesión ${sessionId} eliminada`);
+  return enqueueSessionTask(sessionId, async () => {
+    if (sessionLocks[sessionId]) {
+      console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado de reset.`);
+      return;
     }
+    sessionLocks[sessionId] = true;
+    try {
+      // 1. Eliminar carpeta de tokens
+      const folder = getSessionFolder(sessionId);
+      if (fs.existsSync(folder)) {
+        fs.rmSync(folder, { recursive: true, force: true });
+        console.log(`[RESET] Carpeta de sesión ${sessionId} eliminada`);
+      }
 
-    // 2. Eliminar todas las claves de Redis para esa sesión
-    const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
-    for (const sk of sessionKeys) {
-      await redisClient.del(sk);
-      console.log(`[RESET] Clave Redis eliminada: ${sk}`);
+      // 2. Eliminar todas las claves de Redis para esa sesión
+      const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
+      for (const sk of sessionKeys) {
+        await redisClient.del(sk);
+        console.log(`[RESET] Clave Redis eliminada: ${sk}`);
+      }
+
+      // 3. Reiniciar la sesión desde cero
+      await createSession(sessionId, onQr, onMessage);
+      console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero`);
+    } finally {
+      sessionLocks[sessionId] = false;
     }
+  });
+}
 
-    // 3. Reiniciar la sesión desde cero
-    await createSession(sessionId, onQr, onMessage);
-    console.log(`[RESET] Sesión ${sessionId} reiniciada desde cero`);
-  } finally {
-    sessionLocks[sessionId] = false;
+function enqueueSessionTask(sessionId, task) {
+  if (!sessionQueues[sessionId]) {
+    sessionQueues[sessionId] = Promise.resolve();
   }
+  // Encadena la tarea en la cola
+  sessionQueues[sessionId] = sessionQueues[sessionId].then(() => task()).catch(() => {});
+  return sessionQueues[sessionId];
 }
 
 module.exports = { createSession, setSessionState, getSessionState, getLoggedSessions, reconnectLoggedSessions, startAllSessions, setHasSession, getSessionsWithInfo, reconnectSessionsWithInfo, setNeedsQr, getNeedsQr, getSessionStatus, cleanInvalidSessions, resetSession };
