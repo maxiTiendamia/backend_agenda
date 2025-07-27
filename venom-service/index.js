@@ -73,7 +73,7 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
       sessionId,
       async (base64Qr) => {
         if (permitirGuardarQR) {
-          await guardarQR(sessionId, base64Qr);
+          await guardarQR(pool, sessionId, base64Qr);
         }
       },
       async (message, client) => {

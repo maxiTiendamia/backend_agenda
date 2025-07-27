@@ -1,3 +1,4 @@
+const { pool } = require('./index');
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
 const fs = require('fs');
@@ -199,7 +200,7 @@ async function createSession(sessionId, onQr, onMessage) {
           // Guardar QR en la base de datos usando qrUtils.js (evita dependencia circular)
           try {
             const { guardarQR } = require('./qrUtils');
-            await guardarQR(sessionId, base64Qr);
+            await guardarQR(pool, sessionId, base64Qr);
             console.log(`[QR][DB] Guardado QR para sesión ${sessionId} en la base de datos`);
           } catch (err) {
             console.error(`[QR][DB] Error guardando QR en la base de datos para sesión ${sessionId}:`, err);
@@ -334,7 +335,7 @@ if (require.main === module) {
   // Puedes personalizar estos callbacks según tu lógica
   const onQr = async (base64Qr, sessionId) => {
     console.log(`QR para sesión ${sessionId}:`);
-    await guardarQR(sessionId, base64Qr); 
+    await guardarQR(pool, sessionId, base64Qr); 
   };
   const onMessage = (message, client) => {
     console.log(`Mensaje recibido en sesión ${client.session}:`, message);
