@@ -6,6 +6,7 @@ const { getSessionFolder, cleanSessionFolder } = require('./sessionUtils');
 
 const sessionLocks = {}; // Lock por sesión
 const sessionQueues = {}; // Cola de promesas por sesión
+let sessionWaitingQr = null; // sessionId que está esperando QR
 
 // Utilidades para guardar y restaurar archivos de sesión en Redis
 async function saveSessionFileToRedis(sessionId, fileName) {
@@ -143,6 +144,11 @@ async function setDisconnectReason(sessionId, reason) {
 
 async function createSession(sessionId, onQr, onMessage) {
   return enqueueSessionTask(sessionId, async () => {
+    // Si ya hay una sesión esperando QR y no es esta, bloquea el proceso
+    if (sessionWaitingQr && sessionWaitingQr !== sessionId) {
+      console.log(`[QR BLOCK] Ya hay una sesión (${sessionWaitingQr}) esperando QR. No se puede iniciar la sesión ${sessionId} hasta que se escanee o cancele el QR anterior.`);
+      return;
+    }
     if (sessionLocks[sessionId]) {
       console.log(`[LOCK] Sesión ${sessionId} está bloqueada, omitiendo duplicado.`);
       return;
@@ -157,13 +163,16 @@ async function createSession(sessionId, onQr, onMessage) {
         session: sessionId,
         folderNameToken: getSessionFolder(sessionId),
         catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
+          // Marca que esta sesión está esperando QR
+          sessionWaitingQr = sessionId;
           if (onQr) await onQr(base64Qr, sessionId);
           await saveAllSessionFilesToRedis(sessionId);
         },
         statusFind: async (statusSession, session) => {
-          console.log(`Estado de la sesión ${session}: ${statusSession}`);
+          // Si la sesión se loguea, libera el bloqueo
           const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
           if (estadosConectado.includes(statusSession)) {
+            sessionWaitingQr = null;
             await setSessionState(session, 'loggedIn');
             await setHasSession(session, true); // Guardar flag de sesión activa
             await setNeedsQr(session, false); // No necesita QR
@@ -177,6 +186,7 @@ async function createSession(sessionId, onQr, onMessage) {
             statusSession === 'qrReadError' ||
             statusSession === 'autocloseCalled'
           ) {
+            sessionWaitingQr = null;
             await setSessionState(session, 'disconnected');
             await setNeedsQr(session, true); // Marcar que necesita QR
             // NUEVO: guardar motivo y fecha de desconexión
@@ -233,6 +243,7 @@ async function createSession(sessionId, onQr, onMessage) {
       });
       return client;
     } catch (err) {
+      sessionWaitingQr = null; // Libera el bloqueo si hay error
       console.error(`[ERROR] Error creando/restaurando sesión ${sessionId}:`, err);
       await setNeedsQr(sessionId, true);
       await setDisconnectReason(sessionId, err.message || 'unknown error');
