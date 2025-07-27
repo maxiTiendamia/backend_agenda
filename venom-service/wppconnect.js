@@ -139,6 +139,7 @@ async function setDisconnectReason(sessionId, reason) {
 }
 
 async function createSession(sessionId, onQr, onMessage) {
+  console.log(`[DEBUG] Creando sesión ${sessionId} en carpeta: ${getSessionFolder(sessionId)}`);
   // Limpia la carpeta de la sesión antes de restaurar archivos
   await cleanSessionFolder(sessionId);
 
