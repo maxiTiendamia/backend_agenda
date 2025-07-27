@@ -3,76 +3,6 @@ const util = require('util');
 const pipeline = util.promisify(require('stream').pipeline);
 const tar = require('tar'); // Reemplaza unzipper por tar
 
-// Comprime la carpeta de perfil y devuelve el buffer
-async function compressSessionFolder(sessionId) {
-  // Carpeta interna real de la sesión
-  const folderPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), String(sessionId));
-  // Si no existe, usa la carpeta principal
-  const fallbackPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId));
-  const exists = fs.existsSync(folderPath) ? folderPath : fallbackPath;
-  const archivePath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), `profile_${sessionId}.tar.gz`);
-  await tar.c({ gzip: true, file: archivePath, cwd: exists }, ['.']);
-  const buffer = fs.readFileSync(archivePath);
-  fs.unlinkSync(archivePath);
-  return buffer;
-}
-
-// Guarda el backup comprimido en la base de datos
-async function saveSessionBackupToDB(sessionId) {
-  try {
-    const buffer = await compressSessionFolder(sessionId);
-    await pool.query('UPDATE tenants SET session_backup = $1 WHERE id = $2', [buffer, sessionId]);
-    console.log(`[SESSION][DB] Backup de sesión ${sessionId} guardado en la base de datos`);
-  } catch (err) {
-    console.error(`[SESSION][DB] Error guardando backup de sesión ${sessionId}:`, err);
-  }
-}
-
-// Restaura el backup desde la base de datos y descomprime en la carpeta correcta
-async function restoreSessionBackupFromDB(sessionId) {
-  const folder = getSessionFolder(sessionId);
-  const result = await pool.query(
-    'SELECT session_backup FROM tenants WHERE id = $1',
-    [sessionId]
-  );
-  if (!result.rows.length || !result.rows[0].session_backup) {
-    console.log(`[SESSION][DB] No hay backup en BD para sesión ${sessionId}`);
-    return false; // Indica que no se restauró
-  }
-  const buffer = result.rows[0].session_backup;
-  const archivePath = path.join(folder, `profile_${sessionId}.tar.gz`);
-  fs.mkdirSync(folder, { recursive: true });
-  fs.writeFileSync(archivePath, buffer);
-  try {
-    await tar.x({ file: archivePath, cwd: folder });
-    fs.unlinkSync(archivePath);
-    console.log(`[SESSION][DB] Archivos restaurados:`, fs.readdirSync(folder));
-    return true; // Restauración exitosa
-  } catch (err) {
-    console.error(`[SESSION][DB] Error restaurando backup de sesión ${sessionId}:`, err);
-    // Limpiar todo lo relacionado a la sesión
-    try {
-      if (fs.existsSync(folder)) fs.rmSync(folder, { recursive: true, force: true });
-      await pool.query('UPDATE tenants SET session_backup = NULL WHERE id = $1', [sessionId]);
-      const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
-      for (const sk of sessionKeys) await redisClient.del(sk);
-      console.log(`[SESSION][CLEAN] Todo eliminado para sesión ${sessionId} por error de restauración`);
-    } catch (cleanErr) {
-      console.error(`[SESSION][CLEAN] Error limpiando sesión ${sessionId}:`, cleanErr);
-    }
-    return false; // Indica que no se restauró
-  }
-}
-
-// Elimina el backup de la base de datos y la carpeta local
-async function deleteSessionBackup(sessionId) {
-  // Elimina la carpeta local
-  cleanSessionFolder(sessionId);
-  // Elimina el backup en la base de datos
-  await pool.query('UPDATE tenants SET session_backup = NULL WHERE id = $1', [sessionId]);
-  console.log(`[SESSION][DB] Backup de sesión ${sessionId} eliminado de la base de datos`);
-}
-
 const { pool } = require('./db');
 const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redis');
@@ -262,14 +192,9 @@ async function createSession(sessionId, onQr, onMessage) {
     try {
       console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
       await cleanSessionFolder(sessionId);
-      // Restaurar backup de perfil desde la base de datos
-      const restored = await restoreSessionBackupFromDB(sessionId);
-      if (!restored) {
-        console.log(`[SESSION][RESET] Restauración fallida, creando sesión ${sessionId} desde cero con QR nuevo`);
-        // Aquí puedes continuar con la creación normal, el QR se generará automáticamente
-      }
 
-      const clientPromise = wppconnect.create({
+      // WPPConnect usará la carpeta local automáticamente
+      const client = await wppconnect.create({
         session: sessionId,
         folderNameToken: path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId)),
         catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
@@ -302,7 +227,7 @@ async function createSession(sessionId, onQr, onMessage) {
             // Esperar 6 segundos para que WPPConnect genere los archivos de sesión
             await new Promise(res => setTimeout(res, 6000));
             // Guardar backup de perfil en la base de datos
-            await saveSessionBackupToDB(session);
+            // await saveSessionBackupToDB(session);
           } else if (
             statusSession === 'desconnectedMobile' ||
             statusSession === 'notLogged' ||
@@ -317,7 +242,7 @@ async function createSession(sessionId, onQr, onMessage) {
             await setNeedsQr(session, true); // Marcar que necesita QR
             await setDisconnectReason(session, statusSession);
             // Eliminar backup y carpeta si se desconecta
-            await deleteSessionBackup(session);
+            // await deleteSessionBackup(session);
           }
         },
         storage: {
@@ -355,7 +280,6 @@ async function createSession(sessionId, onQr, onMessage) {
         ]
       });
 
-      const client = await clientPromise;
       clients[sessionId] = client; // Guarda el cliente en memoria
       client.onMessage(async (message) => {
         console.log(`[BOT][DEBUG] Mensaje recibido en sesión ${sessionId}:`, message);
@@ -400,25 +324,11 @@ async function reconnectLoggedSessions(onQr, onMessage) {
   }
 }
 
-// Restaurar sesiones desde Redis (para todas las que tienen info previa)
-async function reconnectSessionsWithInfo(onQr, onMessage) {
-  const sessions = await getSessionsWithInfo();
-  for (const sessionId of sessions) {
-    // Solo restaurar si existe backup en la base
-    const result = await pool.query('SELECT session_backup FROM tenants WHERE id = $1', [sessionId]);
-    if (result.rows.length && result.rows[0].session_backup) {
-      await createSession(sessionId, onQr, onMessage);
-    } else {
-      console.log(`[SESSION][DB] No hay backup de sesión para cliente ${sessionId}, no se restaura.`);
-    }
-  }
-}
-
 // Inicialización automática al arrancar el servicio
-async function startAllSessions(onQr, onMessage) {
-  // Restaurar todas las sesiones que tienen info previa
-  await reconnectSessionsWithInfo(onQr, onMessage);
-}
+// async function startAllSessions(onQr, onMessage) {
+//   // Restaurar todas las sesiones que tienen info previa
+//   await reconnectSessionsWithInfo(onQr, onMessage);
+// }
 
 // Si ejecutas este archivo directamente, inicia las sesiones automáticamente
 
@@ -524,10 +434,8 @@ module.exports = {
   getSessionState,
   getLoggedSessions,
   reconnectLoggedSessions,
-  startAllSessions,
   setHasSession,
   getSessionsWithInfo,
-  reconnectSessionsWithInfo,
   setNeedsQr,
   getNeedsQr,
   getSessionStatus,

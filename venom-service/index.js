@@ -57,57 +57,47 @@ async function limpiarSingletonLock(sessionId) {
 
 // Crear sesión y manejar QR/mensajes
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
-  // Lock para evitar restauraciones simultáneas
-  if (restaurandoSesiones[sessionId]) {
-    console.log(`[LOCK] Ya se está restaurando la sesión ${sessionId}, pero se fuerza la creación/restauración para obtener QR.`);
-    // No retornes, sigue el flujo para que se genere el QR aunque esté restaurando
-  }
-  restaurandoSesiones[sessionId] = true;
-  try {
-    await limpiarSingletonLock(sessionId);
-    if (sessions[sessionId]) return sessions[sessionId];
-    const client = await createSession(
-      sessionId,
-      async (base64Qr) => {
-        if (permitirGuardarQR) {
-          await guardarQR(pool, sessionId, base64Qr);
-        }
-      },
-      async (message, client) => {
-        console.log(`[BOT] Mensaje recibido:`, message);
-        try {
-          const telefono = message.from.replace("@c.us", "");
-          const mensaje = message.body;
-          const cliente_id = sessionId;
-          const backendResponse = await axios.post(
-            "https://backend-agenda-2.onrender.com/api/webhook",
-            { telefono, mensaje, cliente_id }
-          );
-          const respuesta = backendResponse.data && backendResponse.data.mensaje;
-          if (respuesta) {
-            await client.sendText(`${telefono}@c.us`, respuesta);
-          }
-        } catch (err) {
-          console.error("Error reenviando mensaje a backend o enviando respuesta:", err);
-        }
+  // Si ya existe la carpeta de sesión, WPPConnect la usará y no pedirá QR
+  const client = await createSession(
+    sessionId,
+    async (base64Qr) => {
+      if (permitirGuardarQR) {
+        await guardarQR(pool, sessionId, base64Qr);
       }
-    );
-    sessions[sessionId] = client;
-    return client;
-  } finally {
-    delete restaurandoSesiones[sessionId];
-  }
+    },
+    async (message, client) => {
+      console.log(`[BOT] Mensaje recibido:`, message);
+      try {
+        const telefono = message.from.replace("@c.us", "");
+        const mensaje = message.body;
+        const cliente_id = sessionId;
+        const backendResponse = await axios.post(
+          "https://backend-agenda-2.onrender.com/api/webhook",
+          { telefono, mensaje, cliente_id }
+        );
+        const respuesta = backendResponse.data && backendResponse.data.mensaje;
+        if (respuesta) {
+          await client.sendText(`${telefono}@c.us`, respuesta);
+        }
+      } catch (err) {
+        console.error("Error reenviando mensaje a backend o enviando respuesta:", err);
+      }
+    }
+  );
+  sessions[sessionId] = client;
+  return client;
 }
 
 // Restaurar sesiones desde Redis (para todas las que tienen info previa)
 async function restaurarSesiones() {
-  const sessionsWithInfo = await getSessionsWithInfo();
-  for (const sessionId of sessionsWithInfo) {
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
+  const sesionesLocales = fs.readdirSync(sessionDir).filter(f => fs.statSync(path.join(sessionDir, f)).isDirectory());
+  for (const sessionId of sesionesLocales) {
     try {
       await crearSesionWPP(sessionId, false);
-      console.log(`Restaurando sesión para cliente con info previa ${sessionId} (solo Redis)`);
+      console.log(`Restaurando sesión local ${sessionId}`);
     } catch (err) {
-      console.error(`Error restaurando sesión ${sessionId}:`, err.message);
+      console.error(`Error restaurando sesión local ${sessionId}:`, err.message);
     }
   }
 }
