@@ -62,9 +62,11 @@ async function restoreSessionBackupFromDB(sessionId) {
 
 // Elimina el backup de la base de datos y la carpeta local
 async function deleteSessionBackup(sessionId) {
-  // Solo elimina la carpeta local, NO el backup en la BD
+  // Elimina la carpeta local
   cleanSessionFolder(sessionId);
-  console.log(`[SESSION][DB] Backup DB retenido para sesión ${sessionId}`);
+  // Elimina el backup en la base de datos
+  await pool.query('UPDATE tenants SET session_backup = NULL WHERE id = $1', [sessionId]);
+  console.log(`[SESSION][DB] Backup de sesión ${sessionId} eliminado de la base de datos`);
 }
 
 const { pool } = require('./db');
