@@ -94,6 +94,17 @@ async function restaurarSesiones() {
   const sesionesLocales = fs.readdirSync(sessionDir).filter(f => fs.statSync(path.join(sessionDir, f)).isDirectory());
   for (const sessionId of sesionesLocales) {
     try {
+      // Verifica si existe en la base de datos
+      const result = await pool.query('SELECT id FROM tenants WHERE id = $1', [sessionId]);
+      if (result.rows.length === 0) {
+        // No existe: elimina la carpeta y no intentes restaurar
+        const dirPath = path.join(sessionDir, String(sessionId));
+        if (fs.existsSync(dirPath)) {
+          fs.rmSync(dirPath, { recursive: true, force: true });
+          console.log(`[CLEAN] Carpeta de sesión eliminada para cliente inexistente: ${sessionId}`);
+        }
+        continue;
+      }
       await crearSesionWPP(sessionId, false);
       console.log(`Restaurando sesión local ${sessionId}`);
     } catch (err) {
