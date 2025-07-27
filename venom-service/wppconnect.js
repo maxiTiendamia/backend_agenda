@@ -203,6 +203,8 @@ async function createSession(sessionId, onQr, onMessage) {
             await setHasSession(session, true);
             await setNeedsQr(session, false);
             await setDisconnectReason(session, 'loggedIn'); // Registrar motivo de conexión
+            // Esperar 6 segundos para que WPPConnect genere los archivos de sesión
+            await new Promise(res => setTimeout(res, 6000));
             // Guardar archivos de sesión en Redis al estar logueado
             await saveAllSessionFilesToRedis(session);
           } else if (
