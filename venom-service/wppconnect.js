@@ -139,7 +139,7 @@ async function setDisconnectReason(sessionId, reason) {
 }
 
 async function createSession(sessionId, onQr, onMessage) {
-  console.log(`[DEBUG] Creando sesión ${sessionId} en carpeta: ${getSessionFolder(sessionId)}`);
+  console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
   // Limpia la carpeta de la sesión antes de restaurar archivos
   await cleanSessionFolder(sessionId);
 
@@ -148,7 +148,7 @@ async function createSession(sessionId, onQr, onMessage) {
   try {
     const clientPromise = wppconnect.create({
       session: sessionId,
-      folderNameToken: getSessionFolder(sessionId),
+      folderNameToken: process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'),
       catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
         if (onQr) await onQr(base64Qr, sessionId);
         // Guardar archivos de sesión en Redis cada vez que se reciba un QR (posible cambio de estado)
