@@ -68,8 +68,8 @@ async function limpiarSingletonLock(sessionId) {
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
   // Lock para evitar restauraciones simultáneas
   if (restaurandoSesiones[sessionId]) {
-    console.log(`[LOCK] Ya se está restaurando la sesión ${sessionId}, omitiendo duplicado.`);
-    return sessions[sessionId];
+    console.log(`[LOCK] Ya se está restaurando la sesión ${sessionId}, pero se fuerza la creación/restauración para obtener QR.`);
+    // No retornes, sigue el flujo para que se genere el QR aunque esté restaurando
   }
   restaurandoSesiones[sessionId] = true;
   try {
