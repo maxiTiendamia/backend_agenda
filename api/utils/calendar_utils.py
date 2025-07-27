@@ -107,9 +107,9 @@ def get_available_slots(
                     overlap_count = sum(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
                     )
-                    if overlap_count >= cantidad:
+                    #if overlap_count >= cantidad:
                         # Ya hay suficientes reservas en este horario
-                        continue
+                        #continue
 
                     hay_cerca = any(
                         0 < (slot_start - b_end).total_seconds() / 60 < intervalo_entre_turnos
