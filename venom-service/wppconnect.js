@@ -5,9 +5,13 @@ const tar = require('tar'); // Reemplaza unzipper por tar
 
 // Comprime la carpeta de perfil y devuelve el buffer
 async function compressSessionFolder(sessionId) {
+  // Carpeta interna real de la sesión
   const folderPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), String(sessionId));
+  // Si no existe, usa la carpeta principal
+  const fallbackPath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId));
+  const exists = fs.existsSync(folderPath) ? folderPath : fallbackPath;
   const archivePath = path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId), `profile_${sessionId}.tar.gz`);
-  await tar.c({ gzip: true, file: archivePath, cwd: folderPath }, ['.']);
+  await tar.c({ gzip: true, file: archivePath, cwd: exists }, ['.']);
   const buffer = fs.readFileSync(archivePath);
   fs.unlinkSync(archivePath);
   return buffer;
