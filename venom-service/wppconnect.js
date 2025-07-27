@@ -190,7 +190,7 @@ async function createSession(sessionId, onQr, onMessage) {
           if (onQr) await onQr(base64Qr, sessionId);
           await redisClient.del(`wppconnect:${sessionId}:qrCode`);
           await redisClient.set(`wppconnect:${sessionId}:qrCode`, base64Qr);
-          await saveAllSessionFilesToRedis(sessionId);
+          console.log(`[QR][REDIS] Guardado QR para sesión ${sessionId} (length: ${base64Qr.length}, intento: ${attempts})`);
         },
         statusFind: async (statusSession, session) => {
           // Si la sesión se loguea, libera el bloqueo
