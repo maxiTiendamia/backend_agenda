@@ -85,38 +85,29 @@ def get_available_slots(
                 from_str, to_str = period.split('-')
                 start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(from_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
                 end_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(to_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-                
-                # Si es hoy, el primer turno debe ser al menos dentro de 20 minutos
-                if current_date == now.date():
-                    min_start = now + datetime.timedelta(minutes=20)
-                    slot_start = max(start_hour, min_start)
+
+                # Si es hoy y el horario de inicio ya pasó, el primer turno debe ser al menos dentro de 20 minutos
+                if current_date == now.date() and start_hour < now + datetime.timedelta(minutes=20):
+                    slot_start = now + datetime.timedelta(minutes=20)
+                    if slot_start < start_hour:
+                        slot_start = start_hour
                 else:
                     slot_start = start_hour
 
                 slot_end = end_hour
                 delta = datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
-                
+
                 while slot_start + datetime.timedelta(minutes=service_duration) <= slot_end:
-                    if solo_horas_exactas:
-                        # Avanza al próximo horario exacto (en punto o y media)
-                        if slot_start.minute == 0:
-                            slot_start = slot_start.replace(minute=30)
-                        else:
-                            slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                    else:
-                        slot_start += delta
-                    
-                    # No ofrecer turnos que empiecen antes de 20 minutos desde ahora
-                    if slot_start < now + datetime.timedelta(minutes=20):
-                        slot_start += delta
+                    # No ofrecer turnos que empiecen antes de la hora actual + 20 minutos solo si es hoy y ya pasó el horario de inicio
+                    if current_date == now.date() and slot_start < now + datetime.timedelta(minutes=20):
+                        slot_start += datetime.timedelta(minutes=30 if solo_horas_exactas else service_duration + intervalo_entre_turnos)
                         continue
 
                     slot_final = slot_start + datetime.timedelta(minutes=service_duration)
                     overlap_count = sum(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
-                        )
+                    )
 
-                    # Nuevo filtro: no ofrecer turnos si el anterior ocupado terminó hace menos del intervalo
                     hay_cerca = any(
                         0 < (slot_start - b_end).total_seconds() / 60 < intervalo_entre_turnos
                         for b_start, b_end in busy if b_end <= slot_start
@@ -127,7 +118,15 @@ def get_available_slots(
                         turnos_generados += 1
                         if turnos_generados >= max_turnos:
                             break
-                    slot_start += delta
+
+                    # Avanza al próximo horario exacto (en punto o y media)
+                    if solo_horas_exactas:
+                        if slot_start.minute == 0:
+                            slot_start = slot_start.replace(minute=30)
+                        else:
+                            slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
+                    else:
+                        slot_start += delta
         current_date += datetime.timedelta(days=1)
 
     return available
