@@ -181,8 +181,7 @@ async function cancelWaitingQrSession() {
 async function createSession(sessionId, onQr, onMessage) {
   return enqueueSessionTask(sessionId, async () => {
     if (sessionWaitingQr && sessionWaitingQr !== sessionId) {
-      await cancelWaitingQrSession(); // Cancela la anterior
-      // Ahora sigue con la nueva sesión normalmente
+      await cancelWaitingQrSession();
     }
     if (sessionLocks[sessionId]) {
       console.log(`[LOCK] Sesión ${sessionId} está bloqueada, pero se fuerza la creación/restauración para obtener QR.`);
@@ -191,7 +190,11 @@ async function createSession(sessionId, onQr, onMessage) {
     sessionLocks[sessionId] = true;
     try {
       console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
-      await cleanSessionFolder(sessionId);
+      // Solo limpiar la carpeta si la sesión NO está logueada
+      const state = await getSessionState(sessionId);
+      if (state !== 'loggedIn') {
+        await cleanSessionFolder(sessionId);
+      }
 
       // WPPConnect usará la carpeta local automáticamente
       const client = await wppconnect.create({
