@@ -233,7 +233,7 @@ async function createSession(sessionId, onQr, onMessage) {
         console.log(`[STATE CHANGE] Sesión ${sessionId}: ${state}`);
         if (state === 'DISCONNECTED' || state === 'TIMEOUT' || state === 'CONFLICT' || state === 'UNPAIRED') {
           await saveAllSessionFilesToRedis(sessionId);
-          await reconnectSession(sessionId);
+          await reconnectSession(sessionId, onQr, onMessage); // <-- PASA LOS CALLBACKS
         }
       });
       return client;
@@ -246,11 +246,10 @@ async function createSession(sessionId, onQr, onMessage) {
       throw err;
     });
 // Reintenta crear la sesión si se desconecta
-async function reconnectSession(sessionId) {
+async function reconnectSession(sessionId, onQr, onMessage) {
   console.log(`[RECONNECT] Reintentando sesión ${sessionId}`);
-
   try {
-    await createSession(sessionId);
+    await createSession(sessionId, onQr, onMessage);
   } catch (err) {
     console.error(`[RECONNECT] Falló la reconexión de la sesión ${sessionId}:`, err);
   }
