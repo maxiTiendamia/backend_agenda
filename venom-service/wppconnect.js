@@ -29,7 +29,7 @@ const unzipper = require('unzipper');
 async function restoreSessionBackupFromDB(sessionId) {
   const folder = getSessionFolder(sessionId);
   const result = await pool.query(
-    'SELECT backup_data FROM session_backups WHERE session_id = $1',
+    'SELECT backup_data FROM session_backup WHERE session_id = $1',
     [sessionId]
   );
   if (!result.rows.length) {

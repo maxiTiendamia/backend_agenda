@@ -5,3 +5,4 @@ axios
 pg
 redis
 tar
+unzipper
