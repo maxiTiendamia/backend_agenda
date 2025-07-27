@@ -334,20 +334,22 @@ async function reconnectLoggedSessions(onQr, onMessage) {
 
 // Limpia sesiones inválidas (needsQr=true) de Redis y tokens
 async function cleanInvalidSessions() {
-  const keys = await redisClient.keys('wppconnect:*:needsQr');
-  for (const key of keys) {
-    const needsQr = await redisClient.get(key);
-    if (needsQr === 'true') {
-      const sessionId = key.split(':')[1];
-      // Ya no se elimina carpeta de tokens, solo Redis
-      // Eliminar todas las claves de la sesión en Redis
-      const sessionKeys = await redisClient.keys(`wppconnect:${sessionId}:*`);
-      for (const sk of sessionKeys) {
-        await redisClient.del(sk);
-        console.log(`[REDIS] Clave eliminada: ${sk}`);
+  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
+  const sesionesLocales = fs.readdirSync(sessionDir).filter(f => fs.statSync(path.join(sessionDir, f)).isDirectory());
+  // Obtén los IDs válidos desde la base de datos
+  const result = await pool.query('SELECT id FROM tenants');
+  const idsValidos = result.rows.map(row => String(row.id));
+  for (const sessionId of sesionesLocales) {
+    if (!idsValidos.includes(sessionId)) {
+      // Solo elimina si NO existe en la base
+      const dirPath = path.join(sessionDir, String(sessionId));
+      if (fs.existsSync(dirPath)) {
+        fs.rmSync(dirPath, { recursive: true, force: true });
+        console.log(`[SESSION][DISK] Carpeta de sesión ${sessionId} eliminada completamente`);
       }
-      console.log(`[CLEAN] Sesión inválida limpiada: ${sessionId}`);
+      // Elimina claves Redis...
     }
+    // Si existe, NO la borres
   }
 }
 
