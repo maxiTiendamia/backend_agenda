@@ -245,11 +245,9 @@ async function createSession(sessionId, onQr, onMessage) {
         session: sessionId,
         folderNameToken: path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId)),
         catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
+          console.log(`[DEBUG][QR][WPP] catchQR ejecutado para sesión ${sessionId}`);
           sessionWaitingQr = sessionId;
-          // Guarda el QR en la base en cada intento
           if (onQr) await onQr(base64Qr, sessionId);
-          // Guardado solo en la base de datos
-          // Guardar QR en la base de datos usando qrUtils.js (evita dependencia circular)
           try {
             const { guardarQR } = require('./qrUtils');
             if (pool && typeof pool.query === 'function') {
