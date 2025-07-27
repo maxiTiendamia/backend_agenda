@@ -1,8 +1,6 @@
 const zlib = require('zlib');
 const util = require('util');
 const pipeline = util.promisify(require('stream').pipeline);
-const { Pool } = require('pg');
-const pool = pool || new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
 // Comprime la carpeta de perfil y devuelve el buffer
 async function compressSessionFolder(sessionId) {
