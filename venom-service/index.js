@@ -347,7 +347,6 @@ async function inicializarAplicacion() {
       async (message, client) => { /* tu lógica de mensajes */ }
     );
     console.log('✅ Sesiones logueadas restauradas');
-    await restaurarSesiones();
     console.log('🚀 Inicialización completa');
   } catch (err) {
     console.error('Error durante la inicialización:', err);
