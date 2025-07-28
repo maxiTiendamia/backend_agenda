@@ -199,7 +199,7 @@ async function createSession(sessionId, onQr, onMessage) {
       // WPPConnect usará la carpeta local automáticamente
       const client = await wppconnect.create({
         session: sessionId,
-        folderNameToken: path.join(process.env.SESSION_FOLDER || path.join(__dirname, 'tokens'), String(sessionId)),
+        folderNameToken: getSessionFolder(sessionId), // <--- SOLO UNA VEZ
         catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
           console.log(`[DEBUG][QR][WPP] catchQR ejecutado para sesión ${sessionId}`);
           sessionWaitingQr = sessionId;
