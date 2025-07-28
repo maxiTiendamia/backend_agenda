@@ -290,6 +290,11 @@ async function inicializarAplicacion() {
 
     // Limpiar sesiones inválidas antes de restaurar
     await cleanInvalidSessions();
+    await reconnectLoggedSessions(
+      async (base64Qr, sessionId) => { /* tu lógica de QR */ },
+      async (message, client) => { /* tu lógica de mensajes */ }
+    );
+    console.log('✅ Sesiones logueadas restauradas');
     await restaurarSesiones();
     console.log('🚀 Inicialización completa');
   } catch (err) {
