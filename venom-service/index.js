@@ -78,8 +78,11 @@ async function limpiarSingletonLock(sessionId) {
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
   await ensureSessionFolder(sessionId);
 
+  // Limpia cualquier SingletonLock antes de crear la sesión
+  await limpiarSingletonLock(sessionId);
+
   // Carpeta única por sesión
-  const sessionPath = path.join(__dirname, 'tokens', String(sessionId));
+  const sessionPath = getSessionFolder(sessionId);
 
   // Locker para evitar doble inicialización
   const redisKey = `session:lock:${sessionId}`;

@@ -4,7 +4,6 @@ const redisClient = require('./redisClient'); // Usa el nombre correcto de tu ar
 
 function getSessionFolder(sessionId) {
   const base = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
-  // Usa una carpeta por sesión, por ejemplo /tokens/52
   return path.join(base, String(sessionId));
 }
 
