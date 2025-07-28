@@ -478,6 +478,11 @@ function enqueueSessionTask(sessionId, task) {
   return sessionQueues[sessionId];
 }
 
+function getSessionFolder(sessionId) {
+  const baseDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
+  return path.join(baseDir, String(sessionId));
+}
+
 module.exports = {
   createSession,
   setSessionState,
