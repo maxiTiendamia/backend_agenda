@@ -3,8 +3,9 @@ const path = require('path');
 const redisClient = require('./redisClient'); // Usa el nombre correcto de tu archivo
 
 function getSessionFolder(sessionId) {
-  const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
-  return path.join(sessionDir, String(sessionId));
+  const base = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
+  // Usa una carpeta por sesión, por ejemplo /tokens/52
+  return path.join(base, String(sessionId));
 }
 
 // Limpia solo la carpeta de sesión en disco
