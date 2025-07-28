@@ -134,7 +134,7 @@ async function restaurarSesiones() {
       for (const key of keys) {
         await redisClient.del(key);
       }
-      continue;
+      continue; // <-- IMPORTANTE: NO SIGUE CON LA RESTAURACIÓN DE ESTA SESIÓN
     }
     // Si ya está en memoria, no intentes restaurar
     if (sessions[sessionId]) {
