@@ -48,9 +48,16 @@ async function limpiarSingletonLock(sessionId) {
   if (!fs.existsSync(basePath)) return;
   // Busca recursivamente todos los archivos SingletonLock
   function buscarYEliminar(dir) {
-    const files = fs.readdirSync(dir);
+    let files;
+    try {
+      files = fs.readdirSync(dir);
+    } catch (err) {
+      // Si la carpeta no existe, salir silenciosamente
+      return;
+    }
     for (const file of files) {
       const fullPath = path.join(dir, file);
+      if (!fs.existsSync(fullPath)) continue; // <-- Agrega este chequeo
       if (fs.statSync(fullPath).isDirectory()) {
         buscarYEliminar(fullPath);
       } else if (file === "SingletonLock") {
