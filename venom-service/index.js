@@ -40,6 +40,7 @@ const restaurandoSesiones = {};
 
 // Guardar QR en base de datos
 const { guardarQR } = require('./qrUtils');
+const { ensureSessionFolder } = require('./venom-service/sessionUtils');
 
 // Limpia todos los SingletonLock dentro de la carpeta de sesión (incluyendo subcarpetas)
 async function limpiarSingletonLock(sessionId) {
@@ -75,6 +76,9 @@ async function limpiarSingletonLock(sessionId) {
 
 // Crear sesión y manejar QR/mensajes
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
+  // Asegura la carpeta antes de crear la sesión
+  await ensureSessionFolder(sessionId);
+
   const client = await createSession(
     sessionId,
     async (base64Qr) => {

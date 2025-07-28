@@ -27,4 +27,12 @@ async function limpiarSesion(sessionId) {
   console.log(`[REDIS] Claves de sesión ${sessionId} eliminadas`);
 }
 
-module.exports = { getSessionFolder, limpiarSesion, cleanSessionFolder };
+async function ensureSessionFolder(sessionId) {
+  const folder = getSessionFolder(sessionId);
+  if (!(await fs.pathExists(folder))) {
+    await fs.mkdirp(folder);
+    console.log(`[SESSION][DISK] Carpeta creada para sesión ${sessionId}: ${folder}`);
+  }
+}
+
+module.exports = { getSessionFolder, limpiarSesion, cleanSessionFolder, ensureSessionFolder };

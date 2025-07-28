@@ -46,14 +46,9 @@ async function restoreSessionFileFromRedis(sessionId, fileName) {
   const data = await redisClient.get(`wppconnect:${sessionId}:file:${fileName}`);
   if (data) {
     const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
-    // Intenta primero en /tokens/50/50
-    let dirPath = path.join(sessionDir, String(sessionId), String(sessionId));
+    const dirPath = path.join(sessionDir, String(sessionId));
     if (!fs.existsSync(dirPath)) {
-      // Si no existe, usa /tokens/50
-      dirPath = path.join(sessionDir, String(sessionId));
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-      }
+      fs.mkdirSync(dirPath, { recursive: true });
     }
     const filePath = path.join(dirPath, fileName);
     fs.writeFileSync(filePath, data);
