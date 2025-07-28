@@ -46,14 +46,18 @@ async function restoreSessionFileFromRedis(sessionId, fileName) {
   const data = await redisClient.get(`wppconnect:${sessionId}:file:${fileName}`);
   if (data) {
     const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
-    // Restaurar en la carpeta <sessionId>/fileName
-    const dirPath = path.join(sessionDir, String(sessionId));
+    // Intenta primero en /tokens/50/50
+    let dirPath = path.join(sessionDir, String(sessionId), String(sessionId));
     if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
+      // Si no existe, usa /tokens/50
+      dirPath = path.join(sessionDir, String(sessionId));
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+      }
     }
     const filePath = path.join(dirPath, fileName);
     fs.writeFileSync(filePath, data);
-    console.log(`[SESSION][REDIS] Restaurado ${fileName} de sesión ${sessionId} desde Redis (size: ${data.length})`);
+    console.log(`[SESSION][REDIS] Restaurado ${fileName} de sesión ${sessionId} en ${filePath} (size: ${data.length})`);
     return true;
   } else {
     console.log(`[SESSION][REDIS] No existe ${fileName} en Redis para sesión ${sessionId}, no se restaura`);
@@ -194,6 +198,9 @@ async function createSession(sessionId, onQr, onMessage) {
       const state = await getSessionState(sessionId);
       if (state !== 'loggedIn') {
         await cleanSessionFolder(sessionId);
+      } else {
+        // Si está logueada, intenta restaurar archivos de sesión desde Redis
+        await restoreAllSessionFilesFromRedis(sessionId);
       }
 
       // WPPConnect usará la carpeta local automáticamente
