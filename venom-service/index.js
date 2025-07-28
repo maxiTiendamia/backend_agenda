@@ -76,48 +76,77 @@ async function limpiarSingletonLock(sessionId) {
 
 // Crear sesión y manejar QR/mensajes
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
-  // Asegura la carpeta antes de crear la sesión
   await ensureSessionFolder(sessionId);
 
-  const client = await createSession(
-    sessionId,
-    async (base64Qr) => {
-      if (permitirGuardarQR) {
-        await guardarQR(pool, sessionId, base64Qr);
-      }
-    },
-    async (message, client) => {
-      console.log(`[BOT] Mensaje recibido:`, message);
-      try {
-        const telefono = message.from.replace("@c.us", "");
-        const mensaje = message.body;
-        const cliente_id = sessionId;
+  // Carpeta única por sesión
+  const sessionPath = path.join(__dirname, 'tokens', String(sessionId));
 
-        // CONSULTA SI EL NÚMERO ESTÁ BLOQUEADO
-        const result = await pool.query(
-          'SELECT 1 FROM blocked_numbers WHERE cliente_id = $1 AND telefono = $2 LIMIT 1',
-          [cliente_id, telefono]
-        );
-        if (result.rows.length > 0) {
-          console.log(`[BLOQUEADO] Mensaje de ${telefono} bloqueado para cliente ${cliente_id}.`);
-          return; // No reenvía ni responde
-        }
+  // Locker para evitar doble inicialización
+  const redisKey = `session:lock:${sessionId}`;
+  const isLocked = await redisClient.get(redisKey);
+  if (isLocked) throw new Error("Sesión ya está siendo inicializada");
+  await redisClient.set(redisKey, "1", 'EX', 30);
 
-        const backendResponse = await axios.post(
-          "https://backend-agenda-2.onrender.com/api/webhook",
-          { telefono, mensaje, cliente_id }
-        );
-        const respuesta = backendResponse.data && backendResponse.data.mensaje;
-        if (respuesta) {
-          await client.sendText(`${telefono}@c.us`, respuesta);
+  try {
+    const client = await createSession(
+      sessionId,
+      async (base64Qr) => {
+        if (permitirGuardarQR) {
+          await guardarQR(pool, sessionId, base64Qr);
         }
-      } catch (err) {
-        console.error("Error reenviando mensaje a backend o enviando respuesta:", err);
+      },
+      async (message, client) => {
+        console.log(`[BOT] Mensaje recibido:`, message);
+        try {
+          const telefono = message.from.replace("@c.us", "");
+          const mensaje = message.body;
+          const cliente_id = sessionId;
+
+          // CONSULTA SI EL NÚMERO ESTÁ BLOQUEADO
+          const result = await pool.query(
+            'SELECT 1 FROM blocked_numbers WHERE cliente_id = $1 AND telefono = $2 LIMIT 1',
+            [cliente_id, telefono]
+          );
+          if (result.rows.length > 0) {
+            console.log(`[BLOQUEADO] Mensaje de ${telefono} bloqueado para cliente ${cliente_id}.`);
+            return; // No reenvía ni responde
+          }
+
+          const backendResponse = await axios.post(
+            "https://backend-agenda-2.onrender.com/api/webhook",
+            { telefono, mensaje, cliente_id }
+          );
+          const respuesta = backendResponse.data && backendResponse.data.mensaje;
+          if (respuesta) {
+            await client.sendText(`${telefono}@c.us`, respuesta);
+          }
+        } catch (err) {
+          console.error("Error reenviando mensaje a backend o enviando respuesta:", err);
+        }
+      },
+      {
+        // Asegúrate de pasar userDataDir y session
+        session: String(sessionId),
+        userDataDir: sessionPath,
+        multidevice: true,
+        headless: true,
+        browserArgs: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--single-process',
+          '--disable-gpu'
+        ]
       }
-    }
-  );
-  sessions[sessionId] = client;
-  return client;
+    );
+    sessions[sessionId] = client;
+    return client;
+  } finally {
+    await redisClient.del(redisKey); // Libera el lock siempre
+  }
 }
 
 // Restaurar sesiones desde Redis (para todas las que tienen info previa)
