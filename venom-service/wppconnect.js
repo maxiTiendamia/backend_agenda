@@ -8,6 +8,7 @@ const wppconnect = require('@wppconnect-team/wppconnect');
 const redisClient = require('./redisClient');
 const fs = require('fs');
 const path = require('path');
+const { getSessionFolder, cleanSessionFolder } = require('./sessionUtils');
 
 async function saveSessionToRedis(redisClient, sessionId) {
   const sessionPath = path.join(__dirname, 'tokens', String(sessionId));
@@ -476,11 +477,6 @@ function enqueueSessionTask(sessionId, task) {
   // Encadena la tarea en la cola
   sessionQueues[sessionId] = sessionQueues[sessionId].then(() => task()).catch(() => {});
   return sessionQueues[sessionId];
-}
-
-function getSessionFolder(sessionId) {
-  const baseDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
-  return path.join(baseDir, String(sessionId));
 }
 
 module.exports = {

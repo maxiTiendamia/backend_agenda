@@ -361,19 +361,7 @@ const { cleanInvalidSessions } = require('./wppconnect');
 // Inicializar la aplicación: limpiar sesiones inválidas y restaurar sesiones previas
 async function inicializarAplicacion() {
   try {
-    (async () => {
-      try {
-        await redisClient.ping();
-        console.log('✅ Conexión a Redis exitosa');
-        const keys = await redisClient.keys('wppconnect:*');
-        console.log(`🔑 Claves encontradas en Redis: ${keys.length}`);
-      } catch (err) {
-        console.error('❌ Error conectando a Redis:', err);
-        process.exit(1);
-      }
-    })();
-
-    // Limpiar sesiones inválidas antes de restaurar
+    await limpiarSesionesOrfanasRedis(); // <--- Agrega esto aquí
     await cleanInvalidSessions();
     await reconnectLoggedSessions(
       async (base64Qr, sessionId) => { /* tu lógica de QR */ },
@@ -421,5 +409,28 @@ app.get('/iniciar/:clienteId', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+async function limpiarSesionesOrfanasRedis() {
+  // Obtiene todos los IDs válidos de la base
+  const result = await pool.query('SELECT id FROM tenants');
+  const idsValidos = result.rows.map(row => String(row.id));
+
+  // Busca todas las claves de sesiones en Redis
+  const keys = await redisClient.keys('wppconnect:*:state');
+  for (const key of keys) {
+    const match = key.match(/^wppconnect:(\d+):state$/);
+    if (match) {
+      const sessionId = match[1];
+      if (!idsValidos.includes(sessionId)) {
+        // Elimina todas las claves de esa sesión
+        const clavesSesion = await redisClient.keys(`wppconnect:${sessionId}:*`);
+        for (const k of clavesSesion) {
+          await redisClient.del(k);
+        }
+        console.log(`[REDIS][CLEAN] Eliminadas claves Redis de sesión huérfana: ${sessionId}`);
+      }
+    }
+  }
+}
 
 module.exports = { pool };
