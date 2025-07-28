@@ -325,13 +325,21 @@ class BlockedNumberModelView(SecureModelView):
         'fecha_bloqueo': 'Fecha de Bloqueo'
     }
     form_columns = ('empleado', 'cliente', 'telefono')
-    
+
+    def scaffold_form(self):
+        form_class = super().scaffold_form()
+        # Personaliza el campo cliente para mostrar nombre y ID
+        form_class.cliente.query_factory = lambda: db.session.query(Tenant).order_by(Tenant.id)
+        form_class.cliente.get_label = lambda obj: f"{obj.id} - {obj.nombre} ({obj.comercio})"
+        return form_class
+
     def on_model_change(self, form, model, is_created):
-        """Validar que el empleado pertenzca al cliente seleccionado"""
+        # Solo validar si se selecciona empleado
         if model.empleado and model.cliente:
             if model.empleado.tenant_id != model.cliente.id:
                 raise ValueError("El empleado seleccionado no pertenece al cliente/comercio seleccionado")
         super().on_model_change(form, model, is_created)
+    
 
 
 def init_admin(app, db):

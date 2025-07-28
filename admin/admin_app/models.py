@@ -91,7 +91,7 @@ class BlockedNumber(db.Model):
     __tablename__ = "blocked_numbers"
     
     id = db.Column(db.Integer, primary_key=True)
-    empleado_id = db.Column(db.Integer, db.ForeignKey('empleados.id'), nullable=False)
+    empleado_id = db.Column(db.Integer, db.ForeignKey('empleados.id'), nullable=True)
     cliente_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
     telefono = db.Column(db.String(30), nullable=False)
     fecha_bloqueo = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
