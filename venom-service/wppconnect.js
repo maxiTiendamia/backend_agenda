@@ -5,7 +5,7 @@ const tar = require('tar'); // Reemplaza unzipper por tar
 
 const { pool } = require('./db');
 const wppconnect = require('@wppconnect-team/wppconnect');
-const redisClient = require('./redis');
+const redisClient = require('./redisClient');
 const fs = require('fs');
 const path = require('path');
 const { getSessionFolder, cleanSessionFolder } = require('./sessionUtils');

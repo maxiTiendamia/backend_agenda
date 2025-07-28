@@ -156,7 +156,7 @@ async function restaurarSesiones() {
 // Endpoints
 
 // Endpoint para ver todas las claves y valores de Redis de una sesión específica
-app.get('/debug/redis/:clienteId', async (req, res) => {
+app.get('/debug/redisClient/:clienteId', async (req, res) => {
   const clienteId = req.params.clienteId;
   try {
     const keys = await redisClient.keys(`wppconnect:${clienteId}:*`);
@@ -251,7 +251,7 @@ app.get('/debug/errores', (req, res) => {
   res.json({ sessionErrors, sesionesEnMemoria: Object.keys(sessions), timestamp: new Date().toISOString() });
 });
 
-app.get('/debug/redis', async (req, res) => {
+app.get('/debug/redisClient', async (req, res) => {
   try {
     const keys = await redisClient.keys('wppconnect:*');
     const datos = {};
