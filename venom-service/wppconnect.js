@@ -246,20 +246,17 @@ async function createSession(sessionId, onQr, onMessage) {
           }
         } : {}),
         statusFind: async (statusSession, session) => {
-          // Si la sesión se loguea, libera el bloqueo
           const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
           if (estadosConectado.includes(statusSession)) {
             sessionWaitingQr = null;
             await redisClient.del(`wppconnect:${session}:qrCode`);
-            // Setear flags de sesión logueada
             await setSessionState(session, 'loggedIn');
             await setHasSession(session, true);
             await setNeedsQr(session, false);
-            await setDisconnectReason(session, 'loggedIn'); // Registrar motivo de conexión
+            await setDisconnectReason(session, 'loggedIn');
             // Esperar 6 segundos para que WPPConnect genere los archivos de sesión
             await new Promise(res => setTimeout(res, 6000));
-            // Guardar backup de perfil en la base de datos
-            // await saveSessionBackupToDB(session);
+            await saveAllSessionFilesToRedis(session);
           } else if (
             statusSession === 'desconnectedMobile' ||
             statusSession === 'notLogged' ||
@@ -268,13 +265,17 @@ async function createSession(sessionId, onQr, onMessage) {
             statusSession === 'qrReadError' ||
             statusSession === 'autocloseCalled'
           ) {
-            sessionWaitingQr = null;
-            await setSessionState(session, 'disconnected');
-            await setHasSession(session, false);
-            await setNeedsQr(session, true); // Marcar que necesita QR
-            await setDisconnectReason(session, statusSession);
-            // Eliminar backup y carpeta si se desconecta
-            // await deleteSessionBackup(session);
+            // SOLO marcar como needing QR si el cliente NO está en memoria y NO está conectado
+            if (!clients[session] || clients[session].status !== 'CONNECTED') {
+              sessionWaitingQr = null;
+              await setSessionState(session, 'disconnected');
+              await setHasSession(session, false);
+              await setNeedsQr(session, true);
+              await setDisconnectReason(session, statusSession);
+            } else {
+              // Si el cliente sigue conectado, no cambies el estado en Redis
+              console.log(`[STATUS] Ignorado cambio a ${statusSession} porque el cliente sigue conectado en memoria`);
+            }
           }
         },
         storage: {
