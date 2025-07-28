@@ -417,7 +417,7 @@ async function resetSession(sessionId, onQr, onMessage) {
         try {
           const { guardarQR } = require('./qrUtils');
           if (pool && typeof pool.query === 'function') {
-            await guardarQR(pool, sessionId, base64Qr);
+            await guardarQR(pool, sessionId, base64Qr, true); // <-- fuerza el guardado
             console.log(`[QR][DB][RESET] Guardado QR para sesión ${sessionId} en la base de datos (reset)`);
           } else {
             console.warn(`[QR][DB][RESET] pool no está disponible, no se guarda QR para sesión ${sessionId}`);
