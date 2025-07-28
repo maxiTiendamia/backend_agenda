@@ -40,7 +40,7 @@ const restaurandoSesiones = {};
 
 // Guardar QR en base de datos
 const { guardarQR } = require('./qrUtils');
-const { ensureSessionFolder } = require('./venom-service/sessionUtils');
+const { ensureSessionFolder } = require('./sessionUtils');
 
 // Limpia todos los SingletonLock dentro de la carpeta de sesión (incluyendo subcarpetas)
 async function limpiarSingletonLock(sessionId) {
