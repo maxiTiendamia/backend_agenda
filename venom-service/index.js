@@ -57,7 +57,6 @@ async function limpiarSingletonLock(sessionId) {
 
 // Crear sesión y manejar QR/mensajes
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
-  // Si ya existe la carpeta de sesión, WPPConnect la usará y no pedirá QR
   const client = await createSession(
     sessionId,
     async (base64Qr) => {
@@ -71,6 +70,17 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
         const telefono = message.from.replace("@c.us", "");
         const mensaje = message.body;
         const cliente_id = sessionId;
+
+        // CONSULTA SI EL NÚMERO ESTÁ BLOQUEADO
+        const result = await pool.query(
+          'SELECT 1 FROM blocked_numbers WHERE cliente_id = $1 AND telefono = $2 LIMIT 1',
+          [cliente_id, telefono]
+        );
+        if (result.rows.length > 0) {
+          console.log(`[BLOQUEADO] Mensaje de ${telefono} bloqueado para cliente ${cliente_id}.`);
+          return; // No reenvía ni responde
+        }
+
         const backendResponse = await axios.post(
           "https://backend-agenda-2.onrender.com/api/webhook",
           { telefono, mensaje, cliente_id }
