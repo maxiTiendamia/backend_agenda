@@ -123,9 +123,15 @@ async function restaurarSesiones() {
       console.log(`[RESTORE] Sesión ${sessionId} ya está en memoria, no se reconecta`);
       continue;
     }
+    // Elimina el SingletonLock si existe (evita errores de Chromium)
+    await limpiarSingletonLock(sessionId);
     // Siempre intenta restaurar la sesión si existe la carpeta
-    await crearSesionWPP(sessionId, false);
-    console.log(`Restaurando sesión local ${sessionId}`);
+    try {
+      await crearSesionWPP(sessionId, false);
+      console.log(`Restaurando sesión local ${sessionId}`);
+    } catch (err) {
+      console.error(`[ERROR] Error creando/restaurando sesión ${sessionId}:`, err);
+    }
   }
 }
 
