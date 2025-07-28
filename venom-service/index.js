@@ -109,7 +109,11 @@ async function restaurarSesiones() {
       }
       continue;
     }
-    // Verifica el estado en Redis antes de restaurar
+    // Si ya está en memoria, no intentes restaurar
+    if (sessions[sessionId]) {
+      console.log(`[RESTORE] Sesión ${sessionId} ya está en memoria, no se reconecta`);
+      continue;
+    }
     const estadoRedis = await redisClient.get(`wppconnect:${sessionId}:state`);
     if (estadoRedis === 'loggedIn') {
       console.log(`[RESTORE] Sesión ${sessionId} ya logueada, no se reconecta`);
@@ -252,7 +256,6 @@ app.get('/estado-sesiones', async (req, res) => {
         const id = String(row.id);
         let estado = 'NO_INICIADA';
         let enMemoria = false;
-        // Consulta el estado en Redis
         const estadoRedis = await redisClient.get(`wppconnect:${id}:state`);
         if (estadoRedis === 'loggedIn') {
           estado = 'CONNECTED';
@@ -264,8 +267,14 @@ app.get('/estado-sesiones', async (req, res) => {
         // Si está en memoria, sobreescribe el estado
         if (sessions[id] && sessions[id].isConnected) {
           try {
-            estado = (await sessions[id].isConnected()) ? 'CONNECTED' : 'DISCONNECTED';
+            const conectado = await sessions[id].isConnected();
             enMemoria = true;
+            if (conectado) {
+              estado = 'CONNECTED';
+            } else {
+              // Si está en memoria pero no conectado, probablemente está iniciando
+              estado = 'INICIANDO';
+            }
           } catch {
             estado = 'ERROR';
           }
