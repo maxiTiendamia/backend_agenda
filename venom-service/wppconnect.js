@@ -9,6 +9,7 @@ const redisClient = require('./redisClient');
 const fs = require('fs');
 const path = require('path');
 const { getSessionFolder, cleanSessionFolder } = require('./sessionUtils');
+const fsExtra = require('fs-extra'); // Agrega fs-extra para ensureDir y promesas
 
 async function saveSessionToRedis(redisClient, sessionId) {
   const sessionPath = path.join(__dirname, 'tokens', String(sessionId));
@@ -195,7 +196,7 @@ async function cancelWaitingQrSession() {
   }
 }
 
-// Modifica createSession para cancelar la anterior si hay QR pendiente
+// Modifica createSession para guardar tokens/sessionData tras login y restaurar si existen
 async function createSession(sessionId, onQr, onMessage) {
   return enqueueSessionTask(sessionId, async () => {
     if (sessionWaitingQr && sessionWaitingQr !== sessionId) {
@@ -208,6 +209,13 @@ async function createSession(sessionId, onQr, onMessage) {
     try {
       console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
       const state = await getSessionState(sessionId);
+
+      // Restaurar archivos desde Redis si existen
+      let browserSessionToken, sessionData;
+      const tokenData = await redisClient.get(`wppconnect:${sessionId}:tokens.json`);
+      const sessionDataRaw = await redisClient.get(`wppconnect:${sessionId}:sessionData.json`);
+      if (tokenData) browserSessionToken = JSON.parse(tokenData);
+      if (sessionDataRaw) sessionData = JSON.parse(sessionDataRaw);
 
       if (state !== 'loggedIn') {
         await cleanSessionFolder(sessionId);
@@ -230,7 +238,8 @@ async function createSession(sessionId, onQr, onMessage) {
       const client = await wppconnect.create({
         session: sessionId,
         folderNameToken: getSessionFolder(sessionId),
-        // Solo define catchQR si onQr está presente
+        browserSessionToken: browserSessionToken, // <-- restaurado de Redis si existe
+        sessionData: sessionData,                 // <-- restaurado de Redis si existe
         ...(onQr ? {
           catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
             console.log(`[DEBUG][QR][WPP] catchQR ejecutado para sesión ${sessionId}`);
@@ -270,6 +279,26 @@ async function createSession(sessionId, onQr, onMessage) {
             await setDisconnectReason(session, 'loggedIn');
             // Esperar 6 segundos para que WPPConnect genere los archivos de sesión
             await new Promise(res => setTimeout(res, 6000));
+            // Guardar archivos de sesión en disco y Redis
+            try {
+              const sessionPath = getSessionFolder(session);
+              const tokenPath = path.join(sessionPath, 'tokens.json');
+              const sessionDataPath = path.join(sessionPath, 'sessionData.json');
+              const tokens = await client.getSessionTokenBrowser();
+              const sessionDataObj = await client.getSession();
+
+              await fsExtra.ensureDir(sessionPath);
+              await fsExtra.writeFile(tokenPath, JSON.stringify(tokens));
+              await fsExtra.writeFile(sessionDataPath, JSON.stringify(sessionDataObj));
+
+              console.log(`[SESSION][DISK] Archivos guardados para sesión ${session}`);
+
+              // Guardar en Redis también
+              await redisClient.set(`wppconnect:${session}:tokens.json`, JSON.stringify(tokens));
+              await redisClient.set(`wppconnect:${session}:sessionData.json`, JSON.stringify(sessionDataObj));
+            } catch (e) {
+              console.error(`[SESSION][SAVE] Error guardando archivos para sesión ${session}:`, e.message);
+            }
             await saveAllSessionFilesToRedis(session);
           } else if (
             statusSession === 'desconnectedMobile' ||
@@ -297,10 +326,10 @@ async function createSession(sessionId, onQr, onMessage) {
           redisClient,
           prefix: `wppconnect:${sessionId}:`
         },
-        headless: 'new', // Usar el nuevo modo headless
+        headless: 'new',
         useChrome: true,
         autoClose: false,
-        browserSessionToken: true, // Permite perfil persistente y archivos de sesión
+        browserSessionToken: true,
         browserArgs: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -327,16 +356,33 @@ async function createSession(sessionId, onQr, onMessage) {
         ]
       });
 
-      clients[sessionId] = client; // Guarda el cliente en memoria
+      clients[sessionId] = client;
       client.onMessage(async (message) => {
         console.log(`[BOT][DEBUG] Mensaje recibido en sesión ${sessionId}:`, message);
         if (onMessage) await onMessage(message, client);
       });
       client.onStateChange(async (state) => {
         console.log(`[STATE CHANGE] Sesión ${sessionId}: ${state}`);
-        if (state === 'DISCONNECTED' || state === 'TIMEOUT' || state === 'CONFLICT' || state === 'UNPAIRED') {
-          await saveAllSessionFilesToRedis(sessionId);
-          await reconnectSession(sessionId, onQr, onMessage);
+        if (state === 'CONNECTED') {
+          const sessionPath = getSessionFolder(sessionId);
+          const tokenPath = path.join(sessionPath, 'tokens.json');
+          const sessionDataPath = path.join(sessionPath, 'sessionData.json');
+          try {
+            const tokens = await client.getSessionTokenBrowser();
+            const sessionData = await client.getSession();
+
+            await fsExtra.ensureDir(sessionPath);
+            await fsExtra.writeFile(tokenPath, JSON.stringify(tokens));
+            await fsExtra.writeFile(sessionDataPath, JSON.stringify(sessionData));
+
+            console.log(`[SESSION][DISK] Archivos guardados para sesión ${sessionId}`);
+
+            // Guardar en Redis también
+            await redisClient.set(`wppconnect:${sessionId}:tokens.json`, JSON.stringify(tokens));
+            await redisClient.set(`wppconnect:${sessionId}:sessionData.json`, JSON.stringify(sessionData));
+          } catch (e) {
+            console.error(`[SESSION][SAVE] Error guardando archivos para sesión ${sessionId}:`, e.message);
+          }
         }
       });
       return client;
