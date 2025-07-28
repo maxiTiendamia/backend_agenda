@@ -92,7 +92,6 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
 async function restaurarSesiones() {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
   const sesionesLocales = fs.readdirSync(sessionDir).filter(f => fs.statSync(path.join(sessionDir, f)).isDirectory());
-  // Obtén los IDs válidos desde la base de datos
   const result = await pool.query('SELECT id FROM tenants');
   const idsValidos = result.rows.map(row => String(row.id));
   for (const sessionId of sesionesLocales) {
@@ -114,12 +113,7 @@ async function restaurarSesiones() {
       console.log(`[RESTORE] Sesión ${sessionId} ya está en memoria, no se reconecta`);
       continue;
     }
-    const estadoRedis = await redisClient.get(`wppconnect:${sessionId}:state`);
-    if (estadoRedis === 'loggedIn') {
-      console.log(`[RESTORE] Sesión ${sessionId} ya logueada, no se reconecta`);
-      continue;
-    }
-    // Si existe, restaurar la sesión
+    // Siempre intenta restaurar la sesión si existe la carpeta
     await crearSesionWPP(sessionId, false);
     console.log(`Restaurando sesión local ${sessionId}`);
   }
