@@ -280,25 +280,6 @@ async function createSession(sessionId, onQr, onMessage) {
             // Esperar 6 segundos para que WPPConnect genere los archivos de sesión
             await new Promise(res => setTimeout(res, 6000));
             // Guardar archivos de sesión en disco y Redis
-            try {
-              const sessionPath = getSessionFolder(session);
-              const tokenPath = path.join(sessionPath, 'tokens.json');
-              const sessionDataPath = path.join(sessionPath, 'sessionData.json');
-              const tokens = await client.getSessionTokenBrowser();
-              const sessionDataObj = await client.getSession();
-
-              await fsExtra.ensureDir(sessionPath);
-              await fsExtra.writeFile(tokenPath, JSON.stringify(tokens));
-              await fsExtra.writeFile(sessionDataPath, JSON.stringify(sessionDataObj));
-
-              console.log(`[SESSION][DISK] Archivos guardados para sesión ${session}`);
-
-              // Guardar en Redis también
-              await redisClient.set(`wppconnect:${session}:tokens.json`, JSON.stringify(tokens));
-              await redisClient.set(`wppconnect:${session}:sessionData.json`, JSON.stringify(sessionDataObj));
-            } catch (e) {
-              console.error(`[SESSION][SAVE] Error guardando archivos para sesión ${session}:`, e.message);
-            }
             await saveAllSessionFilesToRedis(session);
           } else if (
             statusSession === 'desconnectedMobile' ||
@@ -369,17 +350,14 @@ async function createSession(sessionId, onQr, onMessage) {
           const sessionDataPath = path.join(sessionPath, 'sessionData.json');
           try {
             const tokens = await client.getSessionTokenBrowser();
-            const sessionData = await client.getSession();
 
             await fsExtra.ensureDir(sessionPath);
             await fsExtra.writeFile(tokenPath, JSON.stringify(tokens));
-            await fsExtra.writeFile(sessionDataPath, JSON.stringify(sessionData));
 
             console.log(`[SESSION][DISK] Archivos guardados para sesión ${sessionId}`);
 
             // Guardar en Redis también
             await redisClient.set(`wppconnect:${sessionId}:tokens.json`, JSON.stringify(tokens));
-            await redisClient.set(`wppconnect:${sessionId}:sessionData.json`, JSON.stringify(sessionData));
           } catch (e) {
             console.error(`[SESSION][SAVE] Error guardando archivos para sesión ${sessionId}:`, e.message);
           }
