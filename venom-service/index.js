@@ -41,18 +41,29 @@ const restaurandoSesiones = {};
 // Guardar QR en base de datos
 const { guardarQR } = require('./qrUtils');
 
-// Limpiar archivo SingletonLock si existe
+// Limpia todos los SingletonLock dentro de la carpeta de sesión (incluyendo subcarpetas)
 async function limpiarSingletonLock(sessionId) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, "tokens");
-  const singletonLockPath = path.join(sessionDir, sessionId, "SingletonLock");
-  if (fs.existsSync(singletonLockPath)) {
-    try {
-      fs.unlinkSync(singletonLockPath);
-      console.log(`🔓 SingletonLock eliminado en ${singletonLockPath} para cliente ${sessionId}`);
-    } catch (err) {
-      console.error(`❌ Error eliminando SingletonLock en ${singletonLockPath} para ${sessionId}:`, err.message);
+  const basePath = path.join(sessionDir, sessionId);
+  if (!fs.existsSync(basePath)) return;
+  // Busca recursivamente todos los archivos SingletonLock
+  function buscarYEliminar(dir) {
+    const files = fs.readdirSync(dir);
+    for (const file of files) {
+      const fullPath = path.join(dir, file);
+      if (fs.statSync(fullPath).isDirectory()) {
+        buscarYEliminar(fullPath);
+      } else if (file === "SingletonLock") {
+        try {
+          fs.unlinkSync(fullPath);
+          console.log(`🔓 SingletonLock eliminado en ${fullPath} para cliente ${sessionId}`);
+        } catch (err) {
+          console.error(`❌ Error eliminando SingletonLock en ${fullPath} para ${sessionId}:`, err.message);
+        }
+      }
     }
   }
+  buscarYEliminar(basePath);
 }
 
 // Crear sesión y manejar QR/mensajes
