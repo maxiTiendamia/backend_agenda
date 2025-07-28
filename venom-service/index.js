@@ -109,6 +109,12 @@ async function restaurarSesiones() {
       }
       continue;
     }
+    // Verifica el estado en Redis antes de restaurar
+    const estadoRedis = await redisClient.get(`wppconnect:${sessionId}:state`);
+    if (estadoRedis === 'loggedIn') {
+      console.log(`[RESTORE] Sesión ${sessionId} ya logueada, no se reconecta`);
+      continue;
+    }
     // Si existe, restaurar la sesión
     await crearSesionWPP(sessionId, false);
     console.log(`Restaurando sesión local ${sessionId}`);
@@ -246,6 +252,16 @@ app.get('/estado-sesiones', async (req, res) => {
         const id = String(row.id);
         let estado = 'NO_INICIADA';
         let enMemoria = false;
+        // Consulta el estado en Redis
+        const estadoRedis = await redisClient.get(`wppconnect:${id}:state`);
+        if (estadoRedis === 'loggedIn') {
+          estado = 'CONNECTED';
+        } else if (estadoRedis === 'needsQr') {
+          estado = 'NEEDS_QR';
+        } else if (estadoRedis === 'disconnected') {
+          estado = 'DISCONNECTED';
+        }
+        // Si está en memoria, sobreescribe el estado
         if (sessions[id] && sessions[id].isConnected) {
           try {
             estado = (await sessions[id].isConnected()) ? 'CONNECTED' : 'DISCONNECTED';
@@ -254,7 +270,6 @@ app.get('/estado-sesiones', async (req, res) => {
             estado = 'ERROR';
           }
         }
-        // Ya no se verifica archivos locales
         return {
           clienteId: id,
           nombre: row.nombre,
