@@ -204,11 +204,21 @@ async function createSession(sessionId, onQr, onMessage) {
           console.log(`[DEBUG][QR][WPP] catchQR ejecutado para sesión ${sessionId}`);
           sessionWaitingQr = sessionId;
           if (onQr) await onQr(base64Qr, sessionId);
+
           try {
             const { guardarQR } = require('./qrUtils');
             if (pool && typeof pool.query === 'function') {
-              await guardarQR(pool, sessionId, base64Qr);
-              console.log(`[QR][DB] Guardado QR para sesión ${sessionId} en la base de datos`);
+              // Consulta si ya existe un QR en la base para este cliente
+              const result = await pool.query('SELECT qr_code FROM tenants WHERE id = $1', [sessionId]);
+              const qrEnBase = result.rows[0]?.qr_code;
+
+              // Solo guarda el QR si no existe o si está vacío
+              if (!qrEnBase || qrEnBase === '' || qrEnBase === null) {
+                await guardarQR(pool, sessionId, base64Qr);
+                console.log(`[QR][DB] Guardado QR para sesión ${sessionId} en la base de datos`);
+              } else {
+                console.log(`[QR][DB] Ya existe un QR para sesión ${sessionId}, no se guarda uno nuevo`);
+              }
             } else {
               console.warn(`[QR][DB] pool no está disponible, no se guarda QR para sesión ${sessionId}`);
             }
