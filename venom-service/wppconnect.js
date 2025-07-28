@@ -189,50 +189,62 @@ async function createSession(sessionId, onQr, onMessage) {
     }
     if (sessionLocks[sessionId]) {
       console.log(`[LOCK] Sesión ${sessionId} está bloqueada, pero se fuerza la creación/restauración para obtener QR.`);
-      // No retornes, sigue el flujo para que se genere el QR aunque esté bloqueada
     }
     sessionLocks[sessionId] = true;
     try {
       console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
-      // Solo limpiar la carpeta si la sesión NO está logueada
       const state = await getSessionState(sessionId);
+
       if (state !== 'loggedIn') {
         await cleanSessionFolder(sessionId);
       } else {
         // Si está logueada, intenta restaurar archivos de sesión desde Redis
-        await restoreAllSessionFilesFromRedis(sessionId);
+        const restoredTokens = await restoreSessionFileFromRedis(sessionId, 'tokens.json');
+        const restoredSession = await restoreSessionFileFromRedis(sessionId, 'sessionData.json');
+        if (!restoredTokens || !restoredSession) {
+          console.warn(`[RECONNECT][WARN] No se pudieron restaurar todos los archivos de sesión para ${sessionId}. No se intentará reconectar automáticamente.`);
+          await setNeedsQr(sessionId, true);
+          await setSessionState(sessionId, 'disconnected');
+          sessionLocks[sessionId] = false;
+          return null; // No crear el cliente, así nunca pide QR
+        } else {
+          console.log(`[RECONNECT] Archivos de sesión restaurados correctamente para ${sessionId}.`);
+        }
       }
 
       // WPPConnect usará la carpeta local automáticamente
       const client = await wppconnect.create({
         session: sessionId,
-        folderNameToken: getSessionFolder(sessionId), // <--- SOLO UNA VEZ
-        catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
-          console.log(`[DEBUG][QR][WPP] catchQR ejecutado para sesión ${sessionId}`);
-          sessionWaitingQr = sessionId;
-          if (onQr) await onQr(base64Qr, sessionId);
+        folderNameToken: getSessionFolder(sessionId),
+        // Solo define catchQR si onQr está presente
+        ...(onQr ? {
+          catchQR: async (base64Qr, asciiQR, attempts, urlCode) => {
+            console.log(`[DEBUG][QR][WPP] catchQR ejecutado para sesión ${sessionId}`);
+            sessionWaitingQr = sessionId;
+            if (onQr) await onQr(base64Qr, sessionId);
 
-          try {
-            const { guardarQR } = require('./qrUtils');
-            if (pool && typeof pool.query === 'function') {
-              // Consulta si ya existe un QR en la base para este cliente
-              const result = await pool.query('SELECT qr_code FROM tenants WHERE id = $1', [sessionId]);
-              const qrEnBase = result.rows[0]?.qr_code;
+            try {
+              const { guardarQR } = require('./qrUtils');
+              if (pool && typeof pool.query === 'function') {
+                // Consulta si ya existe un QR en la base para este cliente
+                const result = await pool.query('SELECT qr_code FROM tenants WHERE id = $1', [sessionId]);
+                const qrEnBase = result.rows[0]?.qr_code;
 
-              // Solo guarda el QR si no existe o si está vacío
-              if (!qrEnBase || qrEnBase === '' || qrEnBase === null) {
-                await guardarQR(pool, sessionId, base64Qr);
-                console.log(`[QR][DB] Guardado QR para sesión ${sessionId} en la base de datos`);
+                // Solo guarda el QR si no existe o si está vacío
+                if (!qrEnBase || qrEnBase === '' || qrEnBase === null) {
+                  await guardarQR(pool, sessionId, base64Qr);
+                  console.log(`[QR][DB] Guardado QR para sesión ${sessionId} en la base de datos`);
+                } else {
+                  console.log(`[QR][DB] Ya existe un QR para sesión ${sessionId}, no se guarda uno nuevo`);
+                }
               } else {
-                console.log(`[QR][DB] Ya existe un QR para sesión ${sessionId}, no se guarda uno nuevo`);
+                console.warn(`[QR][DB] pool no está disponible, no se guarda QR para sesión ${sessionId}`);
               }
-            } else {
-              console.warn(`[QR][DB] pool no está disponible, no se guarda QR para sesión ${sessionId}`);
+            } catch (err) {
+              console.error(`[QR][DB] Error guardando QR en la base de datos para sesión ${sessionId}:`, err);
             }
-          } catch (err) {
-            console.error(`[QR][DB] Error guardando QR en la base de datos para sesión ${sessionId}:`, err);
           }
-        },
+        } : {}),
         statusFind: async (statusSession, session) => {
           // Si la sesión se loguea, libera el bloqueo
           const estadosConectado = ['isLogged', 'inChat', 'CONNECTED', 'connected'];
@@ -330,7 +342,8 @@ async function createSession(sessionId, onQr, onMessage) {
 async function reconnectSession(sessionId, onQr, onMessage) {
   console.log(`[RECONNECT] Reintentando sesión ${sessionId}`);
   try {
-    await createSession(sessionId, onQr, onMessage);
+    // NO pases onQr, pasa un callback vacío
+    await createSession(sessionId, null, onMessage);
   } catch (err) {
     console.error(`[RECONNECT] Falló la reconexión de la sesión ${sessionId}:`, err);
   }
@@ -340,7 +353,8 @@ async function reconnectSession(sessionId, onQr, onMessage) {
 async function reconnectLoggedSessions(onQr, onMessage) {
   const sessions = await getLoggedSessions();
   for (const sessionId of sessions) {
-    await createSession(sessionId, onQr, onMessage);
+    // NO pases onQr, pasa null
+    await createSession(sessionId, null, onMessage);
   }
 }
 
