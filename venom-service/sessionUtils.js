@@ -1,6 +1,6 @@
 const fs = require('fs-extra');
 const path = require('path');
-const redisClient = require('./redis'); // Usa el nombre correcto de tu archivo
+const redisClient = require('./redisClient'); // Usa el nombre correcto de tu archivo
 
 function getSessionFolder(sessionId) {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
