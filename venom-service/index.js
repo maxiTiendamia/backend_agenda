@@ -24,7 +24,7 @@ redisClient.on('reconnecting', () => {
 redisClient.connect().catch((err) => {
   console.error('❌ Error conectando a Redis:', err);
 });
-const { createSession, getLoggedSessions, getSessionsWithInfo, reconnectSessionsWithInfo } = require('./wppconnect');
+const { createSession, getLoggedSessions, getSessionsWithInfo, reconnectSessionsWithInfo, reconnectLoggedSessions } = require('./wppconnect');
 const fs = require('fs');
 const path = require('path');
 const app = express();
