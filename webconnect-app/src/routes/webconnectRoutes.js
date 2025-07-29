@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const { pool } = require('./db');
@@ -8,6 +7,7 @@ const { guardarQR, limpiarQR } = require('./qrUtils');
 const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock } = require('./sessionUtils');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -82,6 +82,39 @@ app.post('/connect/:sessionId', async (req, res) => {
     });
     await saveSessionToRedis(sessionId);
     res.json({ ok: true, message: 'Sesión creada y guardada en Redis' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Obtener el QR actual de un cliente
+app.get('/qr/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  try {
+    const result = await pool.query('SELECT qr_code FROM tenants WHERE id = $1', [sessionId]);
+    if (result.rows.length > 0 && result.rows[0].qr_code) {
+      res.json({ ok: true, qr: result.rows[0].qr_code });
+    } else {
+      res.json({ ok: false, message: 'QR no disponible aún' });
+    }
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Recibe mensajes de WhatsApp y los reenvía a la API
+app.post('/webhook', async (req, res) => {
+  const { sessionId, telefono, mensaje } = req.body;
+  try {
+    // Reenviar a la API
+    const apiRes = await axios.post('http://localhost:8000/api/webhook', {
+      cliente_id: sessionId,
+      telefono,
+      mensaje
+    });
+    // Aquí deberías enviar la respuesta de la API al cliente por WhatsApp usando tu sesión
+    // Por ejemplo: await sendMessageToClient(sessionId, telefono, apiRes.data.mensaje);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
