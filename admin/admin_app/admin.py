@@ -22,7 +22,7 @@ def llamar_a_webconnect_async(cliente_id):
     try:
         webconnect_url = f"{WEBCONNECT_URL}/iniciar/{cliente_id}"
         print(f"🛠️ [Async] Enviando solicitud a webconnect para generar QR del cliente {cliente_id}")
-        response = requests.get(webconnect_url, timeout=10)
+        response = requests.post(webconnect_url, timeout=10)
         if response.ok:
             print("✅ [Async] webconnect generó QR correctamente")
         else:
@@ -51,8 +51,8 @@ def obtener_estado_sesion(cliente_id):
         sesiones = res.json()
 
         for sesion in sesiones:
-            if str(sesion["clienteId"]) == str(cliente_id):
-                estado = sesion["estado"]
+            if str(sesion.get("clienteId", sesion.get("id", ""))) == str(cliente_id):
+                estado = sesion.get("estado", "NO_INICIADA")
                 estilos = {
                     "CONNECTED": ("🟢", "#d4edda", "#155724"),
                     "DISCONNECTED": ("🔴", "#f8d7da", "#721c24"),
@@ -64,19 +64,13 @@ def obtener_estado_sesion(cliente_id):
                     "UNLAUNCHED": ("🔴", "#f8d7da", "#721c24")
                 }
                 icono, fondo, color = estilos.get(estado, ("⚪", "#eeeeee", "#333333"))
-                
-                # Mostrar información adicional si está disponible
                 info_extra = ""
-                if "enMemoria" in sesion and sesion["enMemoria"]:
-                    info_extra += " (En memoria)"
-                if "tieneArchivos" in sesion and sesion["tieneArchivos"]:
-                    info_extra += " (Con archivos)"
-                
+                if sesion.get("enMemoria"): info_extra += " (En memoria)"
+                if sesion.get("tieneArchivos"): info_extra += " (Con archivos)"
                 return Markup(
                     f'<div style="background-color:{fondo}; color:{color}; padding:6px 10px; border-radius:5px; display:inline-block;">{icono} {estado}{info_extra}</div><br>'
                     f'<a href="/admin/reiniciar/{cliente_id}" class="btn btn-sm btn-warning" style="margin-top: 4px;" onclick="return confirm(\'¿Seguro que deseas reiniciar esta sesión?\');">Reiniciar</a>'
                 )
-
         return Markup('<span style="background:#e0e0e0; padding:4px 8px; border-radius:5px;">⚪ No iniciada</span>')
     except Exception as e:
         print(f"❌ Error obteniendo estado de sesión para {cliente_id}: {e}")

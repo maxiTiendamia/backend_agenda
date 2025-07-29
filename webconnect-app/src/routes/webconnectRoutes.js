@@ -1,3 +1,40 @@
+// Endpoint para obtener el estado de todas las sesiones (mock básico)
+router.get('/estado-sesiones', async (req, res) => {
+  try {
+    // Ejemplo: obtener todos los clientes y su estado (ajusta según tu lógica real)
+    const result = await pool.query('SELECT id, qr_code FROM tenants');
+    const sesiones = result.rows.map(row => ({
+      clienteId: row.id,
+      estado: row.qr_code ? 'CONNECTED' : 'NO_INICIADA',
+      enMemoria: false,
+      tieneArchivos: false
+    }));
+    res.json(sesiones);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para regenerar QR manualmente
+router.post('/generar-qr/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  try {
+    await limpiarQR(pool, sessionId);
+    await limpiarSingletonLock(sessionId);
+    await createSession(sessionId, async (qr) => {
+      await guardarQR(pool, sessionId, qr, true);
+    });
+    res.json({ ok: true, message: 'QR regenerado y nueva sesión generada' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Endpoint para debug de errores de sesión (mock básico)
+router.get('/debug/errores', async (req, res) => {
+  // Aquí podrías devolver errores de sesión reales si los tienes
+  res.json({ session_errors: {} });
+});
 require('dotenv').config();
 const express = require('express');
 const router = express.Router();
