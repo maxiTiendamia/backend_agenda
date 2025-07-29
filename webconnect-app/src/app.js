@@ -2,7 +2,7 @@
 require('dotenv').config();
 const express = require('express');
 const Redis = require('ioredis');
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg'); // Cambiar a PostgreSQL
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -11,31 +11,30 @@ app.use(express.json());
 // Configuración de Redis
 const redis = new Redis(process.env.REDIS_URL || 'rediss://default:AcOQAAIjcDEzOGI2OWU1MzYxZDQ0YWQ2YWU3ODJlNWNmMGY5MjIzY3AxMA@literate-toucan-50064.upstash.io:6379');
 
-// Configuración de Base de Datos
-const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'your_user',
-  password: process.env.DB_PASSWORD || 'your_password',
-  database: process.env.DB_NAME || 'your_database',
-  port: process.env.DB_PORT || 3306
-};
+// Configuración de PostgreSQL usando la URL completa
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Necesario para Render
+  }
+});
 
 /**
  * Función para limpiar datos obsoletos en Redis comparando con la base de datos
  */
 async function limpiarDatosObsoletos() {
-  let dbConnection = null;
+  let dbClient = null;
   
   try {
     console.log('[CLEANUP] 🧹 Iniciando limpieza de datos obsoletos...');
     
-    // 1. Conectar a la base de datos
-    dbConnection = await mysql.createConnection(dbConfig);
-    console.log('[CLEANUP] ✅ Conectado a la base de datos');
+    // 1. Conectar a la base de datos PostgreSQL
+    dbClient = await pool.connect();
+    console.log('[CLEANUP] ✅ Conectado a la base de datos PostgreSQL');
     
     // 2. Obtener todos los IDs de tenants activos en la base de datos
-    const [tenants] = await dbConnection.execute('SELECT id FROM tenants WHERE activo = 1');
-    const tenantsActivos = tenants.map(tenant => tenant.id.toString());
+    const result = await dbClient.query('SELECT id FROM tenants WHERE activo = true');
+    const tenantsActivos = result.rows.map(tenant => tenant.id.toString());
     console.log(`[CLEANUP] 📊 Tenants activos en BD: ${tenantsActivos.length} encontrados`);
     console.log(`[CLEANUP] 📋 IDs activos: [${tenantsActivos.join(', ')}]`);
     
@@ -50,6 +49,7 @@ async function limpiarDatosObsoletos() {
              key.includes('client_') || 
              key.includes('qr_') || 
              key.includes('whatsapp_') ||
+             key.includes('tenant_') ||
              /^\d+$/.test(key); // Claves que son solo números (IDs)
     });
     
@@ -71,6 +71,8 @@ async function limpiarDatosObsoletos() {
         clienteId = key.replace('qr_', '').split('_')[0];
       } else if (key.includes('whatsapp_')) {
         clienteId = key.replace('whatsapp_', '').split('_')[0];
+      } else if (key.includes('tenant_')) {
+        clienteId = key.replace('tenant_', '').split('_')[0];
       } else if (/^\d+$/.test(key)) {
         clienteId = key;
       } else {
@@ -107,6 +109,8 @@ async function limpiarDatosObsoletos() {
           console.error(`[CLEANUP] Error eliminando clave ${key}:`, delError);
         }
       }
+    } else {
+      console.log(`[CLEANUP] ✨ No hay claves obsoletas para eliminar`);
     }
     
     // 7. Resumen final
@@ -128,10 +132,10 @@ async function limpiarDatosObsoletos() {
     console.error('[CLEANUP] ❌ Error durante la limpieza:', error);
     throw error;
   } finally {
-    // Cerrar conexión a la base de datos
-    if (dbConnection) {
-      await dbConnection.end();
-      console.log('[CLEANUP] 🔌 Conexión a BD cerrada');
+    // Liberar conexión a la base de datos
+    if (dbClient) {
+      dbClient.release();
+      console.log('[CLEANUP] 🔌 Conexión a BD liberada');
     }
   }
 }
@@ -183,20 +187,50 @@ app.post('/cleanup', async (req, res) => {
   }
 });
 
+// Endpoint para obtener estadísticas de Redis
+app.get('/redis-stats', async (req, res) => {
+  try {
+    const keys = await redis.keys('*');
+    const sessionKeys = keys.filter(key => {
+      return key.includes('session_') || 
+             key.includes('client_') || 
+             key.includes('qr_') || 
+             key.includes('whatsapp_') ||
+             key.includes('tenant_') ||
+             /^\d+$/.test(key);
+    });
+    
+    res.json({
+      totalKeys: keys.length,
+      sessionKeys: sessionKeys.length,
+      keys: sessionKeys
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const { createSession, testAPIConnection } = require('./app/wppconnect');
 
 // Función de inicialización
 async function inicializar() {
   try {
-    // 1. Probar conexión con la API
-    console.log('[INIT] 🚀 Iniciando aplicación...');
+    // 1. Probar conexión con PostgreSQL
+    console.log('[INIT] 🔌 Probando conexión con PostgreSQL...');
+    const client = await pool.connect();
+    await client.query('SELECT NOW()');
+    client.release();
+    console.log('[INIT] ✅ Conexión con PostgreSQL exitosa');
+    
+    // 2. Probar conexión con la API
+    console.log('[INIT] 🚀 Probando conexión con API...');
     await testAPIConnection();
     
-    // 2. Ejecutar limpieza inicial
+    // 3. Ejecutar limpieza inicial
     console.log('[INIT] 🧹 Ejecutando limpieza inicial...');
     await limpiarDatosObsoletos();
     
-    // 3. Programar limpieza periódica
+    // 4. Programar limpieza periódica
     programarLimpiezaPeriodica();
     
     console.log('[INIT] ✅ Aplicación inicializada correctamente');
@@ -219,11 +253,13 @@ app.listen(PORT, async () => {
 process.on('SIGTERM', async () => {
   console.log('[CLEANUP] 🛑 Cerrando aplicación...');
   await redis.disconnect();
+  await pool.end();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   console.log('[CLEANUP] 🛑 Cerrando aplicación...');
   await redis.disconnect();
+  await pool.end();
   process.exit(0);
 });
