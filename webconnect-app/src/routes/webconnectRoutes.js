@@ -73,7 +73,7 @@ async function saveSessionToRedis(sessionId) {
 }
 
 // Ejemplo de uso: al crear sesión, guardar archivos en Redis
-app.post('/connect/:sessionId', async (req, res) => {
+app.post('/iniciar/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   try {
     await ensureSessionFolder(sessionId);

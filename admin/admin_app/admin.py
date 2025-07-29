@@ -14,30 +14,29 @@ import threading
 
 print("✅ Servicio:", Servicio.tenant.property.back_populates)
 
-VENOM_URL = os.getenv("VENOM_URL", "http://195.26.250.62:3000")
-
+WEBCONNECT_URL = os.getenv("webconnect_url", "http://195.26.250.62:3000")
 basic_auth = BasicAuth()
 
 # ⬇️ Nueva función para generar QR en segundo plano
-def llamar_a_venom_async(cliente_id):
+def llamar_a_webconnect_async(cliente_id):
     try:
-        venom_url = f"{VENOM_URL}/iniciar/{cliente_id}"
-        print(f"🛠️ [Async] Enviando solicitud a Venom para generar QR del cliente {cliente_id}")
-        response = requests.get(venom_url, timeout=10)
+        webconnect_url = f"{WEBCONNECT_URL}/iniciar/{cliente_id}"
+        print(f"🛠️ [Async] Enviando solicitud a webconnect para generar QR del cliente {cliente_id}")
+        response = requests.get(webconnect_url, timeout=10)
         if response.ok:
-            print("✅ [Async] Venom generó QR correctamente")
+            print("✅ [Async] webconnect generó QR correctamente")
         else:
-            print(f"⚠️ [Async] Venom no respondió correctamente: {response.status_code}")
+            print(f"⚠️ [Async] webconnect no respondió correctamente: {response.status_code}")
     except Exception as e:
-        print(f"❌ [Async] Error al contactar a Venom: {e}")
+        print(f"❌ [Async] Error al contactar a webconnect: {e}")
 
 
 # ⬇️ Nueva función para regenerar QR manualmente
-def regenerar_qr_venom_async(cliente_id):
+def regenerar_qr_webconnect_async(cliente_id):
     try:
-        venom_url = f"{VENOM_URL}/generar-qr/{cliente_id}"
+        webconnect_url = f"{WEBCONNECT_URL}/generar-qr/{cliente_id}"
         print(f"🔄 [Async] Regenerando QR para el cliente {cliente_id}")
-        response = requests.post(venom_url, timeout=10)
+        response = requests.post(webconnect_url, timeout=10)
         if response.ok:
             print("✅ [Async] QR regenerado correctamente")
         else:
@@ -48,7 +47,7 @@ def regenerar_qr_venom_async(cliente_id):
 
 def obtener_estado_sesion(cliente_id):
     try:
-        res = requests.get(f"{VENOM_URL}/estado-sesiones", timeout=10)
+        res = requests.get(f"{WEBCONNECT_URL}/estado-sesiones", timeout=10)
         sesiones = res.json()
 
         for sesion in sesiones:
@@ -212,8 +211,8 @@ class TenantModelView(SecureModelView):
 
             if is_created and not model.qr_code:
                 db.session.flush()  # Para obtener el ID del modelo
-                threading.Thread(target=llamar_a_venom_async, args=(model.id,)).start()
-                flash("🔄 Solicitud enviada a Venom en segundo plano para generar el QR.", "info")
+                threading.Thread(target=llamar_a_webconnect_async, args=(model.id,)).start()
+                flash("🔄 Solicitud enviada a webconnect en segundo plano para generar el QR.", "info")
 
         except IntegrityError as e:
             db.session.rollback()
@@ -238,7 +237,7 @@ class SecureAdminIndexView(AdminIndexView):
         cantidad_por_estado = list(counter.values())
 
         try:
-            respuesta = requests.get(f"{VENOM_URL}/estado-sesiones", timeout=10)
+            respuesta = requests.get(f"{WEBCONNECT_URL}/estado-sesiones", timeout=10)
             estado_sesiones = respuesta.json()
         except Exception as e:
             estado_sesiones = {"error": str(e)}
@@ -246,7 +245,7 @@ class SecureAdminIndexView(AdminIndexView):
         # Consulta información de errores de sesión
         errores_sesion = {}
         try:
-            respuesta_errores = requests.get(f"{VENOM_URL}/debug/errores", timeout=10)
+            respuesta_errores = requests.get(f"{WEBCONNECT_URL}/debug/errores", timeout=10)
             if respuesta_errores.ok:
                 errores_sesion = respuesta_errores.json()
                 print(f"✅ Errores de sesión obtenidos: {len(errores_sesion.get('session_errors', {}))} clientes con errores")
@@ -280,15 +279,15 @@ class SecureAdminIndexView(AdminIndexView):
         if tenant:
             tenant.qr_code = None
             db.session.commit()
-        threading.Thread(target=regenerar_qr_venom_async, args=(cliente_id,)).start()
+        threading.Thread(target=regenerar_qr_webconnect_async, args=(cliente_id,)).start()
         flash(f"🔁 Regeneración de QR solicitada para cliente {cliente_id}.", "info")
         return redirect(request.referrer or url_for('admin.index'))
 
     @expose('/reset-errores/<int:cliente_id>')
     def reset_errores_cliente(self, cliente_id):
         try:
-            venom_url = f"{VENOM_URL}/reset-errores/{cliente_id}"
-            response = requests.post(venom_url, timeout=10)
+            webconnect_url = f"{WEBCONNECT_URL}/reset-errores/{cliente_id}"
+            response = requests.post(webconnect_url, timeout=10)
             if response.ok:
                 flash(f"✅ Errores reseteados para cliente {cliente_id}.", "success")
             else:
