@@ -13,6 +13,11 @@ app.get('/health', (req, res) => {
   res.send('Service is running');
 });
 
+const { createSession, testAPIConnection } = require('./src/app/wppconnect');
+
+// Probar conexión al iniciar
+testAPIConnection();
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
