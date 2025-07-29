@@ -75,80 +75,107 @@ async function limpiarSingletonLock(sessionId) {
 }
 
 // Crear sesión y manejar QR/mensajes
+const sesionesEnProceso = new Set();
+
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
-  await ensureSessionFolder(sessionId);
+  if (sesionesEnProceso.has(sessionId)) {
+    throw new Error(`⚠️ Sesión ${sessionId} ya está en proceso.`);
+  }
+  sesionesEnProceso.add(sessionId);
 
-  // Limpia cualquier SingletonLock antes de crear la sesión
-  await limpiarSingletonLock(sessionId);
-
-  // Carpeta única por sesión
-  const sessionPath = getSessionFolder(sessionId);
-
-  // Locker para evitar doble inicialización
   const redisKey = `session:lock:${sessionId}`;
   const isLocked = await redisClient.get(redisKey);
-  if (isLocked) throw new Error("Sesión ya está siendo inicializada");
-  await redisClient.set(redisKey, "1", 'EX', 30);
+  if (isLocked) {
+    sesionesEnProceso.delete(sessionId);
+    throw new Error("⚠️ Sesión ya está siendo inicializada (lock Redis).");
+  }
+  await redisClient.set(redisKey, "1", 'EX', 30); // Lock 30 segundos
 
   try {
-    const client = await createSession(
-      sessionId,
-      async (base64Qr) => {
-        if (permitirGuardarQR) {
-          await guardarQR(pool, sessionId, base64Qr);
-        }
-      },
-      async (message, client) => {
-        console.log(`[BOT] Mensaje recibido:`, message);
-        try {
-          const telefono = message.from.replace("@c.us", "");
-          const mensaje = message.body;
-          const cliente_id = sessionId;
+    await ensureSessionFolder(sessionId);
+    await limpiarSingletonLock(sessionId);
 
-          // CONSULTA SI EL NÚMERO ESTÁ BLOQUEADO
-          const result = await pool.query(
-            'SELECT 1 FROM blocked_numbers WHERE cliente_id = $1 AND telefono = $2 LIMIT 1',
-            [cliente_id, telefono]
-          );
-          if (result.rows.length > 0) {
-            console.log(`[BLOQUEADO] Mensaje de ${telefono} bloqueado para cliente ${cliente_id}.`);
-            return; // No reenvía ni responde
-          }
+    const sessionPath = getSessionFolder(sessionId);
 
-          const backendResponse = await axios.post(
-            "https://backend-agenda-2.onrender.com/api/webhook",
-            { telefono, mensaje, cliente_id }
-          );
-          const respuesta = backendResponse.data && backendResponse.data.mensaje;
-          if (respuesta) {
-            await client.sendText(`${telefono}@c.us`, respuesta);
+    const create = async () => {
+      return await createSession(
+        sessionId,
+        async (base64Qr) => {
+          if (permitirGuardarQR) {
+            await guardarQR(pool, sessionId, base64Qr);
           }
-        } catch (err) {
-          console.error("Error reenviando mensaje a backend o enviando respuesta:", err);
+        },
+        async (message, client) => {
+          console.log(`[BOT ${sessionId}] Mensaje recibido:`, message);
+          try {
+            const telefono = message.from.replace("@c.us", "");
+            const mensaje = message.body;
+            const cliente_id = sessionId;
+
+            const result = await pool.query(
+              'SELECT 1 FROM blocked_numbers WHERE cliente_id = $1 AND telefono = $2 LIMIT 1',
+              [cliente_id, telefono]
+            );
+            if (result.rows.length > 0) {
+              console.log(`[BLOQUEADO] Mensaje de ${telefono} bloqueado para cliente ${cliente_id}.`);
+              return;
+            }
+
+            const backendResponse = await axios.post(
+              "https://backend-agenda-2.onrender.com/api/webhook",
+              { telefono, mensaje, cliente_id }
+            );
+            const respuesta = backendResponse.data && backendResponse.data.mensaje;
+            if (respuesta) {
+              await client.sendText(`${telefono}@c.us`, respuesta);
+            }
+          } catch (err) {
+            console.error("Error reenviando mensaje o enviando respuesta:", err);
+          }
+        },
+        {
+          session: String(sessionId),
+          userDataDir: sessionPath,
+          multidevice: true,
+          headless: true,
+          browserArgs: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu'
+          ]
         }
-      },
-      {
-        // Asegúrate de pasar userDataDir y session
-        session: String(sessionId),
-        userDataDir: sessionPath,
-        multidevice: true,
-        headless: true,
-        browserArgs: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--single-process',
-          '--disable-gpu'
-        ]
+      );
+    };
+
+    try {
+      const client = await create();
+      sessions[sessionId] = client;
+      console.log(`✅ Sesión ${sessionId} iniciada correctamente`);
+      return client;
+    } catch (err) {
+      if (
+        err.message.includes("SingletonLock") ||
+        err.message.includes("ProcessSingleton")
+      ) {
+        console.warn(`🛠 Reintentando sesión ${sessionId} tras error de SingletonLock...`);
+        await limpiarSingletonLock(sessionId);
+        await new Promise(res => setTimeout(res, 1000));
+        const client = await create(); // segundo intento
+        sessions[sessionId] = client;
+        console.log(`✅ Sesión ${sessionId} iniciada tras reintento`);
+        return client;
+      } else {
+        throw err;
       }
-    );
-    sessions[sessionId] = client;
-    return client;
+    }
   } finally {
-    await redisClient.del(redisKey); // Libera el lock siempre
+    sesionesEnProceso.delete(sessionId);
+    await redisClient.del(redisKey); // Libera lock Redis
   }
 }
 
