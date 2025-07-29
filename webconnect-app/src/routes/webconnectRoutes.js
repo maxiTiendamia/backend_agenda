@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const router = express.Router();
 const { pool } = require('../app/database');
 const redisClient = require('../app/redisClient');
 const { createSession } = require('../app/wppconnect');
@@ -8,13 +9,9 @@ const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock } = require(
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json());
 
 // Endpoint para restaurar sesiones desde Redis al reiniciar el VPS
-app.post('/restore-sessions', async (req, res) => {
+router.post('/restore-sessions', async (req, res) => {
   try {
     const keys = await redisClient.keys('session:*');
     let restauradas = 0;
@@ -42,7 +39,7 @@ app.post('/restore-sessions', async (req, res) => {
 });
 
 // Endpoint para reiniciar QR: limpia el QR viejo y genera uno nuevo
-app.post('/restart-qr/:sessionId', async (req, res) => {
+router.post('/restart-qr/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   try {
     await limpiarQR(pool, sessionId);
@@ -73,7 +70,7 @@ async function saveSessionToRedis(sessionId) {
 }
 
 // Ejemplo de uso: al crear sesión, guardar archivos en Redis
-app.post('/iniciar/:sessionId', async (req, res) => {
+router.post('/iniciar/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   console.log(`[WEBCONNECT] Solicitud de inicio de sesión para cliente ${sessionId}`);
   try {
@@ -92,7 +89,7 @@ app.post('/iniciar/:sessionId', async (req, res) => {
 });
 
 // Obtener el QR actual de un cliente
-app.get('/qr/:sessionId', async (req, res) => {
+router.get('/qr/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   try {
     const result = await pool.query('SELECT qr_code FROM tenants WHERE id = $1', [sessionId]);
@@ -107,7 +104,7 @@ app.get('/qr/:sessionId', async (req, res) => {
 });
 
 // Recibe mensajes de WhatsApp y los reenvía a la API
-app.post('/webhook', async (req, res) => {
+router.post('/webhook', async (req, res) => {
   const { sessionId, telefono, mensaje } = req.body;
   try {
     // Reenviar a la API
@@ -124,7 +121,6 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+
+module.exports = router;
 
