@@ -130,7 +130,7 @@ async function createSession(sessionId, onQR) {
     client.onMessage(async (message) => {
       console.log(`[WEBCONNECT] 📨 Mensaje recibido en sesión ${sessionId}:`, message.body);
       
-      // ✨ Procesar mensaje y enviar respuesta automática usando tu API en Render
+      // ✨ Procesar mensaje y enviar respuesta automática usando tu API
       await procesarMensaje(sessionId, message, client);
     });
 
@@ -192,9 +192,6 @@ async function clearSession(sessionId) {
     } catch (err) {
       // Archivo no existe, no es problema
     }
-
-    // Opcional: eliminar todo el directorio de la sesión
-    // await fs.rmdir(sessionDir, { recursive: true });
   } catch (error) {
     console.error(`[WEBCONNECT] Error limpiando sesión ${sessionId}:`, error);
   }
