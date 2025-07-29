@@ -74,7 +74,6 @@ async function limpiarSingletonLock(sessionId) {
   buscarYEliminar(basePath);
 }
 
-// Crear sesión y manejar QR/mensajes
 const sesionesEnProceso = new Set();
 
 async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
@@ -179,16 +178,6 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
   }
 }
 
-// Guardar tokens.json en disco y Redis
-async function saveSessionToRedis(redisClient, sessionId) {
-  const sessionPath = getSessionFolder(sessionId);
-  const tokenPath = path.join(sessionPath, 'tokens.json');
-  if (fs.existsSync(tokenPath)) {
-    const data = fs.readFileSync(tokenPath);
-    await redisClient.set(`wppconnect:${sessionId}:tokens.json`, data);
-    console.log(`[SESSION][REDIS] Guardado tokens.json de sesión ${sessionId} en Redis`);
-  }
-}
 
 // Restaurar tokens.json desde Redis
 async function restoreSessionFromRedis(redisClient, sessionId) {
@@ -208,10 +197,11 @@ async function restaurarSesiones() {
   const sesionesLocales = fs.readdirSync(sessionDir).filter(f => fs.statSync(path.join(sessionDir, f)).isDirectory());
   const result = await pool.query('SELECT id FROM tenants');
   const idsValidos = result.rows.map(row => String(row.id));
+
   for (const sessionId of sesionesLocales) {
     if (!idsValidos.includes(sessionId)) {
-      // No existe: elimina la carpeta y las claves Redis
-      const dirPath = path.join(sessionDir, String(sessionId));
+      // Elimina carpeta y claves Redis de sesiones inválidas
+      const dirPath = path.join(sessionDir, sessionId);
       if (fs.existsSync(dirPath)) {
         fs.rmSync(dirPath, { recursive: true, force: true });
         console.log(`[CLEAN] Carpeta de sesión eliminada para cliente inexistente: ${sessionId}`);
@@ -220,16 +210,17 @@ async function restaurarSesiones() {
       for (const key of keys) {
         await redisClient.del(key);
       }
-      continue; // <-- IMPORTANTE: NO SIGUE CON LA RESTAURACIÓN DE ESTA SESIÓN
+      continue;
     }
-    // Si ya está en memoria, no intentes restaurar
+
     if (sessions[sessionId]) {
       console.log(`[RESTORE] Sesión ${sessionId} ya está en memoria, no se reconecta`);
       continue;
     }
-    // Elimina el SingletonLock si existe (evita errores de Chromium)
+
+    // Limpia locks antes de crear sesión
     await limpiarSingletonLock(sessionId);
-    // Siempre intenta restaurar la sesión si existe la carpeta
+
     try {
       await crearSesionWPP(sessionId, false);
       console.log(`Restaurando sesión local ${sessionId}`);
@@ -238,6 +229,7 @@ async function restaurarSesiones() {
     }
   }
 }
+
 
 // Endpoints
 
