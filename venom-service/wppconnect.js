@@ -207,6 +207,8 @@ async function createSession(sessionId, onQr, onMessage) {
     }
     sessionLocks[sessionId] = true;
     try {
+      await restoreSessionFromRedis(redisClient, sessionId);
+
       console.log(`[DEBUG] Llamando a createSession con sessionId=${sessionId}, carpeta=${getSessionFolder(sessionId)}`);
       const state = await getSessionState(sessionId);
 
@@ -345,21 +347,20 @@ async function createSession(sessionId, onQr, onMessage) {
       client.onStateChange(async (state) => {
         console.log(`[STATE CHANGE] Sesión ${sessionId}: ${state}`);
         if (state === 'CONNECTED') {
-          const sessionPath = getSessionFolder(sessionId);
-          const tokenPath = path.join(sessionPath, 'tokens.json');
-          const sessionDataPath = path.join(sessionPath, 'sessionData.json');
           try {
             const tokens = await client.getSessionTokenBrowser();
+            const sessionPath = getSessionFolder(sessionId);
+            const tokenPath = path.join(sessionPath, 'tokens.json');
 
             await fsExtra.ensureDir(sessionPath);
             await fsExtra.writeFile(tokenPath, JSON.stringify(tokens));
 
-            console.log(`[SESSION][DISK] Archivos guardados para sesión ${sessionId}`);
+            console.log(`[SESSION][DISK] tokens.json guardado para sesión ${sessionId}`);
 
-            // Guardar en Redis también
-            await redisClient.set(`wppconnect:${sessionId}:tokens.json`, JSON.stringify(tokens));
+            // Guardar en Redis usando la función utilitaria
+            await saveSessionToRedis(redisClient, sessionId);
           } catch (e) {
-            console.error(`[SESSION][SAVE] Error guardando archivos para sesión ${sessionId}:`, e.message);
+            console.error(`[SESSION][SAVE] Error guardando tokens.json para sesión ${sessionId}:`, e.message);
           }
         }
       });

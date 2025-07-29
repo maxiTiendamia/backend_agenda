@@ -152,6 +152,29 @@ async function crearSesionWPP(sessionId, permitirGuardarQR = true) {
   }
 }
 
+// Guardar tokens.json en disco y Redis
+async function saveSessionToRedis(redisClient, sessionId) {
+  const sessionPath = getSessionFolder(sessionId);
+  const tokenPath = path.join(sessionPath, 'tokens.json');
+  if (fs.existsSync(tokenPath)) {
+    const data = fs.readFileSync(tokenPath);
+    await redisClient.set(`wppconnect:${sessionId}:tokens.json`, data);
+    console.log(`[SESSION][REDIS] Guardado tokens.json de sesión ${sessionId} en Redis`);
+  }
+}
+
+// Restaurar tokens.json desde Redis
+async function restoreSessionFromRedis(redisClient, sessionId) {
+  const sessionPath = getSessionFolder(sessionId);
+  const tokenPath = path.join(sessionPath, 'tokens.json');
+  const data = await redisClient.get(`wppconnect:${sessionId}:tokens.json`);
+  if (data) {
+    fs.mkdirSync(sessionPath, { recursive: true });
+    fs.writeFileSync(tokenPath, data);
+    console.log(`[SESSION][REDIS] Restaurado tokens.json de sesión ${sessionId} en ${tokenPath} (size: ${data.length})`);
+  }
+}
+
 // Restaurar sesiones desde Redis (para todas las que tienen info previa)
 async function restaurarSesiones() {
   const sessionDir = process.env.SESSION_FOLDER || path.join(__dirname, 'tokens');
