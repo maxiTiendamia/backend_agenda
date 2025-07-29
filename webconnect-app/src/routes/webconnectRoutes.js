@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const router = express.Router();
@@ -6,10 +5,19 @@ const { pool } = require('../app/database');
 const redisClient = require('../app/redisClient');
 const { createSession } = require('../app/wppconnect');
 const { guardarQR, limpiarQR } = require('../app/qrUtils');
-const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock } = require('../app/sessionUtils');
+const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock, getSession } = require('../app/sessionUtils');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+
+// NUEVA FUNCIÓN: Enviar mensaje por WhatsApp usando la sesión correspondiente
+async function sendMessageToClient(sessionId, telefono, mensaje) {
+  const session = getSession(String(sessionId));
+  if (!session) throw new Error(`No existe sesión activa para el cliente ${sessionId}`);
+  // Asegúrate de que el número esté en formato internacional y termine con @c.us
+  const chatId = `${telefono}@c.us`;
+  await session.sendMessage(chatId, mensaje);
+}
 
 // Endpoint para obtener el estado de todas las sesiones (mock básico)
 router.get('/estado-sesiones', async (req, res) => {
@@ -159,7 +167,7 @@ router.get('/qr/:sessionId', async (req, res) => {
   }
 });
 
-// Recibe mensajes de WhatsApp y los reenvía a la API
+// Recibe mensajes de WhatsApp y los reenvía a la API y reenvía respuesta al usuario
 router.post('/webhook', async (req, res) => {
   const { sessionId, telefono, mensaje } = req.body;
   try {
@@ -169,14 +177,18 @@ router.post('/webhook', async (req, res) => {
       telefono,
       mensaje
     });
-    // Aquí deberías enviar la respuesta de la API al cliente por WhatsApp usando tu sesión
-    // Por ejemplo: await sendMessageToClient(sessionId, telefono, apiRes.data.mensaje);
+    // Enviar la respuesta de la API al cliente por WhatsApp usando la sesión correspondiente
+    if (apiRes.data && apiRes.data.mensaje && apiRes.data.mensaje.trim() !== "") {
+      await sendMessageToClient(sessionId, telefono, apiRes.data.mensaje);
+      console.log(`[WEBCONNECT] Mensaje enviado a ${telefono}: ${apiRes.data.mensaje}`);
+    } else {
+      console.log(`[WEBCONNECT] No hay mensaje para enviar a ${telefono}`);
+    }
     res.json({ ok: true });
   } catch (err) {
+    console.error(`[WEBCONNECT][ERROR] Al procesar webhook:`, err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-
 module.exports = router;
-

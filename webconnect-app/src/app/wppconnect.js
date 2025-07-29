@@ -2,6 +2,15 @@
 const wppconnect = require('@wppconnect-team/wppconnect');
 const path = require('path');
 
+// Objeto para gestionar las instancias activas por sesión
+const sessions = {};
+
+/**
+ * Crea una sesión de WhatsApp y la guarda en el objeto sessions.
+ * @param {string|number} sessionId - ID de la sesión/cliente
+ * @param {function} onQR - Callback que recibe el QR generado
+ * @returns {Promise<object>} - Cliente de wppconnect
+ */
 async function createSession(sessionId, onQR) {
   // Asegurar que cada sesión tenga su propio directorio
   const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
@@ -38,8 +47,6 @@ async function createSession(sessionId, onQR) {
       },
       statusFind: (statusSession, session) => {
         console.log(`[WEBCONNECT] Estado de sesión ${sessionId}: ${statusSession}`);
-        
-        // Manejar diferentes estados
         if (statusSession === 'qrReadSuccess') {
           console.log(`[WEBCONNECT] ✅ QR escaneado exitosamente para sesión ${sessionId}`);
         } else if (statusSession === 'qrReadFail') {
@@ -49,10 +56,12 @@ async function createSession(sessionId, onQR) {
     });
 
     console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} creada exitosamente`);
-    
-    // Configurar eventos del cliente
+
+    // Guardar la instancia en sessions
+    sessions[sessionId] = client;
+
+    // Configurar eventos del cliente (opcional)
     client.onMessage(async (message) => {
-      // Aquí puedes manejar mensajes entrantes
       console.log(`[WEBCONNECT] Mensaje recibido en sesión ${sessionId}:`, message.body);
     });
 
@@ -64,13 +73,24 @@ async function createSession(sessionId, onQR) {
   }
 }
 
-// Función para limpiar sesión específica
+/**
+ * Devuelve la instancia activa de WhatsApp para un sessionId.
+ * @param {string|number} sessionId
+ * @returns {object|undefined}
+ */
+function getSession(sessionId) {
+  return sessions[sessionId];
+}
+
+/**
+ * Limpia la sesión específica y la elimina del pool de sesiones.
+ * @param {string|number} sessionId
+ */
 async function clearSession(sessionId) {
   const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
   const fs = require('fs').promises;
   
   try {
-    // Eliminar el archivo SingletonLock específico
     const lockFile = path.join(sessionDir, 'SingletonLock');
     try {
       await fs.unlink(lockFile);
@@ -78,13 +98,14 @@ async function clearSession(sessionId) {
     } catch (err) {
       // Archivo no existe, no es problema
     }
-    
-    // Opcionalmente eliminar todo el directorio de la sesión
+    // Eliminar del pool en memoria
+    delete sessions[sessionId];
+
+    // Opcional: eliminar todo el directorio de la sesión
     // await fs.rmdir(sessionDir, { recursive: true });
-    
   } catch (error) {
     console.error(`[WEBCONNECT] Error limpiando sesión ${sessionId}:`, error);
   }
 }
 
-module.exports = { createSession, clearSession };
+module.exports = { createSession, clearSession, getSession };
