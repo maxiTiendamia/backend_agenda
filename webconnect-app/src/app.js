@@ -32,17 +32,34 @@ async function limpiarDatosObsoletos() {
     dbClient = await pool.connect();
     console.log('[CLEANUP] ✅ Conectado a la base de datos PostgreSQL');
     
-    // 2. Obtener todos los IDs de tenants activos en la base de datos
-    const result = await dbClient.query('SELECT id FROM tenants WHERE activo = true');
-    const tenantsActivos = result.rows.map(tenant => tenant.id.toString());
-    console.log(`[CLEANUP] 📊 Tenants activos en BD: ${tenantsActivos.length} encontrados`);
-    console.log(`[CLEANUP] 📋 IDs activos: [${tenantsActivos.join(', ')}]`);
+    // 2. Verificar estructura de la tabla tenants
+    const tableInfo = await dbClient.query(`
+      SELECT column_name, data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'tenants'
+      ORDER BY ordinal_position
+    `);
     
-    // 3. Obtener todas las claves en Redis relacionadas con sesiones
+    console.log('[CLEANUP] 📋 Columnas de la tabla tenants:');
+    tableInfo.rows.forEach(col => {
+      console.log(`[CLEANUP]   - ${col.column_name} (${col.data_type})`);
+    });
+    
+    // 3. Obtener todos los IDs de tenants (sin filtro de estado ya que no hay columna activo)
+    // Simplemente obtener todos los tenants existentes
+    const query = 'SELECT id FROM tenants';
+    console.log(`[CLEANUP] 🔍 Ejecutando consulta: ${query}`);
+    
+    const result = await dbClient.query(query);
+    const tenantsActivos = result.rows.map(tenant => tenant.id.toString());
+    console.log(`[CLEANUP] 📊 Tenants en BD: ${tenantsActivos.length} encontrados`);
+    console.log(`[CLEANUP] 📋 IDs encontrados: [${tenantsActivos.join(', ')}]`);
+    
+    // 4. Obtener todas las claves en Redis relacionadas con sesiones
     const redisKeys = await redis.keys('*');
     console.log(`[CLEANUP] 🔍 Claves en Redis: ${redisKeys.length} encontradas`);
     
-    // 4. Filtrar claves que parecen ser de sesiones/clientes
+    // 5. Filtrar claves que parecen ser de sesiones/clientes
     const sessionKeys = redisKeys.filter(key => {
       // Buscar patrones comunes de claves de sesión
       return key.includes('session_') || 
@@ -54,8 +71,20 @@ async function limpiarDatosObsoletos() {
     });
     
     console.log(`[CLEANUP] 🎯 Claves de sesión encontradas: ${sessionKeys.length}`);
+    console.log(`[CLEANUP] 🔍 Claves encontradas: [${sessionKeys.join(', ')}]`);
     
-    // 5. Revisar cada clave y extraer el ID del cliente
+    // Si no hay tenants o no hay claves de sesión, no hacer nada
+    if (tenantsActivos.length === 0) {
+      console.log('[CLEANUP] ⚠️ No hay tenants en la base de datos');
+      return { clavesValidas: 0, clavesEliminadas: 0, detalles: { validas: [], eliminadas: [] } };
+    }
+    
+    if (sessionKeys.length === 0) {
+      console.log('[CLEANUP] ✨ No hay claves de sesión en Redis');
+      return { clavesValidas: 0, clavesEliminadas: 0, detalles: { validas: [], eliminadas: [] } };
+    }
+    
+    // 6. Revisar cada clave y extraer el ID del cliente
     let clavesObsoletas = [];
     let clavesValidas = [];
     
@@ -97,7 +126,7 @@ async function limpiarDatosObsoletos() {
       }
     }
     
-    // 6. Eliminar claves obsoletas de Redis
+    // 7. Eliminar claves obsoletas de Redis
     if (clavesObsoletas.length > 0) {
       console.log(`[CLEANUP] 🗑️ Eliminando ${clavesObsoletas.length} claves obsoletas...`);
       
@@ -113,7 +142,7 @@ async function limpiarDatosObsoletos() {
       console.log(`[CLEANUP] ✨ No hay claves obsoletas para eliminar`);
     }
     
-    // 7. Resumen final
+    // 8. Resumen final
     console.log(`[CLEANUP] 📊 Resumen de limpieza:`);
     console.log(`[CLEANUP] ✅ Claves válidas mantenidas: ${clavesValidas.length}`);
     console.log(`[CLEANUP] 🗑️ Claves obsoletas eliminadas: ${clavesObsoletas.length}`);
