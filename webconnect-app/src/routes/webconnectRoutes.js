@@ -1,7 +1,19 @@
+
+require('dotenv').config();
+const express = require('express');
+const router = express.Router();
+const { pool } = require('../app/database');
+const redisClient = require('../app/redisClient');
+const { createSession } = require('../app/wppconnect');
+const { guardarQR, limpiarQR } = require('../app/qrUtils');
+const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock } = require('../app/sessionUtils');
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+
 // Endpoint para obtener el estado de todas las sesiones (mock básico)
 router.get('/estado-sesiones', async (req, res) => {
   try {
-    // Ejemplo: obtener todos los clientes y su estado (ajusta según tu lógica real)
     const result = await pool.query('SELECT id, qr_code FROM tenants');
     const sesiones = result.rows.map(row => ({
       clienteId: row.id,
@@ -32,20 +44,8 @@ router.post('/generar-qr/:sessionId', async (req, res) => {
 
 // Endpoint para debug de errores de sesión (mock básico)
 router.get('/debug/errores', async (req, res) => {
-  // Aquí podrías devolver errores de sesión reales si los tienes
   res.json({ session_errors: {} });
 });
-require('dotenv').config();
-const express = require('express');
-const router = express.Router();
-const { pool } = require('../app/database');
-const redisClient = require('../app/redisClient');
-const { createSession } = require('../app/wppconnect');
-const { guardarQR, limpiarQR } = require('../app/qrUtils');
-const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock } = require('../app/sessionUtils');
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
 
 // Endpoint para restaurar sesiones desde Redis al reiniciar el VPS
 router.post('/restore-sessions', async (req, res) => {
