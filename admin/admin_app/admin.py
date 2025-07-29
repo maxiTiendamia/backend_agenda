@@ -237,7 +237,6 @@ class SecureAdminIndexView(AdminIndexView):
         estados_reservas = list(counter.keys())
         cantidad_por_estado = list(counter.values())
 
-        # Consulta al venom-service para estados de sesión
         try:
             respuesta = requests.get(f"{VENOM_URL}/estado-sesiones", timeout=10)
             estado_sesiones = respuesta.json()

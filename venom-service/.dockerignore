@@ -1,6 +1,0 @@
-node_modules
-sessions
-tokens
-*.log
-.DS_Store
-.env

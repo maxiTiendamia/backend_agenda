@@ -159,7 +159,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             state["mode"] = "human"
             state["step"] = "human_mode"
             set_user_state(telefono, state)
-            # Solo notificar al venom-service
             try:
                 import asyncio
                 asyncio.create_task(notificar_chat_humano_completo(tenant.id, telefono, mensaje))

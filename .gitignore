@@ -1,11 +1,11 @@
 # Carpeta de sesiones y tokens temporales
 sessions/
-venom-service/sessions/
-venom-service/tokens/
+webconnect-app/sessions/
+webconnect-app/tokens/
 
 # Dependencias
 node_modules/
-venom-service/node_modules/
+webconnect-app/node_modules/
 
 # Archivos de Python
 __pycache__/

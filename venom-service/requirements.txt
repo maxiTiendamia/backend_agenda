@@ -1,8 +1,0 @@
-@wppconnect-team/wppconnect
-express
-dotenv
-axios
-pg
-redis
-tar
-unzipper
