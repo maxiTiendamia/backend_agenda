@@ -15,12 +15,26 @@ const axios = require('axios');
 router.get('/estado-sesiones', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, qr_code FROM tenants');
-    const sesiones = result.rows.map(row => ({
-      clienteId: row.id,
-      estado: row.qr_code ? 'CONNECTED' : 'NO_INICIADA',
-      enMemoria: false,
-      tieneArchivos: false
-    }));
+    const sesiones = result.rows.map(row => {
+      // Estado realista:
+      // - NO_INICIADA: no hay QR
+      // - QR_GENERATED: hay QR pero no hay archivos de sesión
+      // - CONNECTED: hay archivos de sesión (simulado si existe carpeta de sesión)
+      let estado = 'NO_INICIADA';
+      const sessionFolder = getSessionFolder(String(row.id));
+      const tieneArchivos = fs.existsSync(sessionFolder) && fs.readdirSync(sessionFolder).length > 0;
+      if (tieneArchivos) {
+        estado = 'CONNECTED';
+      } else if (row.qr_code) {
+        estado = 'QR_GENERATED';
+      }
+      return {
+        clienteId: row.id,
+        estado,
+        enMemoria: false,
+        tieneArchivos
+      };
+    });
     res.json(sesiones);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -31,13 +45,18 @@ router.get('/estado-sesiones', async (req, res) => {
 router.post('/generar-qr/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   try {
+    console.log(`[WEBCONNECT] Reinicio manual de QR para cliente ${sessionId}`);
+    // Eliminar QR de la base antes de generar uno nuevo
     await limpiarQR(pool, sessionId);
     await limpiarSingletonLock(sessionId);
     await createSession(sessionId, async (qr) => {
+      console.log(`[WEBCONNECT] QR generado para cliente ${sessionId} (manual)`);
       await guardarQR(pool, sessionId, qr, true);
+      console.log(`[WEBCONNECT] QR guardado en base de datos para cliente ${sessionId}`);
     });
     res.json({ ok: true, message: 'QR regenerado y nueva sesión generada' });
   } catch (err) {
+    console.error(`[WEBCONNECT][ERROR] Error al regenerar QR para ${sessionId}:`, err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
