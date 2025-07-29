@@ -235,4 +235,11 @@ async function testAPIConnection() {
   }
 }
 
-module.exports = { createSession, clearSession, getSession, sendMessage, testAPIConnection };
+module.exports = { 
+  createSession, 
+  clearSession, 
+  getSession, 
+  sendMessage, 
+  testAPIConnection,
+  sessions // Exportar el objeto sessions para acceso externo
+};

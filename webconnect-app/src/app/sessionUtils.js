@@ -2,6 +2,9 @@
 const path = require('path');
 const fs = require('fs');
 
+// Pool de sesiones activas (importar desde wppconnect.js)
+let sessions = {};
+
 function getSessionFolder(sessionId) {
   return path.join(__dirname, '../../tokens', `session_${sessionId}`);
 }
@@ -41,9 +44,48 @@ async function limpiarSesionCompleta(sessionId) {
   }
 }
 
+// Función para obtener sesión activa
+function getSession(sessionId) {
+  // Importar sessions desde wppconnect.js si no está disponible
+  try {
+    const { sessions: wppSessions } = require('./wppconnect');
+    sessions = wppSessions || sessions;
+  } catch (e) {
+    // Usar sessions local
+  }
+  return sessions[sessionId];
+}
+
+// Función para verificar estado real de una sesión
+async function verificarEstadoSesion(sessionId) {
+  const session = getSession(sessionId);
+  if (!session) {
+    return { estado: 'NO_ENCONTRADA', conectado: false };
+  }
+
+  try {
+    const isConnected = await session.isConnected();
+    const connectionState = await session.getConnectionState();
+    
+    return {
+      estado: connectionState || (isConnected ? 'CONNECTED' : 'DISCONNECTED'),
+      conectado: isConnected,
+      enMemoria: true
+    };
+  } catch (error) {
+    return {
+      estado: 'ERROR',
+      conectado: false,
+      error: error.message
+    };
+  }
+}
+
 module.exports = { 
   getSessionFolder, 
   ensureSessionFolder, 
   limpiarSingletonLock,
-  limpiarSesionCompleta 
+  limpiarSesionCompleta,
+  getSession,
+  verificarEstadoSesion
 };
