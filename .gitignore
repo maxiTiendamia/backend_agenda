@@ -6,7 +6,6 @@ webconnect-app/tokens/
 # Dependencias
 node_modules/
 webconnect-app/node_modules/
-webconnect-app/.env/
 # Archivos de Python
 __pycache__/
 
