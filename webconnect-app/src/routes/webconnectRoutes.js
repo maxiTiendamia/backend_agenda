@@ -75,14 +75,18 @@ async function saveSessionToRedis(sessionId) {
 // Ejemplo de uso: al crear sesión, guardar archivos en Redis
 app.post('/iniciar/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
+  console.log(`[WEBCONNECT] Solicitud de inicio de sesión para cliente ${sessionId}`);
   try {
     await ensureSessionFolder(sessionId);
     await createSession(sessionId, async (qr) => {
+      console.log(`[WEBCONNECT] QR generado para cliente ${sessionId}`);
       await guardarQR(pool, sessionId, qr, true);
     });
     await saveSessionToRedis(sessionId);
+    console.log(`[WEBCONNECT] Sesión ${sessionId} creada y guardada en Redis`);
     res.json({ ok: true, message: 'Sesión creada y guardada en Redis' });
   } catch (err) {
+    console.error(`[WEBCONNECT][ERROR] Error al crear sesión para ${sessionId}:`, err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
