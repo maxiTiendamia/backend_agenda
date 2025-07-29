@@ -1,10 +1,10 @@
 require('dotenv').config();
 const express = require('express');
-const { pool } = require('./db');
-const redisClient = require('./redisClient');
-const { createSession } = require('./wppconnect');
-const { guardarQR, limpiarQR } = require('./qrUtils');
-const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock } = require('./sessionUtils');
+const { pool } = require('../app/database');
+const redisClient = require('../app/redisClient');
+const { createSession } = require('../app/wppconnect');
+const { guardarQR, limpiarQR } = require('../app/qrUtils');
+const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock } = require('../app/sessionUtils');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
