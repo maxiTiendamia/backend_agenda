@@ -13,7 +13,7 @@ app.get('/health', (req, res) => {
   res.send('Service is running');
 });
 
-const { createSession, testAPIConnection } = require('./src/app/wppconnect');
+const { createSession, testAPIConnection } = require('./app/wppconnect');
 
 // Probar conexión al iniciar
 testAPIConnection();
