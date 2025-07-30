@@ -68,7 +68,7 @@ def get_available_slots(
             busy.append((start_dt, end_dt))
             print(f"📅 Evento de todo el día detectado: {start_date_only} - Bloqueando día completo")
 
-    # Parsear y normalizar horarios laborales .
+    # Parsear y normalizar horarios laborales
     if isinstance(working_hours_json, str):
         try:
             working_hours = json.loads(working_hours_json)
@@ -91,12 +91,42 @@ def get_available_slots(
 
     while current_date < end_date.date() and turnos_generados < max_turnos:
         day_str = current_date.strftime('%A').lower()
+        print(f"🔍 Procesando día: {current_date.strftime('%d/%m')} ({day_str})")
+        print(f"🔍 Horarios disponibles para {day_str}: {working_hours.get(day_str, 'No definido')}")
+        
         if day_str in working_hours:
             for period in working_hours[day_str]:
-                from_str, to_str = period.split('-')
-                start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(from_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-                end_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(to_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-
+                # Corregir el parsing de los horarios
+                if isinstance(period, dict):
+                    from_str = period['from']
+                    to_str = period['to']
+                else:
+                    # Si es string con formato "08:00-00:00"
+                    from_str, to_str = period.split('-')
+                
+                print(f"🔍 Procesando período: {from_str} - {to_str}")
+                
+                try:
+                    start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(from_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
+                    
+                    # Manejar horarios que van hasta medianoche (00:00)
+                    if to_str == '00:00':
+                        # Si termina a medianoche, usar 23:59 del mismo día
+                        end_hour = datetime.datetime.combine(current_date, datetime.time(23, 59)).replace(tzinfo=URUGUAY_TZ)
+                    else:
+                        end_time = datetime.datetime.strptime(to_str, '%H:%M').time()
+                        # Si la hora de fin es menor que la de inicio, es del día siguiente
+                        if end_time < datetime.datetime.strptime(from_str, '%H:%M').time():
+                            end_hour = datetime.datetime.combine(current_date + datetime.timedelta(days=1), end_time).replace(tzinfo=URUGUAY_TZ)
+                        else:
+                            end_hour = datetime.datetime.combine(current_date, end_time).replace(tzinfo=URUGUAY_TZ)
+                    
+                    print(f"🔍 Horario calculado: {start_hour.strftime('%d/%m %H:%M')} - {end_hour.strftime('%d/%m %H:%M')}")
+                    
+                except ValueError as e:
+                    print(f"❌ Error al parsear horarios: {e}")
+                    continue
+                
                 # Si es hoy y el horario de inicio ya pasó, el primer turno debe ser al menos dentro de 20 minutos
                 if current_date == now.date() and start_hour < now + datetime.timedelta(minutes=20):
                     slot_start = now + datetime.timedelta(minutes=20)
@@ -119,25 +149,25 @@ def get_available_slots(
                 slot_end = end_hour
                 delta = datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
 
+                print(f"🔍 Buscando slots desde {slot_start.strftime('%d/%m %H:%M')} hasta {slot_end.strftime('%d/%m %H:%M')}")
+                slots_encontrados_periodo = 0
+
                 while slot_start + datetime.timedelta(minutes=service_duration) <= slot_end:
                     # No ofrecer turnos que empiecen antes de la hora actual + 20 minutos solo si es hoy y ya pasó el horario de inicio
                     if current_date == now.date() and slot_start < now + datetime.timedelta(minutes=20):
-                        slot_start += datetime.timedelta(minutes=30 if solo_horas_exactas else service_duration + intervalo_entre_turnos)
+                        if solo_horas_exactas:
+                            if slot_start.minute == 0:
+                                slot_start = slot_start.replace(minute=30)
+                            else:
+                                slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
+                        else:
+                            slot_start += delta
                         continue
 
                     slot_final = slot_start + datetime.timedelta(minutes=service_duration)
                     overlap_count = sum(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
                     )
-                    
-                    # Debug: Log de verificación de solapamientos
-                    if current_date.strftime('%d/%m') == '31/07':
-                        print(f"🔍 Verificando slot {slot_start.strftime('%d/%m %H:%M')} - {slot_final.strftime('%d/%m %H:%M')}")
-                        for b_start, b_end in busy:
-                            if b_start.date() == current_date or b_end.date() == current_date:
-                                overlap = b_start < slot_final and b_end > slot_start
-                                print(f"    Evento: {b_start.strftime('%d/%m %H:%M')} - {b_end.strftime('%d/%m %H:%M')} | Solapamiento: {overlap}")
-                        print(f"    Total overlaps: {overlap_count}")
                     
                     if overlap_count >= cantidad:
                         # Ya hay suficientes reservas en este horario, avanzar al siguiente slot
@@ -158,6 +188,8 @@ def get_available_slots(
                     if overlap_count < cantidad and not hay_cerca:
                         available.append(slot_start)
                         turnos_generados += 1
+                        slots_encontrados_periodo += 1
+                        print(f"✅ Slot agregado: {slot_start.strftime('%d/%m %H:%M')} (Total: {turnos_generados})")
                         if turnos_generados >= max_turnos:
                             print(f"🔹 Se alcanzó el máximo de turnos: {max_turnos}")
                             break
@@ -170,8 +202,17 @@ def get_available_slots(
                             slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
                     else:
                         slot_start += delta
+                
+                print(f"🔍 Slots encontrados en este período: {slots_encontrados_periodo}")
+                
+                if turnos_generados >= max_turnos:
+                    break
+        else:
+            print(f"❌ No hay horarios definidos para {day_str}")
+            
         current_date += datetime.timedelta(days=1)
 
+    print(f"🔍 Total de turnos disponibles encontrados: {len(available)}")
     return available
 
 def create_event(calendar_id, slot_dt, user_phone, service_account_info, duration_minutes, client_service):
