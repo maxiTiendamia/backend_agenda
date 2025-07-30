@@ -106,6 +106,9 @@ async function limpiarDatosObsoletos() {
     const path = require('path');
     const tokensDir = path.join(__dirname, 'tokens');
     
+    // 🔧 INICIALIZAR VARIABLE AQUÍ
+    let directoriosObsoletos = [];
+    
     if (fs.existsSync(tokensDir)) {
       const sessionDirs = fs.readdirSync(tokensDir)
         .filter(dir => dir.startsWith('session_'))
@@ -113,7 +116,8 @@ async function limpiarDatosObsoletos() {
 
       console.log(`[CLEANUP] 📁 Directorios de sesión encontrados: [${sessionDirs.join(', ')}]`);
       
-      const directoriosObsoletos = sessionDirs.filter(sessionId => !tenantsActivos.includes(sessionId));
+      // 🔧 ASIGNAR VALOR AQUÍ
+      directoriosObsoletos = sessionDirs.filter(sessionId => !tenantsActivos.includes(sessionId));
       
       if (directoriosObsoletos.length > 0) {
         console.log(`[CLEANUP] 🗑️ Eliminando ${directoriosObsoletos.length} directorios obsoletos...`);
@@ -130,23 +134,25 @@ async function limpiarDatosObsoletos() {
       } else {
         console.log(`[CLEANUP] ✅ No hay directorios obsoletos para eliminar`);
       }
+    } else {
+      console.log(`[CLEANUP] 📁 No existe directorio de tokens`);
     }
     
     // 5. Resumen final
     console.log(`[CLEANUP] 📊 Resumen de limpieza:`);
     console.log(`[CLEANUP] ✅ Claves válidas mantenidas: ${clavesValidas.length}`);
     console.log(`[CLEANUP] 🗑️ Claves obsoletas eliminadas: ${clavesObsoletas.length}`);
-    console.log(`[CLEANUP] 🗑️ Directorios obsoletos eliminados: ${directoriosObsoletos?.length || 0}`);
+    console.log(`[CLEANUP] 🗑️ Directorios obsoletos eliminados: ${directoriosObsoletos.length}`);
     console.log(`[CLEANUP] 🧹 Limpieza completada exitosamente`);
     
     return {
       clavesValidas: clavesValidas.length,
       clavesEliminadas: clavesObsoletas.length,
-      directoriosEliminados: directoriosObsoletos?.length || 0,
+      directoriosEliminados: directoriosObsoletos.length,
       detalles: {
         validas: clavesValidas,
         eliminadas: clavesObsoletas,
-        directoriosEliminados: directoriosObsoletos || []
+        directoriosEliminados: directoriosObsoletos
       }
     };
     
