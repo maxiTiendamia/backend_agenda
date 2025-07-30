@@ -21,6 +21,55 @@ const verificationPool = new Pool({
 });
 
 /**
+ * 🔍 NUEVA FUNCIÓN: Verificar si un cliente existe en la base de datos
+ */
+async function verificarClienteExisteEnBD(sessionId) {
+  let client = null;
+  try {
+    client = await verificationPool.connect();
+    const result = await client.query('SELECT id FROM tenants WHERE id = $1', [sessionId]);
+    const existe = result.rows.length > 0;
+    console.log(`[WEBCONNECT] 🔍 Cliente ${sessionId} ${existe ? 'EXISTE' : 'NO EXISTE'} en BD`);
+    return existe;
+  } catch (error) {
+    console.error(`[WEBCONNECT] ❌ Error verificando cliente ${sessionId} en BD:`, error);
+    return false;
+  } finally {
+    if (client) client.release();
+  }
+}
+
+/**
+ * 🗑️ NUEVA FUNCIÓN: Eliminar completamente una sesión inexistente
+ */
+async function eliminarSesionInexistente(sessionId) {
+  try {
+    console.log(`[WEBCONNECT] 🗑️ Cliente ${sessionId} no existe en BD - Eliminando sesión completa...`);
+    
+    // 1. Cerrar y eliminar de memoria
+    if (sessions[sessionId]) {
+      try {
+        await sessions[sessionId].close();
+        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
+      } catch (e) {
+        console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, e.message);
+      }
+      delete sessions[sessionId];
+    }
+    
+    // 2. Limpiar directorio de tokens
+    const { limpiarSesionCompleta } = require('./sessionUtils');
+    await limpiarSesionCompleta(sessionId);
+    
+    console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} eliminada completamente (cliente no existe en BD)`);
+    return true;
+  } catch (error) {
+    console.error(`[WEBCONNECT] Error eliminando sesión inexistente ${sessionId}:`, error);
+    return false;
+  }
+}
+
+/**
  * Función para procesar mensaje y obtener respuesta de la API
  */
 async function procesarMensaje(sessionId, mensaje, client) {
@@ -179,6 +228,14 @@ async function createSession(sessionId, onQR) {
             try {
               console.log(`[WEBCONNECT] 🔄 Iniciando reconexión automática para sesión ${sessionId}...`);
               
+              // 🔍 VALIDACIÓN CRÍTICA: Verificar si el cliente aún existe en BD
+              const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+              if (!clienteExiste) {
+                console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} ya no existe en BD - Cancelando reconexión`);
+                await eliminarSesionInexistente(sessionId);
+                return;
+              }
+              
               // Eliminar sesión de memoria
               if (sessions[sessionId]) {
                 delete sessions[sessionId];
@@ -198,6 +255,15 @@ async function createSession(sessionId, onQR) {
               setTimeout(async () => {
                 try {
                   console.log(`[WEBCONNECT] 🔄 Segundo intento de reconexión para sesión ${sessionId}...`);
+                  
+                  // 🔍 VALIDACIÓN CRÍTICA: Verificar nuevamente si el cliente existe en BD
+                  const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+                  if (!clienteExiste) {
+                    console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} ya no existe en BD - Cancelando segundo intento`);
+                    await eliminarSesionInexistente(sessionId);
+                    return;
+                  }
+                  
                   await createSession(sessionId, null);
                   console.log(`[WEBCONNECT] ✅ Segundo intento exitoso para sesión ${sessionId}`);
                 } catch (secondError) {
@@ -239,6 +305,14 @@ async function createSession(sessionId, onQR) {
           if (sessions[sessionId] && state === 'DISCONNECTED') {
             console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} sigue desconectada, iniciando reconexión...`);
             try {
+              // 🔍 VALIDACIÓN CRÍTICA: Verificar si el cliente aún existe en BD
+              const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+              if (!clienteExiste) {
+                console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} ya no existe en BD - Cancelando reconexión por desconexión`);
+                await eliminarSesionInexistente(sessionId);
+                return;
+              }
+              
               // Eliminar sesión actual
               if (sessions[sessionId]) {
                 try {
@@ -256,7 +330,7 @@ async function createSession(sessionId, onQR) {
               console.error(`[WEBCONNECT] ❌ Error en reconexión por desconexión para sesión ${sessionId}:`, reconnectError.message);
             }
           }
-        }, 30000); // 30 segundos
+        }, 120000); // 2 minutos
         
       } else if (state === 'PAIRING') {
         console.log(`[WEBCONNECT] 🔗 Cliente ${sessionId} en proceso de emparejamiento`);
@@ -485,6 +559,14 @@ async function monitorearSesiones() {
       
       for (const sessionId of sesionesActivas) {
         try {
+          // 🔍 VALIDACIÓN CRÍTICA: Verificar si el cliente aún existe en BD
+          const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+          if (!clienteExiste) {
+            console.log(`[WEBCONNECT] 🗑️ Cliente ${sessionId} ya no existe en BD - Eliminando del monitoreo...`);
+            await eliminarSesionInexistente(sessionId);
+            continue;
+          }
+          
           const client = sessions[sessionId];
           if (!client) continue;
           
@@ -500,6 +582,14 @@ async function monitorearSesiones() {
             // Si está completamente desconectado, intentar reconectar
             if (connectionState === 'DISCONNECTED' || connectionState === 'TIMEOUT') {
               console.log(`[WEBCONNECT] 🔄 Iniciando reconexión automática para sesión ${sessionId}...`);
+              
+              // 🔍 Verificar nuevamente antes de reconectar
+              const clienteExisteAntesReconexion = await verificarClienteExisteEnBD(sessionId);
+              if (!clienteExisteAntesReconexion) {
+                console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} eliminado durante verificación - Cancelando reconexión`);
+                await eliminarSesionInexistente(sessionId);
+                continue;
+              }
               
               // Cerrar sesión actual
               try {
@@ -546,6 +636,33 @@ async function monitorearSesiones() {
   }, 300000); // Cada 5 minutos
 }
 
+/**
+ * 🧹 NUEVA FUNCIÓN: Limpia sesiones huérfanas (sesiones sin cliente en BD)
+ */
+async function limpiarSesionesHuerfanas() {
+  try {
+    console.log('[WEBCONNECT] 🧹 Iniciando limpieza de sesiones huérfanas...');
+    
+    const sesionesActivas = Object.keys(sessions);
+    let sesionesLimpiadas = 0;
+    
+    for (const sessionId of sesionesActivas) {
+      const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+      if (!clienteExiste) {
+        console.log(`[WEBCONNECT] 🗑️ Sesión huérfana detectada: ${sessionId} - Eliminando...`);
+        await eliminarSesionInexistente(sessionId);
+        sesionesLimpiadas++;
+      }
+    }
+    
+    console.log(`[WEBCONNECT] ✅ Limpieza completada. ${sesionesLimpiadas} sesiones huérfanas eliminadas`);
+    return sesionesLimpiadas;
+  } catch (error) {
+    console.error('[WEBCONNECT] Error en limpieza de sesiones huérfanas:', error);
+    return 0;
+  }
+}
+
 module.exports = { 
   createSession, 
   clearSession, 
@@ -555,5 +672,8 @@ module.exports = {
   initializeExistingSessions,
   monitorearSesiones,
   verificarNumeroBloqueado, // Nueva función
+  verificarClienteExisteEnBD, // Nueva función
+  eliminarSesionInexistente, // Nueva función
+  limpiarSesionesHuerfanas, // Nueva función
   sessions
 };

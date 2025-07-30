@@ -12,6 +12,7 @@ import pytz
 import redis
 import json
 import httpx
+import asyncio
 from datetime import datetime, timedelta
 
 REDIS_URL = os.getenv("REDIS_URL", "rediss://default:AcOQAAIjcDEzOGI2OWU1MzYxZDQ0YWQ2YWU3ODJlNWNmMGY5MjIzY3AxMA@literate-toucan-50064.upstash.io:6379")
@@ -267,7 +268,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 
                 # Si NO hay empleados pero hay calendar_id_general, mostrar turnos generales
                 elif tenant.calendar_id_general:
-                    duracion = 30  # valor por defecto
+                    # 🔧 CORREGIDO: Usar configuraciones del primer servicio si existe
+                    primer_servicio = db.query(Servicio).filter_by(tenant_id=tenant.id).first()
+                    
+                    if primer_servicio:
+                        # Usar configuraciones del servicio
+                        duracion = primer_servicio.duracion
+                        cantidad = primer_servicio.cantidad or 1
+                        solo_horas_exactas = primer_servicio.solo_horas_exactas
+                    else:
+                        # Valores por defecto solo si no hay servicios
+                        duracion = 30
+                        cantidad = 1
+                        solo_horas_exactas = False
+                    
                     slots = get_available_slots(
                         calendar_id=tenant.calendar_id_general,
                         credentials_json=GOOGLE_CREDENTIALS_JSON,
@@ -275,8 +289,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         service_duration=duracion,
                         intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,
                         max_turnos=25,
-                        cantidad=1,  # 🔧 VALOR POR DEFECTO
-                        solo_horas_exactas=False  # 🔧 VALOR POR DEFECTO
+                        cantidad=cantidad,
+                        solo_horas_exactas=solo_horas_exactas
                     )
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
                     slots_futuros = [s for s in slots if s > ahora]
@@ -526,11 +540,22 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             slot = state.get("slot")
             if isinstance(slot, str):
                 slot = datetime.fromisoformat(slot)
+            
+            # 🔧 CORREGIDO: Obtener configuraciones del primer servicio
+            primer_servicio = db.query(Servicio).filter_by(tenant_id=tenant.id).first()
+            
+            if primer_servicio:
+                duracion = primer_servicio.duracion
+                nombre_servicio = primer_servicio.nombre
+            else:
+                duracion = 30  # valor por defecto
+                nombre_servicio = "(General)"
+            
             # Verifica disponibilidad en calendar general
             from api.utils.calendar_utils import build_service
             service = build_service(GOOGLE_CREDENTIALS_JSON)
             start_time = slot.isoformat()
-            end_time = (slot + timedelta(minutes=30)).isoformat()  # Puedes ajustar la duración si lo deseas
+            end_time = (slot + timedelta(minutes=duracion)).isoformat()
             events_result = service.events().list(
                 calendarId=tenant.calendar_id_general,
                 timeMin=start_time,
@@ -539,13 +564,23 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             ).execute()
             events = events_result.get('items', [])
             if events:
+                # 🔧 CORREGIDO: Usar configuraciones del servicio para recalcular slots
+                if primer_servicio:
+                    cantidad = primer_servicio.cantidad or 1
+                    solo_horas_exactas = primer_servicio.solo_horas_exactas
+                else:
+                    cantidad = 1
+                    solo_horas_exactas = False
+                    
                 slots_actuales = get_available_slots(
                     calendar_id=tenant.calendar_id_general,
                     credentials_json=GOOGLE_CREDENTIALS_JSON,
-                    working_hours_json=None,
-                    service_duration=30,
-                    intervalo_entre_turnos=20,
-                    max_turnos=10
+                    working_hours_json=tenant.working_hours_general,
+                    service_duration=duracion,
+                    intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,
+                    max_turnos=10,
+                    cantidad=cantidad,
+                    solo_horas_exactas=solo_horas_exactas
                 )
                 ahora = datetime.now(pytz.timezone("America/Montevideo"))
                 slots_futuros = [s for s in slots_actuales if s > ahora]
@@ -564,8 +599,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 slot_dt=slot,
                 user_phone=telefono,
                 service_account_info=GOOGLE_CREDENTIALS_JSON,
-                duration_minutes=30,  # Puedes ajustar la duración si lo deseas
-                client_service=f"Cliente: {nombre_apellido} - Tel: {telefono}"
+                duration_minutes=duracion,  # 🔧 CORREGIDO: usar duración del servicio
+                client_service=f"Cliente: {nombre_apellido} - Tel: {telefono} - Servicio: {nombre_servicio}"
             )
             fake_id = generar_fake_id()
             reserva = Reserva(
@@ -578,7 +613,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 cliente_nombre=nombre_apellido,
                 cliente_telefono=telefono,
                 fecha_reserva=slot,
-                servicio="(General)",
+                servicio=nombre_servicio,  # 🔧 CORREGIDO: usar nombre del servicio
                 estado="activo"
             )
             db.add(reserva)
@@ -587,9 +622,40 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             set_user_state(telefono, state)
             return JSONResponse(content={"mensaje": (
                 f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')}.\n"
-                f"\nDirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
+                f"\nServicio: {nombre_servicio} ({duracion} min)\n"
+                f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
                 f"\nSi querés cancelar, escribí: cancelar {fake_id}"
             )})
+
+        # 🔧 NUEVO: Manejo del paso waiting_turno_final_general
+        if state.get("step") == "waiting_turno_final_general":
+            if mensaje.isdigit():
+                idx = int(mensaje) - 1
+                slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                if 0 <= idx < len(slots):
+                    slot = slots[idx]
+                    state["slot"] = slot.isoformat()
+                    state["step"] = "waiting_nombre_general"
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": "Por favor, escribe tu nombre y apellido para confirmar la reserva."})
+                else:
+                    slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                    msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
+                    for i, slot in enumerate(slots, 1):
+                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
+                    state["step"] = "waiting_turno_final_general"
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": msg})
+            else:
+                slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                msg = "❌ Opción inválida.\n📅 Estos son los próximos turnos disponibles:\n"
+                for i, slot in enumerate(slots, 1):
+                    msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                msg += "\nResponde con el número del turno."
+                state["step"] = "waiting_turno_final_general"
+                set_user_state(telefono, state)
+                return JSONResponse(content={"mensaje": msg})
 
         if state.get("step") == "waiting_turno_final":
             if mensaje.isdigit():

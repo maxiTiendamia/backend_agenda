@@ -517,4 +517,48 @@ router.get('/verificar-conexion/:sessionId', async (req, res) => {
   }
 });
 
+// NUEVA RUTA: Limpiar sesiones huérfanas
+router.post('/limpiar-sesiones-huerfanas', async (req, res) => {
+  try {
+    const { limpiarSesionesHuerfanas } = require('../app/wppconnect');
+    
+    console.log('[WEBCONNECT] 🧹 Solicitud manual de limpieza de sesiones huérfanas...');
+    const sesionesLimpiadas = await limpiarSesionesHuerfanas();
+    
+    res.json({
+      success: true,
+      message: `Limpieza completada. ${sesionesLimpiadas} sesiones huérfanas eliminadas.`,
+      sesionesLimpiadas
+    });
+  } catch (error) {
+    console.error('[WEBCONNECT] Error en limpieza manual:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error durante la limpieza de sesiones huérfanas',
+      details: error.message
+    });
+  }
+});
+
+// NUEVA RUTA: Verificar si un cliente existe en BD
+router.get('/verificar-cliente/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { verificarClienteExisteEnBD } = require('../app/wppconnect');
+    
+    const existe = await verificarClienteExisteEnBD(sessionId);
+    
+    res.json({
+      sessionId,
+      existe,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 module.exports = router;
