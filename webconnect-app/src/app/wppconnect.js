@@ -2,12 +2,23 @@
 const wppconnect = require('@wppconnect-team/wppconnect');
 const path = require('path');
 const axios = require('axios'); // Asegúrate de instalarlo: npm install axios
+const { Pool } = require('pg');
 
 // Objeto para gestionar las instancias activas por sesión
 const sessions = {};
 
 // URL de tu API FastAPI en Render
 const API_URL = process.env.API_URL || 'https://backend-agenda-2.onrender.com';
+
+/**
+ * Pool de conexiones compartido para verificaciones
+ */
+const verificationPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 3, // Máximo 3 conexiones para verificaciones
+  idleTimeoutMillis: 30000
+});
 
 /**
  * Función para procesar mensaje y obtener respuesta de la API
@@ -27,6 +38,14 @@ async function procesarMensaje(sessionId, mensaje, client) {
     // Extraer número de teléfono limpio (sin @c.us)
     const telefono = from.replace('@c.us', '');
 
+    // 🔥 NUEVA VALIDACIÓN: Verificar números bloqueados ANTES de procesar
+    const esBloqueado = await verificarNumeroBloqueado(telefono, sessionId);
+    if (esBloqueado) {
+      console.log(`🚫 [WEBCONNECT] Número ${telefono} bloqueado para cliente ${sessionId} - No se procesará`);
+      return; // Salir sin procesar ni responder
+    }
+    
+    // Si no está bloqueado, continuar con el flujo normal
     // Hacer request a tu API FastAPI en Render
     const response = await axios.post(`${API_URL}/api/webhook`, {
       cliente_id: sessionId, // Usar sessionId como cliente_id
@@ -66,6 +85,34 @@ async function procesarMensaje(sessionId, mensaje, client) {
         console.error(`[WEBCONNECT] Error enviando mensaje de error:`, sendError);
       }
     }
+  }
+}
+
+/**
+ * Verificar si un número está bloqueado (versión optimizada)
+ */
+async function verificarNumeroBloqueado(telefono, clienteId) {
+  try {
+    const result = await verificationPool.query(`
+      SELECT id, empleado_id 
+      FROM blocked_numbers 
+      WHERE telefono = $1 AND cliente_id = $2
+    `, [telefono, clienteId]);
+
+    if (result.rows.length > 0) {
+      const tipos_bloqueo = result.rows.map(row => 
+        row.empleado_id ? `empleado_${row.empleado_id}` : 'nivel_cliente'
+      );
+      
+      console.log(`🚫 [WEBCONNECT] Número ${telefono} bloqueado para cliente ${clienteId} (${tipos_bloqueo.join(', ')})`);
+      return true;
+    }
+    
+    return false;
+
+  } catch (error) {
+    console.error(`[WEBCONNECT] Error verificando número bloqueado:`, error);
+    return false; // Fail-safe: permitir mensaje si hay error
   }
 }
 
@@ -506,6 +553,7 @@ module.exports = {
   sendMessage, 
   testAPIConnection,
   initializeExistingSessions,
-  monitorearSesiones, // Nueva función
+  monitorearSesiones,
+  verificarNumeroBloqueado, // Nueva función
   sessions
 };
