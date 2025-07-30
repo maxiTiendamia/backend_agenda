@@ -42,9 +42,9 @@ def get_available_slots(
     busy = []
     for e in events:
         start_datetime = e['start'].get('dateTime')
-        start_date = e['start'].get('date')
+        start_date_only = e['start'].get('date')
         end_datetime = e['end'].get('dateTime')
-        end_date = e['end'].get('date')
+        end_date_only = e['end'].get('date')
         
         if start_datetime and end_datetime:
             # Evento con hora específica
@@ -61,12 +61,12 @@ def get_available_slots(
                 end_dt = end_dt.astimezone(URUGUAY_TZ)
             busy.append((start_dt, end_dt))
             print(f"📅 Evento con hora específica: {start_dt.strftime('%d/%m %H:%M')} - {end_dt.strftime('%d/%m %H:%M')}")
-        elif start_date and end_date:
+        elif start_date_only and end_date_only:
             # Evento de todo el día - bloquear desde las 00:00 hasta las 23:59
-            start_dt = datetime.datetime.fromisoformat(start_date).replace(hour=0, minute=0, second=0, tzinfo=URUGUAY_TZ)
-            end_dt = datetime.datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59, tzinfo=URUGUAY_TZ)
+            start_dt = datetime.datetime.fromisoformat(start_date_only).replace(hour=0, minute=0, second=0, tzinfo=URUGUAY_TZ)
+            end_dt = datetime.datetime.fromisoformat(end_date_only).replace(hour=23, minute=59, second=59, tzinfo=URUGUAY_TZ)
             busy.append((start_dt, end_dt))
-            print(f"📅 Evento de todo el día detectado: {start_date} - Bloqueando día completo")
+            print(f"📅 Evento de todo el día detectado: {start_date_only} - Bloqueando día completo")
 
     # Parsear y normalizar horarios laborales .
     if isinstance(working_hours_json, str):
