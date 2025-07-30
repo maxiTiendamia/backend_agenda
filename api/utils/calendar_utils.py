@@ -165,6 +165,12 @@ def get_available_slots(
                         continue
 
                     slot_final = slot_start + datetime.timedelta(minutes=service_duration)
+                    
+                    # Verificar que el turno no se extienda más allá del horario de cierre
+                    # Cambiar <= por < para permitir que termine exactamente al horario de cierre
+                    if slot_final > slot_end:
+                        break
+                    
                     overlap_count = sum(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
                     )
@@ -189,7 +195,7 @@ def get_available_slots(
                         available.append(slot_start)
                         turnos_generados += 1
                         slots_encontrados_periodo += 1
-                        print(f"✅ Slot agregado: {slot_start.strftime('%d/%m %H:%M')} (Total: {turnos_generados})")
+                        print(f"✅ Slot agregado: {slot_start.strftime('%d/%m %H:%M')} - Termina: {slot_final.strftime('%H:%M')} (Total: {turnos_generados})")
                         if turnos_generados >= max_turnos:
                             print(f"🔹 Se alcanzó el máximo de turnos: {max_turnos}")
                             break
