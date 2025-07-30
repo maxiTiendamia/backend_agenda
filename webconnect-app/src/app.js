@@ -20,7 +20,7 @@ const pool = new Pool({
 });
 
 /**
- * Función para limpiar datos obsoletos en Redis comparando con la base de datos
+ * Función para limpiar datos obsoletos en Redis y directorios de tokens
  */
 async function limpiarDatosObsoletos() {
   let dbClient = null;
@@ -32,64 +32,31 @@ async function limpiarDatosObsoletos() {
     dbClient = await pool.connect();
     console.log('[CLEANUP] ✅ Conectado a la base de datos PostgreSQL');
     
-    // 2. Verificar estructura de la tabla tenants
-    const tableInfo = await dbClient.query(`
-      SELECT column_name, data_type 
-      FROM information_schema.columns 
-      WHERE table_name = 'tenants'
-      ORDER BY ordinal_position
-    `);
-    
-    console.log('[CLEANUP] 📋 Columnas de la tabla tenants:');
-    tableInfo.rows.forEach(col => {
-      console.log(`[CLEANUP]   - ${col.column_name} (${col.data_type})`);
-    });
-    
-    // 3. Obtener todos los IDs de tenants (sin filtro de estado ya que no hay columna activo)
-    // Simplemente obtener todos los tenants existentes
-    const query = 'SELECT id FROM tenants';
-    console.log(`[CLEANUP] 🔍 Ejecutando consulta: ${query}`);
-    
-    const result = await dbClient.query(query);
+    // 2. Obtener todos los IDs de tenants activos
+    const result = await dbClient.query('SELECT id FROM tenants');
     const tenantsActivos = result.rows.map(tenant => tenant.id.toString());
     console.log(`[CLEANUP] 📊 Tenants en BD: ${tenantsActivos.length} encontrados`);
     console.log(`[CLEANUP] 📋 IDs encontrados: [${tenantsActivos.join(', ')}]`);
     
-    // 4. Obtener todas las claves en Redis relacionadas con sesiones
+    // 3. Limpiar Redis (código existente)
     const redisKeys = await redis.keys('*');
     console.log(`[CLEANUP] 🔍 Claves en Redis: ${redisKeys.length} encontradas`);
     
-    // 5. Filtrar claves que parecen ser de sesiones/clientes
     const sessionKeys = redisKeys.filter(key => {
-      // Buscar patrones comunes de claves de sesión
       return key.includes('session_') || 
              key.includes('client_') || 
              key.includes('qr_') || 
              key.includes('whatsapp_') ||
              key.includes('tenant_') ||
-             /^\d+$/.test(key); // Claves que son solo números (IDs)
+             /^\d+$/.test(key);
     });
     
     console.log(`[CLEANUP] 🎯 Claves de sesión encontradas: ${sessionKeys.length}`);
-    console.log(`[CLEANUP] 🔍 Claves encontradas: [${sessionKeys.join(', ')}]`);
     
-    // Si no hay tenants o no hay claves de sesión, no hacer nada
-    if (tenantsActivos.length === 0) {
-      console.log('[CLEANUP] ⚠️ No hay tenants en la base de datos');
-      return { clavesValidas: 0, clavesEliminadas: 0, detalles: { validas: [], eliminadas: [] } };
-    }
-    
-    if (sessionKeys.length === 0) {
-      console.log('[CLEANUP] ✨ No hay claves de sesión en Redis');
-      return { clavesValidas: 0, clavesEliminadas: 0, detalles: { validas: [], eliminadas: [] } };
-    }
-    
-    // 6. Revisar cada clave y extraer el ID del cliente
     let clavesObsoletas = [];
     let clavesValidas = [];
     
     for (const key of sessionKeys) {
-      // Extraer ID del cliente de diferentes formatos de clave
       let clienteId = null;
       
       if (key.includes('session_')) {
@@ -105,7 +72,6 @@ async function limpiarDatosObsoletos() {
       } else if (/^\d+$/.test(key)) {
         clienteId = key;
       } else {
-        // Intentar extraer números del inicio de la clave
         const match = key.match(/^(\d+)/);
         if (match) {
           clienteId = match[1];
@@ -113,47 +79,74 @@ async function limpiarDatosObsoletos() {
       }
       
       if (clienteId) {
-        // Verificar si el cliente existe en la base de datos
         if (tenantsActivos.includes(clienteId)) {
           clavesValidas.push(key);
-          console.log(`[CLEANUP] ✅ Clave válida: ${key} (Cliente ID: ${clienteId})`);
         } else {
           clavesObsoletas.push(key);
-          console.log(`[CLEANUP] 🗑️ Clave obsoleta: ${key} (Cliente ID: ${clienteId} no existe en BD)`);
         }
-      } else {
-        console.log(`[CLEANUP] ⚠️ No se pudo extraer ID de la clave: ${key}`);
       }
     }
     
-    // 7. Eliminar claves obsoletas de Redis
+    // Eliminar claves obsoletas de Redis
     if (clavesObsoletas.length > 0) {
-      console.log(`[CLEANUP] 🗑️ Eliminando ${clavesObsoletas.length} claves obsoletas...`);
+      console.log(`[CLEANUP] 🗑️ Eliminando ${clavesObsoletas.length} claves obsoletas de Redis...`);
       
       for (const key of clavesObsoletas) {
         try {
           await redis.del(key);
-          console.log(`[CLEANUP] ❌ Eliminada: ${key}`);
+          console.log(`[CLEANUP] ❌ Clave eliminada: ${key}`);
         } catch (delError) {
           console.error(`[CLEANUP] Error eliminando clave ${key}:`, delError);
         }
       }
-    } else {
-      console.log(`[CLEANUP] ✨ No hay claves obsoletas para eliminar`);
     }
     
-    // 8. Resumen final
+    // 4. NUEVO: Limpiar directorios de tokens obsoletos
+    const fs = require('fs');
+    const path = require('path');
+    const tokensDir = path.join(__dirname, 'tokens');
+    
+    if (fs.existsSync(tokensDir)) {
+      const sessionDirs = fs.readdirSync(tokensDir)
+        .filter(dir => dir.startsWith('session_'))
+        .map(dir => dir.replace('session_', ''));
+
+      console.log(`[CLEANUP] 📁 Directorios de sesión encontrados: [${sessionDirs.join(', ')}]`);
+      
+      const directoriosObsoletos = sessionDirs.filter(sessionId => !tenantsActivos.includes(sessionId));
+      
+      if (directoriosObsoletos.length > 0) {
+        console.log(`[CLEANUP] 🗑️ Eliminando ${directoriosObsoletos.length} directorios obsoletos...`);
+        
+        for (const sessionId of directoriosObsoletos) {
+          try {
+            const sessionDir = path.join(tokensDir, `session_${sessionId}`);
+            fs.rmSync(sessionDir, { recursive: true, force: true });
+            console.log(`[CLEANUP] ❌ Directorio eliminado: session_${sessionId}`);
+          } catch (delError) {
+            console.error(`[CLEANUP] Error eliminando directorio session_${sessionId}:`, delError);
+          }
+        }
+      } else {
+        console.log(`[CLEANUP] ✅ No hay directorios obsoletos para eliminar`);
+      }
+    }
+    
+    // 5. Resumen final
     console.log(`[CLEANUP] 📊 Resumen de limpieza:`);
     console.log(`[CLEANUP] ✅ Claves válidas mantenidas: ${clavesValidas.length}`);
     console.log(`[CLEANUP] 🗑️ Claves obsoletas eliminadas: ${clavesObsoletas.length}`);
+    console.log(`[CLEANUP] 🗑️ Directorios obsoletos eliminados: ${directoriosObsoletos?.length || 0}`);
     console.log(`[CLEANUP] 🧹 Limpieza completada exitosamente`);
     
     return {
       clavesValidas: clavesValidas.length,
       clavesEliminadas: clavesObsoletas.length,
+      directoriosEliminados: directoriosObsoletos?.length || 0,
       detalles: {
         validas: clavesValidas,
-        eliminadas: clavesObsoletas
+        eliminadas: clavesObsoletas,
+        directoriosEliminados: directoriosObsoletos || []
       }
     };
     
@@ -161,7 +154,6 @@ async function limpiarDatosObsoletos() {
     console.error('[CLEANUP] ❌ Error durante la limpieza:', error);
     throw error;
   } finally {
-    // Liberar conexión a la base de datos
     if (dbClient) {
       dbClient.release();
       console.log('[CLEANUP] 🔌 Conexión a BD liberada');
