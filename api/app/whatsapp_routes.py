@@ -115,17 +115,39 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if not tenant:
             return JSONResponse(content={"mensaje": "⚠️ Cliente no encontrado."})
 
-        # --- BLOQUEO DE NÚMEROS ---
-        empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
-        empleados_ids = [e.id for e in empleados]
-        bloqueado = db.query(BlockedNumber).filter(
+        # 🔥 VERIFICACIÓN COMPLETA DE NÚMEROS BLOQUEADOS (ÚNICA)
+        numeros_bloqueados = db.query(BlockedNumber).filter(
             (BlockedNumber.telefono == telefono) &
-            (BlockedNumber.empleado_id.in_(empleados_ids)) &
-            (BlockedNumber.cliente_id == tenant.id)
-        ).first() if empleados_ids else False
-        if bloqueado:
+            (BlockedNumber.cliente_id == cliente_id)
+        ).all()
+
+        if numeros_bloqueados:
+            # Log detallado del bloqueo
+            tipos_bloqueo = []
+            for bloqueo in numeros_bloqueados:
+                if bloqueo.empleado_id is None:
+                    tipos_bloqueo.append("nivel_cliente")
+                else:
+                    tipos_bloqueo.append(f"empleado_{bloqueo.empleado_id}")
+            
+            print(f"🚫 Número {telefono} bloqueado para cliente {cliente_id} ({', '.join(tipos_bloqueo)}) - No se responderá")
+            
+            # Opcional: Registrar en log de la base de datos
+            try:
+                error_log = ErrorLog(
+                    cliente=str(cliente_id),
+                    telefono=telefono,
+                    mensaje=mensaje,
+                    error=f"Número bloqueado - {len(numeros_bloqueados)} regla(s) de bloqueo activa(s)"
+                )
+                db.add(error_log)
+                db.commit()
+            except Exception as log_error:
+                print(f"⚠️ Error guardando log de bloqueo: {log_error}")
+            
             return JSONResponse(content={"mensaje": ""}, status_code=200)
 
+        # --- RESTO DEL CÓDIGO CONTINÚA NORMAL ---
         now = time.time()
         state = get_user_state(telefono)
         
@@ -136,7 +158,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             state["last_interaction"] = now
 
         # --- MANEJO DE MODO HUMANO ---
-        # Si el usuario está en modo humano, solo responder a comandos específicos
         if state.get("mode") == "human":
             if mensaje in ["bot", "volver", "Bot", "VOLVER", "BOT"]:
                 state["mode"] = "bot"
@@ -144,17 +165,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 set_user_state(telefono, state)
                 return JSONResponse(content={"mensaje": "🤖 El asistente virtual está activo nuevamente. Escribe \"Turno\" para agendar."})
             else:
-                # Usuario sigue en modo humano, reenviar mensaje al asesor
                 try:
                     import asyncio
                     asyncio.create_task(notificar_chat_humano_completo(tenant.id, telefono, mensaje))
                 except Exception as e:
                     print(f"⚠️ Error enviando notificación: {e}")
-                # NO actualizar estado aquí para mantener el modo humano
-                return JSONResponse(content={"mensaje": ""})  # Respuesta vacía para no confundir
+                return JSONResponse(content={"mensaje": ""})
 
         # --- SOLICITUD DE AYUDA ---
-        # Verificar si solicita ayuda ANTES de cualquier otra lógica
         if "ayuda" in mensaje:
             state["mode"] = "human"
             state["step"] = "human_mode"
@@ -173,6 +191,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if any(x in mensaje for x in ["gracias", "chau", "chao", "nos vemos"]):
             return JSONResponse(content={"mensaje": "😊 ¡Gracias por tu mensaje! Que tengas un buen día!"})
 
+        # --- CANCELAR RESERVA ---
         if re.match(r"^cancelar\s+\w+", mensaje):
             partes = mensaje.strip().split(maxsplit=1)
             if len(partes) < 2:
@@ -186,9 +205,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 zona_uy = pytz.timezone("America/Montevideo")
                 ahora = datetime.now(zona_uy)
                 
-                
-                # Asegurar que reserva.fecha_reserva sea timezone-aware
-                
                 if reserva.fecha_reserva.tzinfo is None:
                     reserva_dt = zona_uy.localize(reserva.fecha_reserva)
                 else:
@@ -198,6 +214,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     
                 if reserva_dt - ahora < timedelta(hours=1):
                     return JSONResponse(content={"mensaje": "⏰ No podés cancelar un turno con menos de 1 hora de anticipación. Contactá al local si necesitás ayuda."})
+                
                 exito = cancelar_evento_google(
                     calendar_id=reserva.empleado_calendar_id,
                     reserva_id=reserva.event_id,
@@ -215,6 +232,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 print("❌ Error al cancelar turno:", e)
                 return JSONResponse(content={"mensaje": "❌ No se pudo cancelar el turno. Intenta más tarde."})
 
+        # --- FLUJO PRINCIPAL ---
         if state.get("step") == "welcome":
             if state.get("is_first_contact"):
                 state["is_first_contact"] = False
@@ -224,6 +242,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
                 servicios = tenant.servicios
                 empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+                
                 # Si hay servicios, mostrar servicios
                 if servicios:
                     msg = "¿Qué servicio deseas reservar?\n"
@@ -234,6 +253,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["servicios"] = [s.id for s in servicios]
                     set_user_state(telefono, state)
                     return JSONResponse(content={"mensaje": msg})
+                
                 # Si no hay servicios pero sí empleados, mostrar empleados
                 elif empleados:
                     msg = "¿Con qué empleado deseas reservar?\n"
@@ -244,18 +264,19 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     state["empleados"] = [e.id for e in empleados]
                     set_user_state(telefono, state)
                     return JSONResponse(content={"mensaje": msg})
+                
                 # Si NO hay empleados pero hay calendar_id_general, mostrar turnos generales
                 elif tenant.calendar_id_general:
-                    duracion = 30  # o el valor por defecto que prefieras
+                    duracion = 30  # valor por defecto
                     slots = get_available_slots(
                         calendar_id=tenant.calendar_id_general,
                         credentials_json=GOOGLE_CREDENTIALS_JSON,
                         working_hours_json=tenant.working_hours_general,
                         service_duration=duracion,
-                        intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,  # <-- usa el valor de la base
+                        intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,
                         max_turnos=25,
-                        cantidad=servicio.cantidad or 1,
-                        solo_horas_exactas=servicio.solo_horas_exactas
+                        cantidad=1,  # 🔧 VALOR POR DEFECTO
+                        solo_horas_exactas=False  # 🔧 VALOR POR DEFECTO
                     )
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
                     slots_futuros = [s for s in slots if s > ahora]
