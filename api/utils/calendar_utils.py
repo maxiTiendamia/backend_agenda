@@ -60,6 +60,7 @@ def get_available_slots(
             else:
                 end_dt = end_dt.astimezone(URUGUAY_TZ)
             busy.append((start_dt, end_dt))
+            print(f"📅 Evento con hora específica: {start_dt.strftime('%d/%m %H:%M')} - {end_dt.strftime('%d/%m %H:%M')}")
         elif start_date and end_date:
             # Evento de todo el día - bloquear desde las 00:00 hasta las 23:59
             start_dt = datetime.datetime.fromisoformat(start_date).replace(hour=0, minute=0, second=0, tzinfo=URUGUAY_TZ)
@@ -128,6 +129,16 @@ def get_available_slots(
                     overlap_count = sum(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
                     )
+                    
+                    # Debug: Log de verificación de solapamientos
+                    if current_date.strftime('%d/%m') == '31/07':
+                        print(f"🔍 Verificando slot {slot_start.strftime('%d/%m %H:%M')} - {slot_final.strftime('%d/%m %H:%M')}")
+                        for b_start, b_end in busy:
+                            if b_start.date() == current_date or b_end.date() == current_date:
+                                overlap = b_start < slot_final and b_end > slot_start
+                                print(f"    Evento: {b_start.strftime('%d/%m %H:%M')} - {b_end.strftime('%d/%m %H:%M')} | Solapamiento: {overlap}")
+                        print(f"    Total overlaps: {overlap_count}")
+                    
                     if overlap_count >= cantidad:
                         # Ya hay suficientes reservas en este horario, avanzar al siguiente slot
                         if solo_horas_exactas:
