@@ -91,6 +91,17 @@ def get_available_slots(
                     slot_start = now + datetime.timedelta(minutes=20)
                     if slot_start < start_hour:
                         slot_start = start_hour
+                    
+                    # Si se requieren solo horas exactas, redondear al próximo horario válido
+                    if solo_horas_exactas:
+                        # Redondear hacia arriba al próximo horario en punto o media hora
+                        if slot_start.minute <= 30:
+                            if slot_start.minute == 0:
+                                pass  # Ya está en punto
+                            else:
+                                slot_start = slot_start.replace(minute=30, second=0, microsecond=0)
+                        else:
+                            slot_start = slot_start.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
                 else:
                     slot_start = start_hour
 
