@@ -116,18 +116,68 @@ router.post('/generar-qr/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   try {
     console.log(`[WEBCONNECT] Reinicio manual de QR para cliente ${sessionId}`);
-    // Eliminar QR de la base antes de generar uno nuevo
+    
+    // 🔥 PASO 1: Cerrar sesión existente si está activa
+    const { sessions, clearSession } = require('../app/wppconnect');
+    if (sessions[sessionId]) {
+      console.log(`[WEBCONNECT] 🔄 Cerrando sesión existente para ${sessionId}...`);
+      try {
+        // Cerrar la sesión
+        await sessions[sessionId].close();
+        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada correctamente`);
+      } catch (closeError) {
+        console.error(`[WEBCONNECT] ⚠️ Error cerrando sesión ${sessionId}:`, closeError.message);
+      }
+      
+      // Eliminar de memoria
+      delete sessions[sessionId];
+      console.log(`[WEBCONNECT] 🗑️ Sesión ${sessionId} eliminada de memoria`);
+    }
+    
+    // 🔥 PASO 2: Limpiar archivos y locks
     await limpiarQR(pool, sessionId);
     await limpiarSingletonLock(sessionId);
+    
+    // 🔥 PASO 3: Esperar un poco para que se liberen los recursos
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // 🔥 PASO 4: Limpiar directorio de tokens completamente
+    const sessionFolder = getSessionFolder(sessionId);
+    if (fs.existsSync(sessionFolder)) {
+      try {
+        // Eliminar todo el directorio
+        fs.rmSync(sessionFolder, { recursive: true, force: true });
+        console.log(`[WEBCONNECT] 🗑️ Directorio ${sessionFolder} eliminado completamente`);
+        
+        // Recrear directorio vacío
+        await ensureSessionFolder(sessionId);
+        console.log(`[WEBCONNECT] 📁 Directorio ${sessionFolder} recreado`);
+      } catch (dirError) {
+        console.error(`[WEBCONNECT] Error manejando directorio:`, dirError.message);
+      }
+    }
+    
+    // 🔥 PASO 5: Crear nueva sesión
+    console.log(`[WEBCONNECT] 🚀 Creando nueva sesión para ${sessionId}...`);
     await createSession(sessionId, async (qr) => {
       console.log(`[WEBCONNECT] QR generado para cliente ${sessionId} (manual)`);
       await guardarQR(pool, sessionId, qr, true);
       console.log(`[WEBCONNECT] QR guardado en base de datos para cliente ${sessionId}`);
     });
-    res.json({ ok: true, message: 'QR regenerado y nueva sesión generada' });
+    
+    res.json({ 
+      ok: true, 
+      message: `QR regenerado exitosamente para cliente ${sessionId}`,
+      timestamp: new Date().toISOString()
+    });
+    
   } catch (err) {
     console.error(`[WEBCONNECT][ERROR] Error al regenerar QR para ${sessionId}:`, err);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ 
+      ok: false, 
+      error: err.message,
+      details: 'Error durante regeneración de QR'
+    });
   }
 });
 
@@ -183,16 +233,72 @@ router.post('/restart-qr/:sessionId', async (req, res) => {
 
 // Middleware para guardar archivos de sesión en Redis al conectarse un cliente
 async function saveSessionToRedis(sessionId) {
-  const folder = getSessionFolder(sessionId);
-  if (!fs.existsSync(folder)) return;
-  const files = fs.readdirSync(folder).map(name => {
-    const filePath = path.join(folder, name);
-    return {
-      name,
-      data: fs.readFileSync(filePath).toString('base64')
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    
+    const sessionFolder = path.join(__dirname, '../../tokens', `session_${sessionId}`);
+    
+    // Verificar que la carpeta existe
+    if (!fs.existsSync(sessionFolder)) {
+      console.log(`[REDIS] No hay carpeta de tokens para sesión ${sessionId}`);
+      return;
+    }
+
+    // Obtener lista de archivos (NO directorios)
+    const files = fs.readdirSync(sessionFolder).filter(file => {
+      const filePath = path.join(sessionFolder, file);
+      const stats = fs.statSync(filePath);
+      return stats.isFile(); // Solo archivos, no directorios
+    });
+
+    if (files.length === 0) {
+      console.log(`[REDIS] No hay archivos de tokens para sesión ${sessionId}`);
+      return;
+    }
+
+    console.log(`[REDIS] Guardando ${files.length} archivos de sesión ${sessionId} en Redis...`);
+
+    // Guardar cada archivo en Redis
+    for (const file of files) {
+      try {
+        const filePath = path.join(sessionFolder, file);
+        
+        // Verificar nuevamente que es un archivo
+        const stats = fs.statSync(filePath);
+        if (!stats.isFile()) {
+          console.log(`[REDIS] Saltando directorio: ${file}`);
+          continue;
+        }
+
+        // Leer el contenido del archivo
+        const content = fs.readFileSync(filePath, 'utf8');
+        
+        // Guardar en Redis con una clave única
+        const redisKey = `session_${sessionId}_file_${file}`;
+        await redisClient.set(redisKey, content, 'EX', 3600); // Expira en 1 hora
+        
+        console.log(`[REDIS] ✅ Archivo guardado: ${file} -> ${redisKey}`);
+        
+      } catch (fileError) {
+        console.error(`[REDIS] Error procesando archivo ${file}:`, fileError.message);
+      }
+    }
+
+    // Guardar metadatos de la sesión
+    const sessionData = {
+      sessionId: sessionId,
+      filesCount: files.length,
+      timestamp: new Date().toISOString(),
+      status: 'active'
     };
-  });
-  await redisClient.set(`session:${sessionId}`, JSON.stringify(files));
+
+    await redisClient.set(`session_${sessionId}_metadata`, JSON.stringify(sessionData), 'EX', 3600);
+    console.log(`[REDIS] ✅ Metadatos de sesión ${sessionId} guardados en Redis`);
+
+  } catch (error) {
+    console.error(`[REDIS] Error guardando sesión ${sessionId} en Redis:`, error.message);
+  }
 }
 
 // Ejemplo de uso: al crear sesión, guardar archivos en Redis
@@ -284,6 +390,8 @@ router.get('/estado-sesion/:sessionId', async (req, res) => {
         };
       });
     }
+    
+    
 
     // Verificar datos en Redis
     let datosRedis = [];
