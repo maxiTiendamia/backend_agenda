@@ -239,7 +239,7 @@ app.get('/redis-stats', async (req, res) => {
   }
 });
 
-const { createSession, testAPIConnection } = require('./app/wppconnect');
+const { createSession, testAPIConnection, initializeExistingSessions } = require('./app/wppconnect');
 
 // Función de inicialización
 async function inicializar() {
@@ -255,18 +255,21 @@ async function inicializar() {
     console.log('[INIT] 🚀 Probando conexión con API...');
     await testAPIConnection();
     
-    // 3. Ejecutar limpieza inicial
+    // 3. Restaurar sesiones existentes
+    console.log('[INIT] 📱 Restaurando sesiones existentes...');
+    await initializeExistingSessions();
+    
+    // 4. Ejecutar limpieza inicial
     console.log('[INIT] 🧹 Ejecutando limpieza inicial...');
     await limpiarDatosObsoletos();
     
-    // 4. Programar limpieza periódica
+    // 5. Programar limpieza periódica
     programarLimpiezaPeriodica();
     
     console.log('[INIT] ✅ Aplicación inicializada correctamente');
     
   } catch (error) {
     console.error('[INIT] ❌ Error durante la inicialización:', error);
-    // No detener la aplicación, solo logear el error
   }
 }
 

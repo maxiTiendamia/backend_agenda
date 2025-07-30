@@ -126,7 +126,7 @@ async function createSession(sessionId, onQR) {
     // Guardar la instancia en sessions
     sessions[sessionId] = client;
 
-    // 🔥 CONFIGURAR EVENTOS DEL CLIENTE - ACTUALIZADO
+    // 🔥 CONFIGURAR EVENTOS DEL CLIENTE - CORREGIDO
     client.onMessage(async (message) => {
       console.log(`[WEBCONNECT] 📨 Mensaje recibido en sesión ${sessionId}:`, message.body);
       
@@ -137,12 +137,6 @@ async function createSession(sessionId, onQR) {
     // Evento para cambios de estado
     client.onStateChange((state) => {
       console.log(`[WEBCONNECT] 🔄 Estado de conexión sesión ${sessionId}:`, state);
-    });
-
-    // Evento cuando el cliente está listo
-    client.onReady(() => {
-      console.log(`[WEBCONNECT] 🚀 Cliente ${sessionId} listo para enviar/recibir mensajes`);
-      console.log(`[WEBCONNECT] 🌐 Conectado a API: ${API_URL}`);
     });
 
     return client;
@@ -235,11 +229,49 @@ async function testAPIConnection() {
   }
 }
 
+/**
+ * Inicializa sesiones existentes al arrancar la aplicación
+ */
+async function initializeExistingSessions() {
+  const fs = require('fs');
+  const tokensDir = path.join(__dirname, '../../tokens');
+  
+  try {
+    if (!fs.existsSync(tokensDir)) {
+      console.log('[WEBCONNECT] 📁 No hay directorio de tokens');
+      return;
+    }
+
+    const sessionDirs = fs.readdirSync(tokensDir)
+      .filter(dir => dir.startsWith('session_'))
+      .map(dir => dir.replace('session_', ''));
+
+    console.log(`[WEBCONNECT] 🔍 Sesiones encontradas: [${sessionDirs.join(', ')}]`);
+
+    for (const sessionId of sessionDirs) {
+      try {
+        console.log(`[WEBCONNECT] 🔄 Restaurando sesión ${sessionId}...`);
+        
+        // Crear sesión sin callback de QR (ya está autenticada)
+        await createSession(sessionId, null);
+        
+        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} restaurada`);
+      } catch (error) {
+        console.error(`[WEBCONNECT] ❌ Error restaurando sesión ${sessionId}:`, error.message);
+      }
+    }
+
+  } catch (error) {
+    console.error('[WEBCONNECT] ❌ Error inicializando sesiones:', error);
+  }
+}
+
 module.exports = { 
   createSession, 
   clearSession, 
   getSession, 
   sendMessage, 
   testAPIConnection,
-  sessions // Exportar el objeto sessions para acceso externo
+  initializeExistingSessions, // Nueva función
+  sessions
 };
