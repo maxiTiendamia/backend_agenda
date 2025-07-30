@@ -100,7 +100,9 @@ async function createSession(sessionId, onQR) {
           '--disable-gpu',
           '--disable-web-security',
           '--disable-features=VizDisplayCompositor',
-          `--user-data-dir=${sessionDir}` // Asegurar directorio único
+          '--memory-pressure-off', // Prevenir cierre por memoria
+          '--max-old-space-size=512', // Limitar uso de memoria
+          `--user-data-dir=${sessionDir}`
         ]
       },
       catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
@@ -111,12 +113,52 @@ async function createSession(sessionId, onQR) {
       },
       statusFind: (statusSession, session) => {
         console.log(`[WEBCONNECT] Estado de sesión ${sessionId}: ${statusSession}`);
+        
         if (statusSession === 'qrReadSuccess') {
           console.log(`[WEBCONNECT] ✅ QR escaneado exitosamente para sesión ${sessionId}`);
         } else if (statusSession === 'qrReadFail') {
           console.log(`[WEBCONNECT] ❌ Fallo al leer QR para sesión ${sessionId}`);
         } else if (statusSession === 'isLogged') {
           console.log(`[WEBCONNECT] 📱 Sesión ${sessionId} ya está logueada`);
+        } else if (statusSession === 'notLogged') {
+          console.log(`[WEBCONNECT] 🔒 Sesión ${sessionId} no está logueada`);
+        } else if (statusSession === 'connectSuccess') {
+          console.log(`[WEBCONNECT] 🚀 Cliente ${sessionId} conectado y listo`);
+        } else if (statusSession === 'browserClose') {
+          console.log(`[WEBCONNECT] 🔴 Browser cerrado para sesión ${sessionId} - Intentando reconectar...`);
+          
+          // 🔥 AUTO-RECONEXIÓN cuando se cierra el navegador
+          setTimeout(async () => {
+            try {
+              console.log(`[WEBCONNECT] 🔄 Iniciando reconexión automática para sesión ${sessionId}...`);
+              
+              // Eliminar sesión de memoria
+              if (sessions[sessionId]) {
+                delete sessions[sessionId];
+              }
+              
+              // Esperar un poco antes de reconectar
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              
+              // Intentar reconectar
+              await createSession(sessionId, null);
+              console.log(`[WEBCONNECT] ✅ Reconexión exitosa para sesión ${sessionId}`);
+              
+            } catch (reconnectError) {
+              console.error(`[WEBCONNECT] ❌ Error en reconexión automática para sesión ${sessionId}:`, reconnectError.message);
+              
+              // Si falla la reconexión, programar otro intento en 1 minuto
+              setTimeout(async () => {
+                try {
+                  console.log(`[WEBCONNECT] 🔄 Segundo intento de reconexión para sesión ${sessionId}...`);
+                  await createSession(sessionId, null);
+                  console.log(`[WEBCONNECT] ✅ Segundo intento exitoso para sesión ${sessionId}`);
+                } catch (secondError) {
+                  console.error(`[WEBCONNECT] ❌ Segundo intento fallido para sesión ${sessionId}:`, secondError.message);
+                }
+              }, 60000); // 1 minuto
+            }
+          }, 5000); // 5 segundos
         }
       }
     });
@@ -126,7 +168,7 @@ async function createSession(sessionId, onQR) {
     // Guardar la instancia en sessions
     sessions[sessionId] = client;
 
-    // 🔥 CONFIGURAR EVENTOS DEL CLIENTE - CORREGIDO
+    // 🔥 CONFIGURAR EVENTOS DEL CLIENTE
     client.onMessage(async (message) => {
       console.log(`[WEBCONNECT] 📨 Mensaje recibido en sesión ${sessionId}:`, message.body);
       
@@ -137,7 +179,55 @@ async function createSession(sessionId, onQR) {
     // Evento para cambios de estado
     client.onStateChange((state) => {
       console.log(`[WEBCONNECT] 🔄 Estado de conexión sesión ${sessionId}:`, state);
+      
+      // Manejar diferentes estados
+      if (state === 'CONNECTED') {
+        console.log(`[WEBCONNECT] 🚀 Cliente ${sessionId} listo para enviar/recibir mensajes`);
+        console.log(`[WEBCONNECT] 🌐 Conectado a API: ${API_URL}`);
+      } else if (state === 'DISCONNECTED') {
+        console.log(`[WEBCONNECT] 🔴 Cliente ${sessionId} desconectado - Verificando si necesita reconexión...`);
+        
+        // Programar verificación de reconexión si está desconectado por mucho tiempo
+        setTimeout(async () => {
+          if (sessions[sessionId] && state === 'DISCONNECTED') {
+            console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} sigue desconectada, iniciando reconexión...`);
+            try {
+              // Eliminar sesión actual
+              if (sessions[sessionId]) {
+                try {
+                  await sessions[sessionId].close();
+                } catch (e) {
+                  // Ignorar errores al cerrar
+                }
+                delete sessions[sessionId];
+              }
+              
+              // Crear nueva sesión
+              await createSession(sessionId, null);
+              console.log(`[WEBCONNECT] ✅ Reconexión por desconexión exitosa para sesión ${sessionId}`);
+            } catch (reconnectError) {
+              console.error(`[WEBCONNECT] ❌ Error en reconexión por desconexión para sesión ${sessionId}:`, reconnectError.message);
+            }
+          }
+        }, 30000); // 30 segundos
+        
+      } else if (state === 'PAIRING') {
+        console.log(`[WEBCONNECT] 🔗 Cliente ${sessionId} en proceso de emparejamiento`);
+      }
     });
+
+    // Verificar si el cliente tiene otros eventos disponibles
+    if (typeof client.onDisconnected === 'function') {
+      client.onDisconnected(() => {
+        console.log(`[WEBCONNECT] 🔴 Cliente ${sessionId} desconectado (onDisconnected)`);
+      });
+    }
+
+    if (typeof client.onInterfaceChange === 'function') {
+      client.onInterfaceChange((interfaceState) => {
+        console.log(`[WEBCONNECT] 🔄 Cambio de interfaz ${sessionId}:`, interfaceState);
+      });
+    }
 
     return client;
     
@@ -335,6 +425,80 @@ async function initializeExistingSessions() {
   }
 }
 
+/**
+ * Monitorea el estado de las sesiones y reconecta automáticamente si es necesario
+ */
+async function monitorearSesiones() {
+  console.log('[WEBCONNECT] 🔍 Iniciando monitoreo de sesiones...');
+  
+  setInterval(async () => {
+    try {
+      const sesionesActivas = Object.keys(sessions);
+      console.log(`[WEBCONNECT] 📊 Monitoreando ${sesionesActivas.length} sesiones activas...`);
+      
+      for (const sessionId of sesionesActivas) {
+        try {
+          const client = sessions[sessionId];
+          if (!client) continue;
+          
+          // Verificar si la sesión está conectada
+          const isConnected = await client.isConnected();
+          
+          if (!isConnected) {
+            console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} no está conectada, verificando estado...`);
+            
+            const connectionState = await client.getConnectionState();
+            console.log(`[WEBCONNECT] Estado actual de sesión ${sessionId}: ${connectionState}`);
+            
+            // Si está completamente desconectado, intentar reconectar
+            if (connectionState === 'DISCONNECTED' || connectionState === 'TIMEOUT') {
+              console.log(`[WEBCONNECT] 🔄 Iniciando reconexión automática para sesión ${sessionId}...`);
+              
+              // Cerrar sesión actual
+              try {
+                await client.close();
+              } catch (e) {
+                // Ignorar errores al cerrar
+              }
+              delete sessions[sessionId];
+              
+              // Crear nueva sesión
+              await createSession(sessionId, null);
+              console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} reconectada automáticamente`);
+            }
+          } else {
+            console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} está conectada correctamente`);
+          }
+          
+        } catch (sessionError) {
+          console.error(`[WEBCONNECT] Error monitoreando sesión ${sessionId}:`, sessionError.message);
+          
+          // Si hay error, eliminar sesión y recrear
+          if (sessions[sessionId]) {
+            try {
+              await sessions[sessionId].close();
+            } catch (e) {
+              // Ignorar errores
+            }
+            delete sessions[sessionId];
+            
+            // Intentar recrear
+            try {
+              await createSession(sessionId, null);
+              console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} recreada después de error`);
+            } catch (recreateError) {
+              console.error(`[WEBCONNECT] ❌ Error recreando sesión ${sessionId}:`, recreateError.message);
+            }
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error('[WEBCONNECT] Error en monitoreo de sesiones:', error);
+    }
+  }, 300000); // Cada 5 minutos
+}
+
 module.exports = { 
   createSession, 
   clearSession, 
@@ -342,5 +506,6 @@ module.exports = {
   sendMessage, 
   testAPIConnection,
   initializeExistingSessions,
+  monitorearSesiones, // Nueva función
   sessions
 };

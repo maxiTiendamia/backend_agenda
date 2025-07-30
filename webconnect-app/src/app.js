@@ -237,7 +237,7 @@ app.get('/redis-stats', async (req, res) => {
   }
 });
 
-const { createSession, testAPIConnection, initializeExistingSessions } = require('./app/wppconnect');
+const { createSession, testAPIConnection, initializeExistingSessions, monitorearSesiones } = require('./app/wppconnect');
 
 // Función de inicialización
 async function inicializar() {
@@ -263,6 +263,10 @@ async function inicializar() {
     
     // 5. Programar limpieza periódica
     programarLimpiezaPeriodica();
+    
+    // 6. ✨ NUEVO: Iniciar monitoreo de sesiones
+    console.log('[INIT] 🔍 Iniciando monitoreo de sesiones...');
+    monitorearSesiones();
     
     console.log('[INIT] ✅ Aplicación inicializada correctamente');
     
