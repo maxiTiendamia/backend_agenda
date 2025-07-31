@@ -4,13 +4,15 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# Agregar el directorio actual al path para imports relativos
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# 🔥 AJUSTAR EL PATH PARA QUE LOS IMPORTS RELATIVOS FUNCIONEN
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
+sys.path.insert(0, current_dir)
 
 # Cargar variables de entorno
 load_dotenv()
 
-# 🔥 CORREGIR IMPORTS - usar imports relativos desde la carpeta actual
 from app.whatsapp_routes import router as whatsapp_router
 
 app = FastAPI(
