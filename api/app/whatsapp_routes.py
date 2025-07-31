@@ -1,15 +1,18 @@
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from api.app.models import Tenant, Servicio, Empleado, Reserva, ErrorLog, BlockedNumber
-from api.app.deps import get_db
-from api.utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google, get_available_slots_for_service, create_event_for_service
-from api.utils.generador_fake_id import generar_fake_id
-import time
-import re
-import os
-import redis
 import json
+import time
+import os
+from dotenv import load_dotenv
+
+# 🔥 CORREGIR IMPORTS - usar imports relativos
+from .models import Tenant, Servicio, Empleado, Reserva, ErrorLog, BlockedNumber
+from .database import get_db
+from .deps import get_db
+from ..utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google, get_available_slots_for_service, create_event_for_service
+from api.utils.generador_fake_id import generar_fake_id
+import redis
 import httpx
 import asyncio
 from datetime import datetime, timedelta

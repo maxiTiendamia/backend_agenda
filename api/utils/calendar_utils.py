@@ -263,7 +263,7 @@ def get_available_slots_for_service(
         if start_datetime and end_datetime:
             # Evento con hora específica
             start_dt = datetime.datetime.fromisoformat(start_datetime.replace('Z', '+00:00'))
-            end_dt = datetime.datetime.fromisoformat(end_datetime.replace('Z', '+00:00'))
+            end_dt = datetime.datetime.fromisoformat(endDatetime.replace('Z', '+00:00'))
             # Si no tiene tzinfo, agrégala
             if start_dt.tzinfo is None:
                 start_dt = start_dt.replace(tzinfo=URUGUAY_TZ)
@@ -481,11 +481,6 @@ def create_event_for_service(servicio, slot_dt, user_phone, service_account_info
     Crea un evento específico para un servicio en Google Calendar
     """
     try:
-        from googleapiclient.discovery import build
-        from google.oauth2 import service_account
-        import pytz
-        from datetime import timedelta
-        
         # Crear credenciales
         credentials = service_account.Credentials.from_service_account_info(
             service_account_info,
@@ -521,9 +516,15 @@ def create_event_for_service(servicio, slot_dt, user_phone, service_account_info
             ],
         }
         
+        # Usar calendar_id del servicio o del tenant
+        calendar_id = servicio.calendar_id or servicio.tenant.calendar_id_general
+        
+        if not calendar_id:
+            raise Exception("No hay calendar_id configurado para este servicio")
+        
         # Insertar evento
         event_result = service.events().insert(
-            calendarId=servicio.calendar_id,
+            calendarId=calendar_id,
             body=event
         ).execute()
         

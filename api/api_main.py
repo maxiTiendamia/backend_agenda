@@ -1,13 +1,18 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import sys
 from dotenv import load_dotenv
+
+# Agregar el directorio actual al path para imports relativos
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Cargar variables de entorno
 load_dotenv()
 
-from api.app.whatsapp_routes import router as whatsapp_router
-from api.app.admin_routes import router as admin_router
+# 🔥 CORREGIR IMPORTS - usar imports relativos desde la carpeta actual
+from app.whatsapp_routes import router as whatsapp_router
+from app.admin_routes import router as admin_router
 
 app = FastAPI(
     title="Backend Agenda API",
