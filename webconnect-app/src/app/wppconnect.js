@@ -4,7 +4,6 @@ const path = require('path');
 const axios = require('axios'); // Asegúrate de instalarlo: npm install axios
 const { Pool } = require('pg');
 const fs = require('fs');
-
 // Objeto para gestionar las instancias activas por sesión
 const sessions = {};
 

@@ -2,16 +2,25 @@ import datetime
 import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from api.app.models import Tenant
+# 🔥 CAMBIAR A IMPORT ABSOLUTO
+from app.models import Tenant
+from datetime import timedelta
+import pytz
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 URUGUAY_TZ = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 Montevideo
 
 def build_service(service_account_info):
-    creds = service_account.Credentials.from_service_account_info(
-        json.loads(service_account_info),
-        scopes=SCOPES
-    )
+    if isinstance(service_account_info, str):
+        creds = service_account.Credentials.from_service_account_info(
+            json.loads(service_account_info),
+            scopes=SCOPES
+        )
+    else:
+        creds = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=SCOPES
+        )
     return build('calendar', 'v3', credentials=creds)
 
 def get_available_slots(
@@ -482,19 +491,25 @@ def create_event_for_service(servicio, slot_dt, user_phone, service_account_info
     """
     try:
         # Crear credenciales
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_info,
-            scopes=['https://www.googleapis.com/auth/calendar']
-        )
+        if isinstance(service_account_info, str):
+            credentials = service_account.Credentials.from_service_account_info(
+                json.loads(service_account_info),
+                scopes=['https://www.googleapis.com/auth/calendar']
+            )
+        else:
+            credentials = service_account.Credentials.from_service_account_info(
+                service_account_info,
+                scopes=['https://www.googleapis.com/auth/calendar']
+            )
         
         service = build('calendar', 'v3', credentials=credentials)
         
         # Configurar zona horaria
-        argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
+        uruguay_tz = pytz.timezone('America/Montevideo')
         
         # Asegurar que slot_dt tenga zona horaria
         if slot_dt.tzinfo is None:
-            slot_dt = argentina_tz.localize(slot_dt)
+            slot_dt = uruguay_tz.localize(slot_dt)
         
         # Calcular fin del evento
         end_time = slot_dt + timedelta(minutes=servicio.duracion)
@@ -505,19 +520,19 @@ def create_event_for_service(servicio, slot_dt, user_phone, service_account_info
             'description': f'Cliente: {client_name}\nTeléfono: {user_phone}\nServicio: {servicio.nombre}',
             'start': {
                 'dateTime': slot_dt.isoformat(),
-                'timeZone': 'America/Argentina/Buenos_Aires',
+                'timeZone': 'America/Montevideo',
             },
             'end': {
                 'dateTime': end_time.isoformat(),
-                'timeZone': 'America/Argentina/Buenos_Aires',
+                'timeZone': 'America/Montevideo',
             },
             'attendees': [
                 {'email': user_phone + '@placeholder.com'},
             ],
         }
         
-        # Usar calendar_id del servicio o del tenant
-        calendar_id = servicio.calendar_id or servicio.tenant.calendar_id_general
+        # Usar calendar_id del servicio
+        calendar_id = servicio.calendar_id
         
         if not calendar_id:
             raise Exception("No hay calendar_id configurado para este servicio")

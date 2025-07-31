@@ -7,11 +7,11 @@ import os
 import re
 from dotenv import load_dotenv
 
-# 🔥 CORREGIR IMPORTS - usar imports relativos
-from .models import Tenant, Servicio, Empleado, Reserva, ErrorLog, BlockedNumber
-from .deps import get_db
-from ..utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google, get_available_slots_for_service, create_event_for_service
-from ..utils.generador_fake_id import generar_fake_id
+# 🔥 CAMBIAR A IMPORTS ABSOLUTOS
+from app.models import Tenant, Servicio, Empleado, Reserva, ErrorLog, BlockedNumber
+from app.deps import get_db
+from utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google, get_available_slots_for_service, create_event_for_service
+from utils.generador_fake_id import generar_fake_id
 import redis
 import httpx
 import asyncio
@@ -436,11 +436,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 print(f"❌ Error creando reserva para servicio: {e}")
                 return JSONResponse(content={"mensaje": "❌ Error al crear la reserva. Por favor, intenta nuevamente."})
 
-        # 🔥 ELIMINAR todos los pasos relacionados con calendar_id_general:
-        # - waiting_turno_final_general 
-        # - waiting_nombre_general
-        # Y actualizar la lógica de waiting_servicio para usar solo empleados si no hay servicios con calendario
-
         # 🔥 ACTUALIZAR waiting_servicio para manejar solo empleados
         if state.get("step") == "waiting_servicio":
             # Esta lógica ahora solo se ejecuta cuando hay servicios SIN calendario y empleados disponibles
@@ -580,8 +575,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 msg += "\nResponde con el número del empleado."
                 return JSONResponse(content={"mensaje": msg})
 
-        # 🚨 FALTAN ESTOS PASOS CRÍTICOS:
-
         # waiting_turno_final - Para empleados
         if state.get("step") == "waiting_turno_final":
             if mensaje.isdigit():
@@ -666,8 +659,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 print(f"❌ Error creando reserva con empleado: {e}")
                 return JSONResponse(content={"mensaje": "❌ Error al crear la reserva. Por favor, intenta nuevamente."})
 
-        # 🔥 REMOVER COMENTARIOS INNECESARIOS Y DUPLICACIONES
-
         # Manejo por defecto para mensajes no reconocidos
         return JSONResponse(content={"mensaje": (
             "🤔 No entendí tu mensaje.\n\n"
@@ -709,5 +700,3 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 "🔹 Escribe \"Ayuda\" para hablar con un asesor"
             )
         })
-
-
