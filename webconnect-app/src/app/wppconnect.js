@@ -183,6 +183,8 @@ async function createSession(sessionId, onQR) {
   const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
   
   try {
+    console.log(`[WEBCONNECT] 🚀 Creando nueva sesión ${sessionId}`);
+    
     const client = await wppconnect.create({
       session: `session_${sessionId}`,
       folderNameToken: sessionDir,
@@ -226,21 +228,84 @@ async function createSession(sessionId, onQR) {
       catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
         console.log(`[WEBCONNECT] 📱 QR generado para sesión ${sessionId}, intento ${attempts}/10`);
         
-        // 🔥 PERMITIR MÁS INTENTOS DE QR
-        if (attempts <= 10) { // Aumentado de 5 a 10 intentos
+        if (attempts <= 10) {
+          // Enviar QR normalmente
           if (onQR) {
             await onQR(qrCode);
           }
         } else {
-          console.log(`[WEBCONNECT] ⚠️ Máximo de intentos QR alcanzado para sesión ${sessionId}`);
+          // 🔥 CRÍTICO: Detener la sesión cuando supera 10 intentos
+          console.log(`[WEBCONNECT] ❌ Máximo de intentos QR alcanzado para sesión ${sessionId} - CERRANDO SESIÓN`);
+          
+          try {
+            // 1. Marcar la sesión como fallida
+            if (sessions[sessionId]) {
+              sessions[sessionId]._qrFailed = true;
+            }
+            
+            // 2. Cerrar la sesión inmediatamente
+            if (sessions[sessionId]) {
+              console.log(`[WEBCONNECT] 🛑 Cerrando sesión ${sessionId} por exceso de intentos QR...`);
+              
+              // Cerrar la instancia del cliente
+              await sessions[sessionId].close();
+              
+              // 3. Eliminar de memoria
+              delete sessions[sessionId];
+              
+              console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada y eliminada por exceso de intentos QR`);
+            }
+            
+            // 4. Limpiar QR en base de datos
+            try {
+              const { Pool } = require('pg');
+              const pool = new Pool({
+                connectionString: process.env.DATABASE_URL,
+                ssl: { rejectUnauthorized: false }
+              });
+              
+              const client = await pool.connect();
+              await client.query('UPDATE tenants SET qr_code = NULL WHERE id = $1', [sessionId]);
+              client.release();
+              await pool.end();
+              
+              console.log(`[WEBCONNECT] 🗑️ QR limpiado en BD para sesión ${sessionId}`);
+            } catch (dbError) {
+              console.error(`[WEBCONNECT] Error limpiando QR en BD:`, dbError.message);
+            }
+            
+            // 5. Limpiar archivos de sesión para forzar nuevo QR
+            const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
+            if (fs.existsSync(sessionDir)) {
+              fs.rmSync(sessionDir, { recursive: true, force: true });
+              console.log(`[WEBCONNECT] 🗑️ Directorio de tokens eliminado para sesión ${sessionId}`);
+            }
+            
+          } catch (closeError) {
+            console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, closeError.message);
+          }
+          
+          // 6. NO procesar más QRs
+          return false; // Esto detiene el procesamiento
         }
       },
-      
+
       statusFind: async (statusSession, session) => {
         console.log(`[WEBCONNECT] 🔄 Estado de sesión ${sessionId}: ${statusSession}`);
         
+        // 🔥 NUEVA VERIFICACIÓN: Si la sesión fue marcada como fallida, no continuar
+        if (sessions[sessionId] && sessions[sessionId]._qrFailed) {
+          console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} marcada como fallida por QR - Ignorando statusFind`);
+          return;
+        }
+        
         if (statusSession === 'qrReadSuccess') {
           console.log(`[WEBCONNECT] ✅ QR escaneado exitosamente para sesión ${sessionId}`);
+          
+          // Limpiar flag de fallo si existía
+          if (sessions[sessionId]) {
+            delete sessions[sessionId]._qrFailed;
+          }
           
           // 🔥 GUARDAR BACKUP INMEDIATAMENTE
           setTimeout(async () => {
@@ -253,43 +318,74 @@ async function createSession(sessionId, onQR) {
         } else if (statusSession === 'connectSuccess') {
           console.log(`[WEBCONNECT] 🚀 Cliente ${sessionId} conectado y listo`);
           
+          // Limpiar flag de fallo si existía
+          if (sessions[sessionId]) {
+            delete sessions[sessionId]._qrFailed;
+          }
+          
           // ✨ INICIAR KEEP-ALIVE INMEDIATAMENTE
           await setupKeepAlive(sessionId);
           
         } else if (statusSession === 'browserClose') {
           console.log(`[WEBCONNECT] 🔴 Browser cerrado para sesión ${sessionId}`);
           
-          // 🔥 RECONEXIÓN INTELIGENTE
-          setTimeout(async () => {
-            try {
-              const clienteExiste = await verificarClienteExisteEnBD(sessionId);
-              if (clienteExiste) {
-                console.log(`[WEBCONNECT] 🔄 Iniciando reconexión automática para sesión ${sessionId}...`);
-                await reconnectSession(sessionId);
-              } else {
-                console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} ya no existe - Eliminando sesión`);
-                await eliminarSesionInexistente(sessionId);
+          // 🔥 RECONEXIÓN INTELIGENTE solo si no falló por QR
+          if (!sessions[sessionId] || !sessions[sessionId]._qrFailed) {
+            setTimeout(async () => {
+              try {
+                const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+                if (clienteExiste) {
+                  console.log(`[WEBCONNECT] 🔄 Iniciando reconexión automática para sesión ${sessionId}...`);
+                  await reconnectSession(sessionId);
+                } else {
+                  console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} ya no existe - Eliminando sesión`);
+                  await eliminarSesionInexistente(sessionId);
+                }
+              } catch (error) {
+                console.error(`[WEBCONNECT] Error en reconexión automática para ${sessionId}:`, error.message);
               }
-            } catch (error) {
-              console.error(`[WEBCONNECT] Error en reconexión automática para ${sessionId}:`, error.message);
-            }
-          }, 3000);
+            }, 3000);
+          } else {
+            console.log(`[WEBCONNECT] 🚫 No reconectando sesión ${sessionId} - Falló por exceso de intentos QR`);
+          }
           
         } else if (statusSession === 'notLogged') {
           console.log(`[WEBCONNECT] 🔒 Sesión ${sessionId} no está logueada`);
           
         } else if (statusSession === 'qrReadFail') {
           console.log(`[WEBCONNECT] ❌ Fallo al leer QR para sesión ${sessionId}`);
+          
+          // 🔥 NUEVA LÓGICA: Incrementar contador de fallos
+          if (!sessions[sessionId]) return;
+          
+          if (!sessions[sessionId]._qrFailCount) {
+            sessions[sessionId]._qrFailCount = 0;
+          }
+          sessions[sessionId]._qrFailCount++;
+          
+          console.log(`[WEBCONNECT] 📊 Fallos QR para sesión ${sessionId}: ${sessions[sessionId]._qrFailCount}`);
+          
+          // Si hay muchos fallos consecutivos, cerrar sesión
+          if (sessions[sessionId]._qrFailCount >= 3) {
+            console.log(`[WEBCONNECT] ❌ Demasiados fallos QR para sesión ${sessionId} - Cerrando sesión`);
+            sessions[sessionId]._qrFailed = true;
+            
+            try {
+              await sessions[sessionId].close();
+              delete sessions[sessionId];
+              console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada por fallos QR consecutivos`);
+            } catch (closeError) {
+              console.error(`[WEBCONNECT] Error cerrando sesión por fallos QR:`, closeError.message);
+            }
+          }
         }
       }
     });
 
-    console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} creada exitosamente`);
-
     // Guardar la instancia en sessions
     sessions[sessionId] = client;
 
-    // 🔥 TU CONFIGURACIÓN DE EVENTOS EXISTENTE (mantener igual)
+    // 🔥 CONFIGURACIÓN DE EVENTOS
     client.onMessage(async (message) => {
       console.log(`[WEBCONNECT] 📨 Mensaje recibido en sesión ${sessionId}:`, message.body);
       await procesarMensaje(sessionId, message, client);
@@ -322,7 +418,7 @@ async function createSession(sessionId, onQR) {
       }
     });
 
-    // Mantener tus otros eventos existentes
+    // Eventos adicionales
     if (typeof client.onDisconnected === 'function') {
       client.onDisconnected(() => {
         console.log(`[WEBCONNECT] 🔴 Cliente ${sessionId} desconectado (onDisconnected)`);
@@ -335,6 +431,7 @@ async function createSession(sessionId, onQR) {
       });
     }
 
+    console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} creada exitosamente`);
     return client;
     
   } catch (error) {
@@ -342,51 +439,6 @@ async function createSession(sessionId, onQR) {
     throw error;
   }
 }
-
-/**
- * Devuelve la instancia activa de WhatsApp para un sessionId.
- * @param {string|number} sessionId
- * @returns {object|undefined}
- */
-function getSession(sessionId) {
-  return sessions[sessionId];
-}
-
-/**
- * Limpia la sesión específica y la elimina del pool de sesiones.
- * @param {string|number} sessionId
- */
-async function clearSession(sessionId) {
-  const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
-  const fs = require('fs').promises;
-  
-  try {
-    // Cerrar cliente si existe
-    if (sessions[sessionId]) {
-      try {
-        await sessions[sessionId].close();
-        console.log(`[WEBCONNECT] Cliente ${sessionId} cerrado`);
-      } catch (closeError) {
-        console.error(`[WEBCONNECT] Error cerrando cliente ${sessionId}:`, closeError);
-      }
-    }
-
-    // Eliminar del pool en memoria
-    delete sessions[sessionId];
-
-    // Limpiar archivos de sesión
-    const lockFile = path.join(sessionDir, 'SingletonLock');
-    try {
-      await fs.unlink(lockFile);
-      console.log(`[WEBCONNECT] SingletonLock eliminado para sesión ${sessionId}`);
-    } catch (err) {
-      // Archivo no existe, no es problema
-    }
-  } catch (error) {
-    console.error(`[WEBCONNECT] Error limpiando sesión ${sessionId}:`, error);
-  }
-}
-
 /**
  * Envía un mensaje desde el servidor (función auxiliar)
  * @param {string|number} sessionId 
