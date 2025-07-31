@@ -248,41 +248,84 @@ async function verificarIntegridadSesiones() {
   }
   
   const sessionDirs = fs.readdirSync(tokensDir)
-    .filter(dir => dir.startsWith('session_'))
+    .filter(dir => {
+      const fullPath = path.join(tokensDir, dir);
+      return fs.statSync(fullPath).isDirectory() && dir.startsWith('session_');
+    })
     .map(dir => dir.replace('session_', ''));
+  
+  console.log(`[INIT] 📁 Directorios encontrados: [${sessionDirs.map(id => `session_${id}`).join(', ')}]`);
   
   const sesionesValidas = [];
   const sesionesCorruptas = [];
   
   for (const sessionId of sessionDirs) {
     const sessionDir = path.join(tokensDir, `session_${sessionId}`);
-    const requiredFiles = ['Default', 'SingletonCookie'];
     
-    let esValida = true;
-    for (const file of requiredFiles) {
-      const filePath = path.join(sessionDir, file);
-      if (!fs.existsSync(filePath)) {
-        console.log(`[INIT] ❌ Archivo faltante en sesión ${sessionId}: ${file}`);
-        esValida = false;
-        break;
+    console.log(`[INIT] 🔍 Verificando sesión ${sessionId}...`);
+    
+    // Verificar si el directorio contiene archivos de sesión
+    let tieneArchivosImportantes = false;
+    
+    try {
+      const archivos = fs.readdirSync(sessionDir);
+      console.log(`[INIT] 📂 Archivos en session_${sessionId}: [${archivos.join(', ')}]`);
+      
+      // Buscar cualquier archivo que indique una sesión válida
+      const archivosImportantes = archivos.filter(archivo => {
+        return archivo === 'Default' || 
+               archivo === 'SingletonCookie' ||
+               archivo === 'session.json' ||
+               archivo.includes('Local Storage') ||
+               archivo.includes('Session Storage') ||
+               archivo.includes('IndexedDB') ||
+               archivo.includes('Web Data') ||
+               archivo.includes('Cookies');
+      });
+      
+      // Verificar si Default es un directorio con contenido
+      const defaultDir = path.join(sessionDir, 'Default');
+      if (fs.existsSync(defaultDir) && fs.statSync(defaultDir).isDirectory()) {
+        const defaultFiles = fs.readdirSync(defaultDir);
+        if (defaultFiles.length > 0) {
+          tieneArchivosImportantes = true;
+          console.log(`[INIT] ✅ Sesión ${sessionId} tiene directorio Default con ${defaultFiles.length} archivos`);
+        }
       }
+      
+      // O si tiene otros archivos importantes
+      if (archivosImportantes.length > 0) {
+        tieneArchivosImportantes = true;
+        console.log(`[INIT] ✅ Sesión ${sessionId} tiene archivos importantes: [${archivosImportantes.join(', ')}]`);
+      }
+      
+      // Si el directorio tiene contenido pero no archivos críticos específicos,
+      // aún podría ser una sesión válida
+      if (!tieneArchivosImportantes && archivos.length > 0) {
+        tieneArchivosImportantes = true;
+        console.log(`[INIT] ⚠️ Sesión ${sessionId} tiene archivos (${archivos.length}) - Considerando como válida`);
+      }
+      
+    } catch (readError) {
+      console.error(`[INIT] ❌ Error leyendo directorio session_${sessionId}:`, readError.message);
     }
     
-    if (esValida) {
+    if (tieneArchivosImportantes) {
       sesionesValidas.push(sessionId);
-      console.log(`[INIT] ✅ Sesión ${sessionId} válida`);
+      console.log(`[INIT] ✅ Sesión ${sessionId} marcada como válida`);
     } else {
       sesionesCorruptas.push(sessionId);
-      console.log(`[INIT] 🗑️ Eliminando sesión corrupta ${sessionId}...`);
+      console.log(`[INIT] 🗑️ Sesión ${sessionId} considerada vacía/corrupta - Eliminando...`);
       try {
         fs.rmSync(sessionDir, { recursive: true, force: true });
+        console.log(`[INIT] ✅ Directorio session_${sessionId} eliminado`);
       } catch (error) {
-        console.error(`[INIT] Error eliminando sesión ${sessionId}:`, error);
+        console.error(`[INIT] ❌ Error eliminando sesión ${sessionId}:`, error.message);
       }
     }
   }
   
-  console.log(`[INIT] 📊 Sesiones válidas: ${sesionesValidas.length}, corruptas eliminadas: ${sesionesCorruptas.length}`);
+  console.log(`[INIT] 📊 Resumen: ${sesionesValidas.length} válidas [${sesionesValidas.join(', ')}], ${sesionesCorruptas.length} eliminadas [${sesionesCorruptas.join(', ')}]`);
   return sesionesValidas;
 }
 

@@ -486,6 +486,8 @@ async function initializeExistingSessions(specificTenants = null) {
   const tokensDir = path.join(__dirname, '../../tokens');
   
   try {
+    console.log('[WEBCONNECT] 🚀 Iniciando restauración de sesiones...');
+    
     if (!fs.existsSync(tokensDir)) {
       console.log('[WEBCONNECT] 📁 No hay directorio de tokens');
       return;
@@ -493,25 +495,47 @@ async function initializeExistingSessions(specificTenants = null) {
 
     let tenantsToInit;
     
-    if (specificTenants) {
+    if (specificTenants && specificTenants.length > 0) {
       tenantsToInit = specificTenants;
       console.log(`[WEBCONNECT] 🎯 Inicializando sesiones específicas: [${specificTenants.join(', ')}]`);
     } else {
-      // Lógica original para obtener todos los tenants
-      const client = await pool.connect();
-      const result = await client.query('SELECT id FROM tenants');
-      tenantsToInit = result.rows.map(tenant => tenant.id.toString());
-      client.release();
+      console.log('[WEBCONNECT] ⚠️ No se proporcionaron tenants específicos - No se restaurará ninguna sesión');
+      return;
     }
+    
+    console.log(`[WEBCONNECT] 📋 Intentando restaurar ${tenantsToInit.length} sesiones...`);
     
     for (const tenantId of tenantsToInit) {
       try {
         console.log(`[WEBCONNECT] 🔄 Restaurando sesión para tenant ${tenantId}...`);
-        await createSession(tenantId, false); // false = no forzar nuevo QR
+        
+        // Verificar que existe el directorio de la sesión
+        const sessionDir = path.join(tokensDir, `session_${tenantId}`);
+        if (!fs.existsSync(sessionDir)) {
+          console.log(`[WEBCONNECT] ❌ No existe directorio para sesión ${tenantId} - Omitiendo`);
+          continue;
+        }
+        
+        // Crear sesión sin callback de QR (debería usar sesión guardada)
+        const client = await createSession(tenantId, null);
+        
+        if (client) {
+          console.log(`[WEBCONNECT] ✅ Sesión ${tenantId} restaurada exitosamente`);
+        } else {
+          console.log(`[WEBCONNECT] ⚠️ Sesión ${tenantId} no pudo ser restaurada`);
+        }
+        
+        // Pausa entre restauraciones para evitar sobrecarga
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
       } catch (error) {
-        console.error(`[WEBCONNECT] ❌ Error restaurando sesión ${tenantId}:`, error);
+        console.error(`[WEBCONNECT] ❌ Error restaurando sesión ${tenantId}:`, error.message);
       }
     }
+    
+    // Resumen final
+    const sesionesActivas = Object.keys(sessions);
+    console.log(`[WEBCONNECT] 📊 Restauración completada. Sesiones activas: [${sesionesActivas.join(', ')}]`);
     
   } catch (error) {
     console.error('[WEBCONNECT] ❌ Error en initializeExistingSessions:', error);
