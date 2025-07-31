@@ -170,28 +170,14 @@ class InformacionLocalField(Field):
 
 
 class TenantModelView(SecureModelView):
-    form_overrides = {
-        # 🔥 REMOVER: 'working_hours_general': WorkingHoursField,  
-    }
+    # 🔥 REMOVER inline_models que está causando problemas
+    # inline_models = [...]
 
-    inline_models = [
-        (Servicio, dict(
-            form_overrides={'working_hours': WorkingHoursField},
-            form_columns=['id', 'nombre', 'precio', 'duracion', 'cantidad', 'solo_horas_exactas', 'calendar_id', 'working_hours']
-        )), 
-        (Empleado, dict(
-            form_overrides={'working_hours': WorkingHoursField},
-            form_columns=['id', 'nombre', 'calendar_id', 'working_hours']
-        ))
-    ]
-    
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
     
-    # 🔥 ACTUALIZAR form_columns - remover campos generales
     form_columns = (
         'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
         'informacion_local', 'intervalo_entre_turnos'
-        # 🔥 REMOVER: 'calendar_id_general', 'working_hours_general'
     )
 
     column_formatters = {
@@ -219,6 +205,24 @@ class TenantModelView(SecureModelView):
             else:
                 flash(f'⚠️ Error inesperado: {e}', 'error')
             raise
+
+
+# 🔥 AGREGAR ModelViews separados para Servicio y Empleado
+class ServicioModelView(SecureModelView):
+    form_overrides = {
+        'working_hours': WorkingHoursField,
+    }
+    column_list = ('id', 'nombre', 'precio', 'duracion', 'cantidad', 'tenant.comercio', 'calendar_id')
+    form_columns = ('tenant', 'nombre', 'precio', 'duracion', 'cantidad', 'solo_horas_exactas', 'calendar_id', 'working_hours')
+    column_labels = {'tenant.comercio': 'Cliente'}
+
+class EmpleadoModelView(SecureModelView):
+    form_overrides = {
+        'working_hours': WorkingHoursField,
+    }
+    column_list = ('id', 'nombre', 'tenant.comercio', 'calendar_id')
+    form_columns = ('tenant', 'nombre', 'calendar_id', 'working_hours')
+    column_labels = {'tenant.comercio': 'Cliente'}
 
 
 class SecureAdminIndexView(AdminIndexView):
@@ -347,6 +351,8 @@ def init_admin(app, db):
         template_mode="bootstrap4"
     )
     admin.add_view(TenantModelView(Tenant, db.session, name="Clientes"))
+    admin.add_view(ServicioModelView(Servicio, db.session, name="Servicios"))  # 🔥 AGREGAR
+    admin.add_view(EmpleadoModelView(Empleado, db.session, name="Empleados"))  # 🔥 AGREGAR
     admin.add_view(ReservaModelView(Reserva, db.session, name="Reservas"))
     admin.add_view(ErrorLogModelView(ErrorLog, db.session, name="Errores"))
     admin.add_view(BlockedNumberModelView(BlockedNumber, db.session, name="Números Bloqueados"))

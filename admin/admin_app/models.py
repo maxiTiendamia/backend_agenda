@@ -1,8 +1,6 @@
 from datetime import datetime, timezone
 from admin_app.database import db
 from sqlalchemy.dialects.postgresql import JSON
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Text
-from sqlalchemy.orm import relationship
 
 class ErrorLog(db.Model):
     __tablename__ = "error_logs"
@@ -32,8 +30,9 @@ class Tenant(db.Model):
     working_hours_general = db.Column(db.Text, nullable=True)
     intervalo_entre_turnos = db.Column(db.Integer, default=20) 
 
-    servicios = db.relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
-    empleados = db.relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")
+    # 🔥 CRÍTICO: Definir relaciones explícitamente
+    servicios = db.relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan", lazy='dynamic')
+    empleados = db.relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan", lazy='dynamic')
 
     def __repr__(self):
         return f"<Tenant {self.nombre}>"
@@ -44,7 +43,7 @@ class Reserva(db.Model):
     fake_id = db.Column(db.String(12), unique=True, nullable=False) 
     event_id = db.Column(db.String(200), nullable=False)  
     empresa = db.Column(db.String(100), nullable=False) 
-    empleado_id = db.Column(db.Integer, db.ForeignKey('empleados.id'), nullable=True)  # 🔧 CORREGIDO
+    empleado_id = db.Column(db.Integer, db.ForeignKey('empleados.id'), nullable=True)
     empleado_nombre = db.Column(db.String(100), nullable=False)
     empleado_calendar_id = db.Column(db.String(200), nullable=False)
     cliente_nombre = db.Column(db.String(100), nullable=False) 
@@ -54,10 +53,11 @@ class Reserva(db.Model):
     estado = db.Column(db.String(20), nullable=False, default="activo") 
     cantidad = db.Column(db.Integer, default=1)
 
-    empleado = db.relationship('Empleado')  # 🔧 CORREGIDO
+    empleado = db.relationship('Empleado')
 
     def __repr__(self):
         return f"<Reserva {self.fake_id} - {self.empresa} - {self.empleado_nombre}>"
+
 class Servicio(db.Model):
     __tablename__ = "servicios"
 
@@ -66,18 +66,18 @@ class Servicio(db.Model):
     nombre = db.Column(db.String(150), nullable=False)
     precio = db.Column(db.Float, nullable=False)
     duracion = db.Column(db.Integer, nullable=False)  # minutos
-    cantidad = db.Column(db.Integer, default=1)  # 🔧 CORREGIDO
+    cantidad = db.Column(db.Integer, default=1)
     solo_horas_exactas = db.Column(db.Boolean, default=False)
     
-    # 🔥 AGREGAR ESTAS LÍNEAS FALTANTES:
-    calendar_id = db.Column(db.String, nullable=True)  # ✅ AGREGADO
-    working_hours = db.Column(db.Text, nullable=True)  # ✅ AGREGADO
+    # 🔥 CAMPOS FALTANTES AGREGADOS:
+    calendar_id = db.Column(db.String, nullable=True)
+    working_hours = db.Column(db.Text, nullable=True)
 
+    # 🔥 CRÍTICO: Relación inversa explícita
     tenant = db.relationship('Tenant', back_populates='servicios')
 
     def __repr__(self):
         return f"<Servicio {self.nombre}>"
-
 
 class Empleado(db.Model):
     __tablename__ = "empleados"
@@ -88,11 +88,11 @@ class Empleado(db.Model):
     calendar_id = db.Column(db.String(200), nullable=True)
     working_hours = db.Column(JSON)
 
+    # 🔥 CRÍTICO: Relación inversa explícita
     tenant = db.relationship('Tenant', back_populates='empleados')
 
     def __repr__(self):
         return f"<Empleado {self.nombre}>"
-
 
 class BlockedNumber(db.Model):
     __tablename__ = "blocked_numbers"
@@ -107,4 +107,4 @@ class BlockedNumber(db.Model):
     cliente = db.relationship('Tenant')
 
     def __repr__(self):
-        return f"<BlockedNumber {self.telefono} - {self.empleado.nombre if self.empleado else 'N/A'}>"
+        return f"<BlockedNumber {self.telefono}>"

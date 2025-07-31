@@ -476,7 +476,7 @@ def cancelar_evento_google(calendar_id, reserva_id, service_account_info):
         print("Error al cancelar evento:", e)
         return False
 
-def create_event_for_service(calendar_id, slot_dt, user_phone, service_account_info, duration_minutes, client_service, servicio_nombre):
+def create_event_for_service(servicio, slot_dt, user_phone, service_account_info, client_name):
     """
     Crea un evento específico para un servicio en Google Calendar
     """
@@ -502,12 +502,12 @@ def create_event_for_service(calendar_id, slot_dt, user_phone, service_account_i
             slot_dt = argentina_tz.localize(slot_dt)
         
         # Calcular fin del evento
-        end_time = slot_dt + timedelta(minutes=duration_minutes)
+        end_time = slot_dt + timedelta(minutes=servicio.duracion)
         
         # Crear evento
         event = {
-            'summary': f'{servicio_nombre} - {client_service}',
-            'description': f'Cliente: {client_service}\nTeléfono: {user_phone}\nServicio: {servicio_nombre}',
+            'summary': f'{servicio.nombre} - {client_name}',
+            'description': f'Cliente: {client_name}\nTeléfono: {user_phone}\nServicio: {servicio.nombre}',
             'start': {
                 'dateTime': slot_dt.isoformat(),
                 'timeZone': 'America/Argentina/Buenos_Aires',
@@ -523,7 +523,7 @@ def create_event_for_service(calendar_id, slot_dt, user_phone, service_account_i
         
         # Insertar evento
         event_result = service.events().insert(
-            calendarId=calendar_id,
+            calendarId=servicio.calendar_id,
             body=event
         ).execute()
         
