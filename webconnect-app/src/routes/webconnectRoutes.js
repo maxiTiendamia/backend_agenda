@@ -214,20 +214,73 @@ router.post('/restore-sessions', async (req, res) => {
   }
 });
 
-// Endpoint para reiniciar QR: limpia el QR viejo y genera uno nuevo
+// Endpoint para reiniciar QR: limpia el QR viejo y genera uno nuevo (VERSIÓN CORREGIDA)
 router.post('/restart-qr/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   try {
+    console.log(`[WEBCONNECT] Reinicio manual de QR para cliente ${sessionId}`);
+    
+    // 🔥 PASO 1: Cerrar sesión existente si está activa
+    const { sessions, clearSession } = require('../app/wppconnect');
+    if (sessions[sessionId]) {
+      console.log(`[WEBCONNECT] 🔄 Cerrando sesión existente para ${sessionId}...`);
+      try {
+        // Cerrar la sesión
+        await sessions[sessionId].close();
+        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada correctamente`);
+      } catch (closeError) {
+        console.error(`[WEBCONNECT] ⚠️ Error cerrando sesión ${sessionId}:`, closeError.message);
+      }
+      
+      // Eliminar de memoria
+      delete sessions[sessionId];
+      console.log(`[WEBCONNECT] 🗑️ Sesión ${sessionId} eliminada de memoria`);
+    }
+    
+    // 🔥 PASO 2: Limpiar archivos y locks
     await limpiarQR(pool, sessionId);
-    // Eliminar archivos de sesión y SingletonLock
     await limpiarSingletonLock(sessionId);
-    // Forzar nueva sesión y QR
+    
+    // 🔥 PASO 3: Esperar un poco para que se liberen los recursos
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // 🔥 PASO 4: Limpiar directorio de tokens completamente
+    const sessionFolder = getSessionFolder(sessionId);
+    if (fs.existsSync(sessionFolder)) {
+      try {
+        // Eliminar todo el directorio
+        fs.rmSync(sessionFolder, { recursive: true, force: true });
+        console.log(`[WEBCONNECT] 🗑️ Directorio ${sessionFolder} eliminado completamente`);
+        
+        // Recrear directorio vacío
+        await ensureSessionFolder(sessionId);
+        console.log(`[WEBCONNECT] 📁 Directorio ${sessionFolder} recreado`);
+      } catch (dirError) {
+        console.error(`[WEBCONNECT] Error manejando directorio:`, dirError.message);
+      }
+    }
+    
+    // 🔥 PASO 5: Crear nueva sesión
+    console.log(`[WEBCONNECT] 🚀 Creando nueva sesión para ${sessionId}...`);
     await createSession(sessionId, async (qr) => {
+      console.log(`[WEBCONNECT] QR generado para cliente ${sessionId} (manual)`);
       await guardarQR(pool, sessionId, qr, true);
+      console.log(`[WEBCONNECT] QR guardado en base de datos para cliente ${sessionId}`);
     });
-    res.json({ ok: true, message: 'QR reiniciado y nueva sesión generada' });
+    
+    res.json({ 
+      ok: true, 
+      message: `QR reiniciado exitosamente para cliente ${sessionId}`,
+      timestamp: new Date().toISOString()
+    });
+    
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    console.error(`[WEBCONNECT][ERROR] Error al reiniciar QR para ${sessionId}:`, err);
+    res.status(500).json({ 
+      ok: false, 
+      error: err.message,
+      details: 'Error durante reinicio de QR'
+    });
   }
 });
 
