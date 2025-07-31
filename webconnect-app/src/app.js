@@ -231,7 +231,98 @@ app.get('/redis-stats', async (req, res) => {
 
 const { createSession, testAPIConnection, initializeExistingSessions, monitorearSesiones, limpiarSesionesHuerfanas } = require('./app/wppconnect');
 
-// Función de inicialización
+/**
+ * Función para verificar integridad de directorios de sesión
+ */
+async function verificarIntegridadSesiones() {
+  const fs = require('fs');
+  const path = require('path');
+  const tokensDir = path.join(__dirname, 'tokens');
+  
+  console.log('[INIT] 🔍 Verificando integridad de sesiones...');
+  
+  if (!fs.existsSync(tokensDir)) {
+    console.log('[INIT] 📁 Creando directorio de tokens...');
+    fs.mkdirSync(tokensDir, { recursive: true });
+    return [];
+  }
+  
+  const sessionDirs = fs.readdirSync(tokensDir)
+    .filter(dir => dir.startsWith('session_'))
+    .map(dir => dir.replace('session_', ''));
+  
+  const sesionesValidas = [];
+  const sesionesCorruptas = [];
+  
+  for (const sessionId of sessionDirs) {
+    const sessionDir = path.join(tokensDir, `session_${sessionId}`);
+    const requiredFiles = ['Default', 'SingletonCookie'];
+    
+    let esValida = true;
+    for (const file of requiredFiles) {
+      const filePath = path.join(sessionDir, file);
+      if (!fs.existsSync(filePath)) {
+        console.log(`[INIT] ❌ Archivo faltante en sesión ${sessionId}: ${file}`);
+        esValida = false;
+        break;
+      }
+    }
+    
+    if (esValida) {
+      sesionesValidas.push(sessionId);
+      console.log(`[INIT] ✅ Sesión ${sessionId} válida`);
+    } else {
+      sesionesCorruptas.push(sessionId);
+      console.log(`[INIT] 🗑️ Eliminando sesión corrupta ${sessionId}...`);
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch (error) {
+        console.error(`[INIT] Error eliminando sesión ${sessionId}:`, error);
+      }
+    }
+  }
+  
+  console.log(`[INIT] 📊 Sesiones válidas: ${sesionesValidas.length}, corruptas eliminadas: ${sesionesCorruptas.length}`);
+  return sesionesValidas;
+}
+
+/**
+ * Función para obtener tenants con sesiones válidas
+ */
+async function obtenerTenantsConSesionesValidas() {
+  let dbClient = null;
+  
+  try {
+    // Obtener tenants activos de la BD
+    dbClient = await pool.connect();
+    const result = await dbClient.query('SELECT id FROM tenants');
+    const tenantsActivos = result.rows.map(tenant => tenant.id.toString());
+    
+    // Verificar integridad de sesiones en disco
+    const sesionesValidas = await verificarIntegridadSesiones();
+    
+    // Solo incluir tenants que estén activos Y tengan sesión válida
+    const tenantsConSesionValida = tenantsActivos.filter(tenantId => 
+      sesionesValidas.includes(tenantId)
+    );
+    
+    console.log(`[INIT] 📋 Tenants activos en BD: [${tenantsActivos.join(', ')}]`);
+    console.log(`[INIT] 💾 Sesiones válidas en disco: [${sesionesValidas.join(', ')}]`);
+    console.log(`[INIT] 🔗 Tenants con sesión válida: [${tenantsConSesionValida.join(', ')}]`);
+    
+    return tenantsConSesionValida;
+    
+  } catch (error) {
+    console.error('[INIT] ❌ Error obteniendo tenants con sesiones válidas:', error);
+    return [];
+  } finally {
+    if (dbClient) {
+      dbClient.release();
+    }
+  }
+}
+
+// Función de inicialización MEJORADA
 async function inicializar() {
   try {
     // 1. Probar conexión con PostgreSQL
@@ -249,18 +340,26 @@ async function inicializar() {
     console.log('[INIT] 🧹 Ejecutando limpieza inicial...');
     await limpiarDatosObsoletos();
     
-    // 4. Restaurar sesiones existentes
-    console.log('[INIT] 📱 Restaurando sesiones existentes...');
-    await initializeExistingSessions();
+    // 4. 🔧 NUEVO: Obtener solo tenants con sesiones válidas
+    console.log('[INIT] 🔍 Verificando tenants con sesiones válidas...');
+    const tenantsConSesionValida = await obtenerTenantsConSesionesValidas();
     
-    // 5. ✨ NUEVO: Limpiar sesiones huérfanas después de la inicialización
+    if (tenantsConSesionValida.length > 0) {
+      // 5. Restaurar SOLO sesiones válidas
+      console.log('[INIT] 📱 Restaurando sesiones válidas...');
+      await initializeExistingSessions(tenantsConSesionValida);
+    } else {
+      console.log('[INIT] ℹ️ No hay sesiones válidas para restaurar');
+    }
+    
+    // 6. ✨ Limpiar sesiones huérfanas después de la inicialización
     console.log('[INIT] 🗑️ Limpiando sesiones huérfanas...');
     await limpiarSesionesHuerfanas();
     
-    // 6. Programar limpieza periódica
+    // 7. Programar limpieza periódica
     programarLimpiezaPeriodica();
     
-    // 7. ✨ NUEVO: Iniciar monitoreo de sesiones
+    // 8. ✨ Iniciar monitoreo de sesiones
     console.log('[INIT] 🔍 Iniciando monitoreo de sesiones...');
     monitorearSesiones();
     

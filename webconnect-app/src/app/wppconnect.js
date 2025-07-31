@@ -480,7 +480,7 @@ async function testAPIConnection() {
  * Inicializa sesiones existentes al arrancar la aplicación
  * Ahora verifica contra la base de datos antes de restaurar
  */
-async function initializeExistingSessions() {
+async function initializeExistingSessions(specificTenants = null) {
   const fs = require('fs');
   const { Pool } = require('pg');
   const tokensDir = path.join(__dirname, '../../tokens');
@@ -491,94 +491,30 @@ async function initializeExistingSessions() {
       return;
     }
 
-    // Obtener lista de directorios de sesión existentes
-    const sessionDirs = fs.readdirSync(tokensDir)
-      .filter(dir => dir.startsWith('session_'))
-      .map(dir => dir.replace('session_', ''));
-
-    console.log(`[WEBCONNECT] 🔍 Directorios de sesión encontrados: [${sessionDirs.join(', ')}]`);
-
-    if (sessionDirs.length === 0) {
-      console.log('[WEBCONNECT] ⚪ No hay directorios de sesión para restaurar');
-      return;
-    }
-
-    // Conectar a la base de datos para verificar qué clientes existen
-    const pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: {
-        rejectUnauthorized: false
-      }
-    });
-
-    let dbClient = null;
-    let clientesActivos = [];
-
-    try {
-      dbClient = await pool.connect();
-      const result = await dbClient.query('SELECT id FROM tenants');
-      clientesActivos = result.rows.map(tenant => tenant.id.toString());
-      console.log(`[WEBCONNECT] 📊 Clientes activos en BD: [${clientesActivos.join(', ')}]`);
-    } catch (dbError) {
-      console.error('[WEBCONNECT] ❌ Error consultando base de datos:', dbError.message);
-      return;
-    } finally {
-      if (dbClient) {
-        dbClient.release();
-      }
-      await pool.end();
-    }
-
-    // Limpiar directorios de sesiones que ya no existen en la BD
-    const sessionesObsoletas = sessionDirs.filter(sessionId => !clientesActivos.includes(sessionId));
-    const sessionesValidas = sessionDirs.filter(sessionId => clientesActivos.includes(sessionId));
-
-    // Eliminar directorios obsoletos
-    if (sessionesObsoletas.length > 0) {
-      console.log(`[WEBCONNECT] 🗑️ Eliminando ${sessionesObsoletas.length} directorios obsoletos: [${sessionesObsoletas.join(', ')}]`);
-      
-      for (const sessionId of sessionesObsoletas) {
-        try {
-          const sessionDir = path.join(tokensDir, `session_${sessionId}`);
-          fs.rmSync(sessionDir, { recursive: true, force: true });
-          console.log(`[WEBCONNECT] ❌ Directorio eliminado: session_${sessionId}`);
-        } catch (delError) {
-          console.error(`[WEBCONNECT] Error eliminando directorio session_${sessionId}:`, delError.message);
-        }
-      }
-    }
-
-    // Restaurar solo las sesiones válidas
-    if (sessionesValidas.length > 0) {
-      console.log(`[WEBCONNECT] ✅ Restaurando ${sessionesValidas.length} sesiones válidas: [${sessionesValidas.join(', ')}]`);
-      
-      for (const sessionId of sessionesValidas) {
-        try {
-          console.log(`[WEBCONNECT] 🔄 Restaurando sesión ${sessionId}...`);
-          
-          // Crear sesión sin callback de QR (ya está autenticada)
-          await createSession(sessionId, null);
-          
-          console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} restaurada`);
-        } catch (error) {
-          console.error(`[WEBCONNECT] ❌ Error restaurando sesión ${sessionId}:`, error.message);
-          
-          // Si hay error restaurando, eliminar el directorio de tokens de esa sesión
-          try {
-            const sessionDir = path.join(tokensDir, `session_${sessionId}`);
-            fs.rmSync(sessionDir, { recursive: true, force: true });
-            console.log(`[WEBCONNECT] 🗑️ Directorio corrupto eliminado: session_${sessionId}`);
-          } catch (delError) {
-            console.error(`[WEBCONNECT] Error eliminando directorio corrupto session_${sessionId}:`, delError.message);
-          }
-        }
-      }
+    let tenantsToInit;
+    
+    if (specificTenants) {
+      tenantsToInit = specificTenants;
+      console.log(`[WEBCONNECT] 🎯 Inicializando sesiones específicas: [${specificTenants.join(', ')}]`);
     } else {
-      console.log('[WEBCONNECT] ⚪ No hay sesiones válidas para restaurar');
+      // Lógica original para obtener todos los tenants
+      const client = await pool.connect();
+      const result = await client.query('SELECT id FROM tenants');
+      tenantsToInit = result.rows.map(tenant => tenant.id.toString());
+      client.release();
     }
-
+    
+    for (const tenantId of tenantsToInit) {
+      try {
+        console.log(`[WEBCONNECT] 🔄 Restaurando sesión para tenant ${tenantId}...`);
+        await createSession(tenantId, false); // false = no forzar nuevo QR
+      } catch (error) {
+        console.error(`[WEBCONNECT] ❌ Error restaurando sesión ${tenantId}:`, error);
+      }
+    }
+    
   } catch (error) {
-    console.error('[WEBCONNECT] ❌ Error inicializando sesiones:', error);
+    console.error('[WEBCONNECT] ❌ Error en initializeExistingSessions:', error);
   }
 }
 
