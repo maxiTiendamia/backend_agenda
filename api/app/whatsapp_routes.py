@@ -458,6 +458,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     msg += "\nResponde con el número del empleado."
                     
                     state["step"] = "waiting_empleado"
+                    state["servicio_id"] = servicio_id  # 🆕 AGREGAR ESTA LÍNEA
                     state["empleados"] = [e.id for e in empleados]
                     set_user_state(telefono, state)
                     return JSONResponse(content={"mensaje": msg})
@@ -477,60 +478,128 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 msg += "\nResponde con el número del servicio."
                 return JSONResponse(content={"mensaje": msg})
 
-        if state.get("step") == "waiting_empleado":
+        # 🆕 AGREGAR nuevo manejo para waiting_empleado_sin_servicio
+        if state.get("step") == "waiting_empleado_sin_servicio":
             if mensaje.isdigit():
                 idx = int(mensaje) - 1
                 empleados_ids = state.get("empleados", [])
                 if 0 <= idx < len(empleados_ids):
                     empleado_id = empleados_ids[idx]
                     empleado = db.query(Empleado).get(empleado_id)
-                    servicio = db.query(Servicio).get(state["servicio_id"])
-                    slots = get_available_slots(
-                        calendar_id=empleado.calendar_id,
-                        credentials_json=GOOGLE_CREDENTIALS_JSON,
-                        working_hours_json=empleado.working_hours,
-                        service_duration=servicio.duracion,    
-                        intervalo_entre_turnos=20,             
-                        max_turnos=25,
-                        cantidad=servicio.cantidad or 1,
-                        solo_horas_exactas=servicio.solo_horas_exactas
-                    )
-                    ahora = datetime.now(pytz.timezone("America/Montevideo"))
-                    slots_futuros = [s for s in slots if s > ahora]
-                    max_turnos = 25
-                    slots_mostrar = slots_futuros[:max_turnos]
-                    if not slots_mostrar:
-                        return JSONResponse(content={"mensaje": "⚠️ No hay turnos disponibles para este empleado."})
-                    msg = "📅 Estos son los próximos turnos disponibles:\n"
-                    for i, slot in enumerate(slots_mostrar, 1):
-                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
-                    msg += "\nResponde con el número del turno."
-                    state["step"] = "waiting_turno_final"
-                    state["empleado_id"] = empleado_id
-                    state["slots"] = [s.isoformat() for s in slots_mostrar]
-                    set_user_state(telefono, state)
-                    return JSONResponse(content={"mensaje": msg})
+                    
+                    if not empleado.calendar_id or not empleado.working_hours:
+                        return JSONResponse(content={"mensaje": f"❌ El empleado {empleado.nombre} no está configurado correctamente. Contacta con el establecimiento."})
+                    
+                    # Si hay servicios disponibles, mostrarlos
+                    servicios = tenant.servicios
+                    if servicios:
+                        msg = "¿Qué servicio deseas reservar?\n"
+                        for i, s in enumerate(servicios, 1):
+                            msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                        msg += "\nResponde con el número del servicio."
+                        
+                        state["step"] = "waiting_servicio"
+                        state["empleado_id"] = empleado_id
+                        state["servicios"] = [s.id for s in servicios]
+                        set_user_state(telefono, state)
+                        return JSONResponse(content={"mensaje": msg})
+                    else:
+                        return JSONResponse(content={"mensaje": "⚠️ No hay servicios configurados para este empleado."})
                 else:
                     empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
-                    msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
+                    msg = "❌ Opción inválida.\n¿Con qué empleado deseas reservar?\n"
                     for i, e in enumerate(empleados, 1):
                         msg += f"🔹{i}. {e.nombre}\n"
                     msg += "\nResponde con el número del empleado."
-                    state["step"] = "waiting_empleado"
-                    state["empleados"] = [e.id for e in empleados]
-                    set_user_state(telefono, state)
                     return JSONResponse(content={"mensaje": msg})
             else:
                 empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
-                msg = "❌ Opción inválida.\n¿Con qué empleado?\n"
+                msg = "❌ Opción inválida.\n¿Con qué empleado deseas reservar?\n"
                 for i, e in enumerate(empleados, 1):
                     msg += f"🔹{i}. {e.nombre}\n"
                 msg += "\nResponde con el número del empleado."
-                state["step"] = "waiting_empleado"
-                state["empleados"] = [e.id for e in empleados]
-                set_user_state(telefono, state)
                 return JSONResponse(content={"mensaje": msg})
-        
+
+        # 🆕 AGREGAR manejo de pasos faltantes para empleados
+        if state.get("step") == "waiting_turno_final":
+            if mensaje.isdigit():
+                idx = int(mensaje) - 1
+                slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                if 0 <= idx < len(slots):
+                    slot = slots[idx]
+                    state["slot"] = slot.isoformat()
+                    state["step"] = "waiting_nombre_empleado"
+                    set_user_state(telefono, state)
+                    return JSONResponse(content={"mensaje": "Por favor, escribe tu nombre y apellido para confirmar la reserva."})
+                else:
+                    slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                    msg = "❌ Opción inválida.\n📅 Estos son los turnos disponibles:\n"
+                    for i, slot in enumerate(slots, 1):
+                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                    msg += "\nResponde con el número del turno."
+                    return JSONResponse(content={"mensaje": msg})
+            else:
+                slots = [datetime.fromisoformat(s) if isinstance(s, str) else s for s in state.get("slots", [])]
+                msg = "❌ Opción inválida.\n📅 Estos son los turnos disponibles:\n"
+                for i, slot in enumerate(slots, 1):
+                    msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                msg += "\nResponde con el número del turno."
+                return JSONResponse(content={"mensaje": msg})
+
+        # 🆕 AGREGAR confirmación final para empleados
+        if state.get("step") == "waiting_nombre_empleado":
+            nombre_apellido = mensaje.strip().title()
+            slot = state.get("slot")
+            if isinstance(slot, str):
+                slot = datetime.fromisoformat(slot)
+            
+            empleado = db.query(Empleado).get(state["empleado_id"])
+            servicio = db.query(Servicio).get(state["servicio_id"])
+            
+            # Crear evento en Google Calendar del empleado
+            try:
+                event_id = create_event(
+                    calendar_id=empleado.calendar_id,
+                    slot_dt=slot,
+                    user_phone=telefono,
+                    service_account_info=GOOGLE_CREDENTIALS_JSON,
+                    duration_minutes=servicio.duracion,
+                    client_service=f"{nombre_apellido} - {servicio.nombre}"
+                )
+                
+                fake_id = generar_fake_id()
+                reserva = Reserva(
+                    fake_id=fake_id,
+                    event_id=event_id,
+                    empresa=tenant.comercio,
+                    empleado_id=empleado.id,
+                    empleado_nombre=empleado.nombre,
+                    empleado_calendar_id=empleado.calendar_id,
+                    cliente_nombre=nombre_apellido,
+                    cliente_telefono=telefono,
+                    fecha_reserva=slot,
+                    servicio=servicio.nombre,
+                    estado="activo"
+                )
+                db.add(reserva)
+                db.commit()
+                
+                state.clear()
+                set_user_state(telefono, state)
+                
+                return JSONResponse(content={"mensaje": (
+                    f"✅ {nombre_apellido}, tu turno fue reservado con éxito para el {slot.strftime('%d/%m %H:%M')}.\n"
+                    f"\nEmpleado: {empleado.nombre}\n"
+                    f"Servicio: {servicio.nombre} ({servicio.duracion} min)\n"
+                    f"Precio: ${servicio.precio}\n"
+                    f"Dirección: {tenant.direccion or '📍 a confirmar con el asesor'}\n"
+                    f"\nSi necesitas cancelar, escribe: cancelar {fake_id}"
+                )})
+                
+            except Exception as e:
+                print(f"❌ Error creando reserva con empleado: {e}")
+                return JSONResponse(content={"mensaje": "❌ Error al crear la reserva. Por favor, intenta nuevamente."})
+
         # ...existing code... (mantener resto de la lógica para empleados)
         
         # 🔥 ACTUALIZAR la lógica para manejar palabras clave básicas
