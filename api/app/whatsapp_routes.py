@@ -4,13 +4,13 @@ from sqlalchemy.orm import Session
 import json
 import time
 import os
-import re  # 🔥 AGREGAR ESTA IMPORTACIÓN FALTANTE
+import re
 from dotenv import load_dotenv
 
-# 🔥 CORREGIR IMPORTS - usar imports relativos
+# 🔥 CORREGIR IMPORTS - usar imports absolutos en lugar de relativos
 from .models import Tenant, Servicio, Empleado, Reserva, ErrorLog, BlockedNumber
-from .deps import get_db  # 🔥 SOLO IMPORTAR DESDE deps.py
-from ..utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google, get_available_slots_for_service, create_event_for_service
+from .deps import get_db
+from api.utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google, get_available_slots_for_service, create_event_for_service
 from api.utils.generador_fake_id import generar_fake_id
 import redis
 import httpx
