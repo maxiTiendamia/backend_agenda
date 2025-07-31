@@ -302,12 +302,35 @@ def get_available_slots_for_service(
     else:
         working_hours = working_hours_json
 
+    # 🔥 MEJORAR EL MAPEO DE DÍAS EN ESPAÑOL A INGLÉS
+    dias_es_en = {
+        'lunes': 'monday',
+        'martes': 'tuesday', 
+        'miércoles': 'wednesday',
+        'miercoles': 'wednesday',  # Sin tilde también
+        'jueves': 'thursday',
+        'viernes': 'friday',
+        'sábado': 'saturday',
+        'sabado': 'saturday',  # Sin tilde también
+        'domingo': 'sunday'
+    }
+
     if isinstance(working_hours, list):
         normalized = {}
         for item in working_hours:
             if isinstance(item, dict) and 'day' in item and 'from' in item and 'to' in item:
-                day = item['day'].lower()
-                normalized.setdefault(day, []).append({"from": item['from'], "to": item['to']})
+                day = item['day'].lower().strip()
+                # 🔥 CONVERTIR DÍA EN ESPAÑOL A INGLÉS SI ES NECESARIO
+                day_en = dias_es_en.get(day, day)
+                normalized.setdefault(day_en, []).append({"from": item['from'], "to": item['to']})
+        working_hours = normalized
+    elif isinstance(working_hours, dict):
+        # Si ya es un dict, también normalizar las claves
+        normalized = {}
+        for day, periods in working_hours.items():
+            day_clean = day.lower().strip()
+            day_en = dias_es_en.get(day_clean, day_clean)
+            normalized[day_en] = periods
         working_hours = normalized
 
     available = []
@@ -316,6 +339,7 @@ def get_available_slots_for_service(
 
     print(f"🔍 Generando slots para servicio: {servicio.nombre}")
     print(f"🔍 Duración: {servicio.duracion} min, Cantidad: {servicio.cantidad}, Horas exactas: {servicio.solo_horas_exactas}")
+    print(f"🔍 Horarios normalizados: {working_hours}")
 
     while current_date < end_date.date() and turnos_generados < max_turnos:
         day_str = current_date.strftime('%A').lower()
@@ -323,7 +347,11 @@ def get_available_slots_for_service(
         print(f"🔍 Horarios disponibles para {day_str}: {working_hours.get(day_str, 'No definido')}")
         
         if day_str in working_hours:
-            for period in working_hours[day_str]:
+            periods = working_hours[day_str]
+            if not isinstance(periods, list):
+                periods = [periods]
+                
+            for period in periods:
                 if isinstance(period, dict):
                     from_str = period['from']
                     to_str = period['to']
@@ -488,6 +516,7 @@ def cancelar_evento_google(calendar_id, reserva_id, service_account_info):
 def create_event_for_service(servicio, slot_dt, user_phone, service_account_info, client_name):
     """
     Crea un evento específico para un servicio en Google Calendar
+    🔥 SOLUCIÓN: Remover la sección de attendees que causa el error 403
     """
     try:
         # Crear credenciales
@@ -514,10 +543,10 @@ def create_event_for_service(servicio, slot_dt, user_phone, service_account_info
         # Calcular fin del evento
         end_time = slot_dt + timedelta(minutes=servicio.duracion)
         
-        # Crear evento
+        # 🔥 CREAR EVENTO SIN ATTENDEES PARA EVITAR ERROR 403
         event = {
             'summary': f'{servicio.nombre} - {client_name}',
-            'description': f'Cliente: {client_name}\nTeléfono: {user_phone}\nServicio: {servicio.nombre}',
+            'description': f'Cliente: {client_name}\nTeléfono: {user_phone}\nServicio: {servicio.nombre}\nDuración: {servicio.duracion} minutos\nPrecio: ${servicio.precio}',
             'start': {
                 'dateTime': slot_dt.isoformat(),
                 'timeZone': 'America/Montevideo',
@@ -526,9 +555,10 @@ def create_event_for_service(servicio, slot_dt, user_phone, service_account_info
                 'dateTime': end_time.isoformat(),
                 'timeZone': 'America/Montevideo',
             },
-            'attendees': [
-                {'email': user_phone + '@placeholder.com'},
-            ],
+            # 🔥 REMOVER attendees - Esta línea causaba el error 403
+            # 'attendees': [
+            #     {'email': user_phone + '@placeholder.com'},
+            # ],
         }
         
         # Usar calendar_id del servicio
@@ -543,7 +573,7 @@ def create_event_for_service(servicio, slot_dt, user_phone, service_account_info
             body=event
         ).execute()
         
-        print(f"✅ Evento creado para servicio: {event_result.get('id')}")
+        print(f"✅ Evento creado para servicio: {event_result.get('id')} - {client_name} - {slot_dt.strftime('%d/%m %H:%M')}")
         return event_result.get('id')
         
     except Exception as e:
