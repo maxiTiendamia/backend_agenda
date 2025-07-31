@@ -7,11 +7,11 @@ import os
 import re
 from dotenv import load_dotenv
 
-# 🔥 CORREGIR IMPORTS - usar imports absolutos en lugar de relativos
+# 🔥 CORREGIR IMPORTS - usar imports relativos
 from .models import Tenant, Servicio, Empleado, Reserva, ErrorLog, BlockedNumber
 from .deps import get_db
-from api.utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google, get_available_slots_for_service, create_event_for_service
-from api.utils.generador_fake_id import generar_fake_id
+from ..utils.calendar_utils import get_available_slots, create_event, cancelar_evento_google, get_available_slots_for_service, create_event_for_service
+from ..utils.generador_fake_id import generar_fake_id
 import redis
 import httpx
 import asyncio
