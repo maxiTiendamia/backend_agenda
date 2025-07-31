@@ -8,12 +8,12 @@ from api.utils.generador_fake_id import generar_fake_id
 import time
 import re
 import os
-import pytz
 import redis
 import json
 import httpx
 import asyncio
 from datetime import datetime, timedelta
+import pytz  # Asegúrate de que esto esté importado
 
 REDIS_URL = os.getenv("REDIS_URL", "rediss://default:AcOQAAIjcDEzOGI2OWU1MzYxZDQ0YWQ2YWU3ODJlNWNmMGY5MjIzY3AxMA@literate-toucan-50064.upstash.io:6379")
 WEBCONNECT_URL = os.getenv("webconnect_url", "http://195.26.250.62:3000")
@@ -605,7 +605,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 msg += "\nResponde con el número del turno."
                 return JSONResponse(content={"mensaje": msg})
 
-        # waiting_nombre_empleado - Confirmación final para empleados
+        # waiting_nombre_empleado - Confirmación final para empleados  
         if state.get("step") == "waiting_nombre_empleado":
             nombre_apellido = mensaje.strip().title()
             slot = state.get("slot")
@@ -663,7 +663,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 print(f"❌ Error creando reserva con empleado: {e}")
                 return JSONResponse(content={"mensaje": "❌ Error al crear la reserva. Por favor, intenta nuevamente."})
 
-        # 🚨 MOVER ESTE BLOQUE AL FINAL, ANTES DEL EXCEPT:
+        # 🔥 REMOVER COMENTARIOS INNECESARIOS Y DUPLICACIONES
+
         # Manejo por defecto para mensajes no reconocidos
         return JSONResponse(content={"mensaje": (
             "🤔 No entendí tu mensaje.\n\n"
@@ -675,18 +676,28 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     except Exception as e:
         import traceback as tb
         error_text = tb.format_exc()
+        
+        # Usar variables seguras para evitar errores
+        cliente_info = tenant.comercio if 'tenant' in locals() and tenant else "Desconocido"
+        telefono_info = telefono if 'telefono' in locals() else "Desconocido"
+        mensaje_info = mensaje if 'mensaje' in locals() else "Desconocido"
+        
         log = ErrorLog(
-            cliente=tenant.comercio if 'tenant' in locals() and tenant else None,
-            telefono=telefono if 'telefono' in locals() else None,
-            mensaje=mensaje if 'mensaje' in locals() else None,
+            cliente=cliente_info,
+            telefono=telefono_info,
+            mensaje=mensaje_info,
             error=error_text
         )
         db.add(log)
         db.commit()
+        
         print("❌ Error general procesando mensaje:", e)
+        
         # Reiniciar el estado para que el usuario pueda seguir interactuando
-        state = {"step": "welcome", "last_interaction": time.time(), "mode": "bot", "is_first_contact": False}
-        set_user_state(telefono, state)
+        if 'telefono' in locals():
+            state = {"step": "welcome", "last_interaction": time.time(), "mode": "bot", "is_first_contact": False}
+            set_user_state(telefono, state)
+        
         return JSONResponse(content={
             "mensaje": (
                 "❌ Ocurrió un error inesperado. Volvé a intentar tu reserva.\n\n"
