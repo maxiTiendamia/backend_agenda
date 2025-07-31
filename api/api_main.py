@@ -12,7 +12,6 @@ load_dotenv()
 
 # 🔥 CORREGIR IMPORTS - usar imports relativos desde la carpeta actual
 from app.whatsapp_routes import router as whatsapp_router
-from app.admin_routes import router as admin_router
 
 app = FastAPI(
     title="Backend Agenda API",
