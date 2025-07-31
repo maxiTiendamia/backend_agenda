@@ -1026,10 +1026,96 @@ async function clearSession(sessionId) {
   }
 }
 
+/**
+ * Obtiene una sesión existente del pool de sesiones
+ * @param {string|number} sessionId - ID de la sesión
+ * @returns {object|null} - Cliente de wppconnect o null si no existe
+ */
+function getSession(sessionId) {
+  try {
+    const client = sessions[sessionId];
+    if (client) {
+      console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} encontrada en memoria`);
+      return client;
+    } else {
+      console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} no encontrada en memoria`);
+      return null;
+    }
+  } catch (error) {
+    console.error(`[WEBCONNECT] ❌ Error obteniendo sesión ${sessionId}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Verifica si una sesión está activa y conectada
+ * @param {string|number} sessionId - ID de la sesión
+ * @returns {Promise<boolean>} - true si está conectada, false si no
+ */
+async function isSessionActive(sessionId) {
+  try {
+    const client = getSession(sessionId);
+    if (!client) {
+      return false;
+    }
+    
+    const isConnected = await client.isConnected();
+    console.log(`[WEBCONNECT] 📡 Sesión ${sessionId} conectada: ${isConnected}`);
+    return isConnected;
+  } catch (error) {
+    console.error(`[WEBCONNECT] ❌ Error verificando estado de sesión ${sessionId}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Obtiene el estado de todas las sesiones activas
+ * @returns {object} - Objeto con el estado de todas las sesiones
+ */
+async function getAllSessionsStatus() {
+  const status = {};
+  const sessionIds = Object.keys(sessions);
+  
+  console.log(`[WEBCONNECT] 📊 Obteniendo estado de ${sessionIds.length} sesiones`);
+  
+  for (const sessionId of sessionIds) {
+    try {
+      const isActive = await isSessionActive(sessionId);
+      const client = sessions[sessionId];
+      
+      status[sessionId] = {
+        active: isActive,
+        hasClient: !!client,
+        connected: isActive
+      };
+      
+      if (client && isActive) {
+        try {
+          const connectionState = await client.getConnectionState();
+          status[sessionId].connectionState = connectionState;
+        } catch (stateError) {
+          status[sessionId].connectionState = 'ERROR';
+        }
+      }
+    } catch (error) {
+      status[sessionId] = {
+        active: false,
+        hasClient: false,
+        connected: false,
+        error: error.message
+      };
+    }
+  }
+  
+  return status;
+}
+
 module.exports = { 
   createSession, 
   clearSession, 
-  getSession, 
+  getSession,  // ✅ Ahora está implementada
+  isSessionActive, // ✅ Nueva función auxiliar
+  getAllSessionsStatus, // ✅ Nueva función para debug
   sendMessage, 
   testAPIConnection,
   initializeExistingSessions,
