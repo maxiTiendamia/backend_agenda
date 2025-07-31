@@ -45,14 +45,21 @@ class Reserva(Base):
         return f"<Reserva {self.fake_id} - {self.empresa} - {self.empleado_nombre}>"
 class Servicio(Base):
     __tablename__ = "servicios"
-    id = Column(Integer, primary_key=True)
-    nombre = Column(String)
-    duracion = Column(Integer)
-    precio = Column(Float)
-    tenant_id = Column(Integer, ForeignKey('tenants.id'))
-    cantidad = Column(Integer, default=1)  # <-- NUEVO CAMPO
-    tenant = relationship('Tenant', back_populates='servicios')
-    solo_horas_exactas = Column(Boolean, default=False)  # nuevo campo
+
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String, nullable=False)
+    precio = Column(Float, nullable=False)
+    duracion = Column(Integer, nullable=False)  # en minutos
+    cantidad = Column(Integer, default=1)  # cantidad de canchas/recursos disponibles
+    solo_horas_exactas = Column(Boolean, default=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"))
+    
+    # 🆕 Nuevos campos para calendario y horarios por servicio
+    calendar_id = Column(String, nullable=True)  # ID del calendario de Google
+    working_hours = Column(Text, nullable=True)  # JSON con horarios laborales
+
+    # Relación con Tenant
+    tenant = relationship("Tenant", back_populates="servicios")
 
 
 class Empleado(Base):

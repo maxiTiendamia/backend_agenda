@@ -2,22 +2,14 @@
 require('dotenv').config();
 const express = require('express');
 const Redis = require('ioredis');
-const { Pool } = require('pg'); // Cambiar a PostgreSQL
+const { pool } = require('./app/database'); // ✅ Usar el pool existente
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Configuración de Redis
-const redis = new Redis(process.env.REDIS_URL || 'rediss://default:AcOQAAIjcDEzOGI2OWU1MzYxZDQ0YWQ2YWU3ODJlNWNmMGY5MjIzY3AxMA@literate-toucan-50064.upstash.io:6379');
-
-// Configuración de PostgreSQL usando la URL completa
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // Necesario para Render
-  }
-});
+// Configuración de Redis usando redisClient
+const redis = require('./app/redisClient');
 
 /**
  * Función para limpiar datos obsoletos en Redis y directorios de tokens

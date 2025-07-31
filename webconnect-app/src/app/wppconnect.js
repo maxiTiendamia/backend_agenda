@@ -975,6 +975,7 @@ async function restoreFromBackup(sessionId) {
     return false;
   }
 }
+
 /**
  * Limpia la sesión específica y la elimina del pool de sesiones.
  * @param {string|number} sessionId
@@ -984,6 +985,14 @@ async function clearSession(sessionId) {
   
   try {
     console.log(`[WEBCONNECT] 🧹 Limpiando sesión ${sessionId}...`);
+    
+    // Limpiar intervals de keep-alive si existen
+    if (sessions[sessionId] && sessions[sessionId]._keepAliveIntervals) {
+      sessions[sessionId]._keepAliveIntervals.forEach(interval => {
+        clearInterval(interval);
+      });
+      console.log(`[WEBCONNECT] 🛑 Keep-alive intervals limpiados para ${sessionId}`);
+    }
     
     // Cerrar cliente si existe
     if (sessions[sessionId]) {
@@ -1016,19 +1025,6 @@ async function clearSession(sessionId) {
     throw error;
   }
 }
-/**
- * Devuelve la instancia activa de WhatsApp para un sessionId.
- */
-function getSession(sessionId) {
-  return sessions[sessionId];
-}
-
-/**
- * Limpia la sesión específica y la elimina del pool de sesiones.
- */
-async function clearSession(sessionId) {
-  // ... código de la función clearSession que te pasé antes
-}
 
 module.exports = { 
   createSession, 
@@ -1042,12 +1038,9 @@ module.exports = {
   verificarClienteExisteEnBD,
   eliminarSesionInexistente,
   limpiarSesionesHuerfanas,
-  
-  // 🔥 NUEVAS FUNCIONES EXPORTADAS
   setupKeepAlive,
   saveSessionBackup,
   reconnectSession,
   restoreFromBackup,
-  
-  sessions // Mantener acceso al objeto sessions
+  sessions
 };

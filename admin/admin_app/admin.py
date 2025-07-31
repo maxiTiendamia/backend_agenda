@@ -173,21 +173,27 @@ class InformacionLocalField(Field):
 
 class TenantModelView(SecureModelView):
     form_overrides = {
-        'working_hours_general': WorkingHoursField,  
+        # 🔥 REMOVER: 'working_hours_general': WorkingHoursField,  
     }
 
     inline_models = [
-        (Servicio, dict(form_columns=['id', 'nombre', 'precio', 'duracion', 'cantidad','solo_horas_exactas'])), 
+        (Servicio, dict(
+            form_overrides={'working_hours': WorkingHoursField},  # 🆕 Agregar working_hours a servicios
+            form_columns=['id', 'nombre', 'precio', 'duracion', 'cantidad', 'solo_horas_exactas', 'calendar_id', 'working_hours']
+        )), 
         (Empleado, dict(
             form_overrides={'working_hours': WorkingHoursField},
             form_columns=['id', 'nombre', 'calendar_id', 'working_hours']
         ))
     ]
+    
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
+    
+    # 🔥 ACTUALIZAR form_columns - remover campos generales
     form_columns = (
-    'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
-    'informacion_local', 'intervalo_entre_turnos',  
-    'calendar_id_general', 'working_hours_general'
+        'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
+        'informacion_local', 'intervalo_entre_turnos'
+        # 🔥 REMOVER: 'calendar_id_general', 'working_hours_general'
     )
 
     column_formatters = {

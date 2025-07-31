@@ -1,8 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const router = express.Router();
-const { pool } = require('../app/database');
-const redisClient = require('../app/redisClient');
+const { pool } = require('../app/database'); // ✅ Usar importación consistente
+const redis = require('../app/redisClient'); // ✅ Usar redisClient unificado
 const { createSession } = require('../app/wppconnect');
 const { guardarQR, limpiarQR } = require('../app/qrUtils');
 const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock, getSession } = require('../app/sessionUtils');
@@ -38,7 +38,7 @@ router.get('/estado-sesiones', async (req, res) => {
       // Verificar datos en Redis
       let datosEnRedis = false;
       try {
-        const redisKeys = await redisClient.keys(`*${clienteId}*`);
+        const redisKeys = await redis.keys(`*${clienteId}*`);
         datosEnRedis = redisKeys.length > 0;
       } catch (redisError) {
         console.log(`[ESTADO] Error verificando Redis para cliente ${clienteId}:`, redisError.message);
@@ -189,10 +189,10 @@ router.get('/debug/errores', async (req, res) => {
 // Endpoint para restaurar sesiones desde Redis al reiniciar el VPS
 router.post('/restore-sessions', async (req, res) => {
   try {
-    const keys = await redisClient.keys('session:*');
+    const keys = await redis.keys('session:*');
     let restauradas = 0;
     for (const key of keys) {
-      const sessionData = await redisClient.get(key);
+      const sessionData = await redis.get(key);
       if (sessionData) {
         const sessionId = key.replace('session:', '');
         // Restaurar archivos de sesión en disco
@@ -214,12 +214,32 @@ router.post('/restore-sessions', async (req, res) => {
   }
 });
 
-// Endpoint para reiniciar QR: limpia el QR viejo y genera uno nuevo (VERSIÓN CORREGIDA)
+// Endpoint mejorado para restart-qr
 router.post('/restart-qr/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
+  
+  // Validar sessionId
+  if (!sessionId || isNaN(sessionId)) {
+    return res.status(400).json({ 
+      ok: false, 
+      error: 'ID de sesión inválido' 
+    });
+  }
+  
   try {
     console.log(`[WEBCONNECT] Reinicio manual de QR para cliente ${sessionId}`);
     
+    // Verificar que el cliente existe en la BD antes de proceder
+    const { verificarClienteExisteEnBD } = require('../app/wppconnect');
+    const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+    
+    if (!clienteExiste) {
+      return res.status(404).json({
+        ok: false,
+        error: `Cliente ${sessionId} no encontrado en la base de datos`
+      });
+    }
+
     // 🔥 PASO 1: Cerrar sesión existente si está activa
     const { sessions, clearSession } = require('../app/wppconnect');
     if (sessions[sessionId]) {
@@ -329,7 +349,7 @@ async function saveSessionToRedis(sessionId) {
         
         // Guardar en Redis con una clave única
         const redisKey = `session_${sessionId}_file_${file}`;
-        await redisClient.set(redisKey, content, 'EX', 3600); // Expira en 1 hora
+        await redis.set(redisKey, content, 'EX', 3600); // Expira en 1 hora
         
         console.log(`[REDIS] ✅ Archivo guardado: ${file} -> ${redisKey}`);
         
@@ -346,7 +366,7 @@ async function saveSessionToRedis(sessionId) {
       status: 'active'
     };
 
-    await redisClient.set(`session_${sessionId}_metadata`, JSON.stringify(sessionData), 'EX', 3600);
+    await redis.set(`session_${sessionId}_metadata`, JSON.stringify(sessionData), 'EX', 3600);
     console.log(`[REDIS] ✅ Metadatos de sesión ${sessionId} guardados en Redis`);
 
   } catch (error) {
@@ -449,10 +469,10 @@ router.get('/estado-sesion/:sessionId', async (req, res) => {
     // Verificar datos en Redis
     let datosRedis = [];
     try {
-      const redisKeys = await redisClient.keys(`*${sessionId}*`);
+      const redisKeys = await redis.keys(`*${sessionId}*`);
       for (const key of redisKeys) {
-        const tipo = await redisClient.type(key);
-        const ttl = await redisClient.ttl(key);
+        const tipo = await redis.type(key);
+        const ttl = await redis.ttl(key);
         datosRedis.push({
           clave: key,
           tipo: tipo,
@@ -608,6 +628,62 @@ router.get('/verificar-cliente/:sessionId', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Endpoint de salud mejorado
+router.get('/health-detailed', async (req, res) => {
+  try {
+    const redis = require('../app/redisClient');
+    const { pool } = require('../app/database');
+    const { sessions } = require('../app/wppconnect');
+    
+    // Verificar Redis
+    let redisStatus = 'error';
+    try {
+      await redis.ping();
+      redisStatus = 'ok';
+    } catch (redisError) {
+      console.error('[HEALTH] Redis error:', redisError);
+    }
+    
+    // Verificar PostgreSQL
+    let dbStatus = 'error';
+    let dbClient = null;
+    try {
+      dbClient = await pool.connect();
+      await dbClient.query('SELECT 1');
+      dbStatus = 'ok';
+    } catch (dbError) {
+      console.error('[HEALTH] DB error:', dbError);
+    } finally {
+      if (dbClient) dbClient.release();
+    }
+    
+    // Contar sesiones activas
+    const sesionesActivas = Object.keys(sessions).length;
+    
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      services: {
+        redis: redisStatus,
+        database: dbStatus,
+        sessions: {
+          active: sesionesActivas,
+          list: Object.keys(sessions)
+        }
+      },
+      uptime: process.uptime(),
+      memory: process.memoryUsage()
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
       error: error.message,
       timestamp: new Date().toISOString()
     });
