@@ -680,28 +680,6 @@ async function monitorearSesiones() {
  * Reemplaza tu module.exports existente con este:
  */
 
-module.exports = { 
-  createSession, 
-  clearSession, 
-  getSession, 
-  sendMessage, 
-  testAPIConnection,
-  initializeExistingSessions,
-  monitorearSesiones,
-  verificarNumeroBloqueado,
-  verificarClienteExisteEnBD,
-  eliminarSesionInexistente,
-  limpiarSesionesHuerfanas,
-  
-  // 🔥 NUEVAS FUNCIONES EXPORTADAS
-  setupKeepAlive,
-  saveSessionBackup,
-  reconnectSession,
-  restoreFromBackup,
-  
-  sessions // Mantener acceso al objeto sessions
-};
-
 /**
  * 🧹 NUEVA FUNCIÓN: Limpia sesiones huérfanas (sesiones sin cliente en BD)
  */
@@ -1007,9 +985,16 @@ module.exports = {
   testAPIConnection,
   initializeExistingSessions,
   monitorearSesiones,
-  verificarNumeroBloqueado, // Nueva función
-  verificarClienteExisteEnBD, // Nueva función
-  eliminarSesionInexistente, // Nueva función
-  limpiarSesionesHuerfanas, // Nueva función
-  sessions
+  verificarNumeroBloqueado,
+  verificarClienteExisteEnBD,
+  eliminarSesionInexistente,
+  limpiarSesionesHuerfanas,
+  
+  // 🔥 NUEVAS FUNCIONES EXPORTADAS
+  setupKeepAlive,
+  saveSessionBackup,
+  reconnectSession,
+  restoreFromBackup,
+  
+  sessions // Mantener acceso al objeto sessions
 };
