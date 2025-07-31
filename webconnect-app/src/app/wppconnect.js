@@ -679,7 +679,6 @@ async function monitorearSesiones() {
  * 
  * Reemplaza tu module.exports existente con este:
  */
-
 /**
  * 🧹 NUEVA FUNCIÓN: Limpia sesiones huérfanas (sesiones sin cliente en BD)
  */
@@ -975,6 +974,60 @@ async function restoreFromBackup(sessionId) {
     console.error(`[WEBCONNECT] ❌ Error restaurando backup para ${sessionId}:`, error.message);
     return false;
   }
+}
+/**
+ * Limpia la sesión específica y la elimina del pool de sesiones.
+ * @param {string|number} sessionId
+ */
+async function clearSession(sessionId) {
+  const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
+  
+  try {
+    console.log(`[WEBCONNECT] 🧹 Limpiando sesión ${sessionId}...`);
+    
+    // Cerrar cliente si existe
+    if (sessions[sessionId]) {
+      try {
+        await sessions[sessionId].close();
+        console.log(`[WEBCONNECT] ✅ Cliente ${sessionId} cerrado`);
+      } catch (closeError) {
+        console.error(`[WEBCONNECT] Error cerrando cliente ${sessionId}:`, closeError);
+      }
+    }
+
+    // Eliminar del pool en memoria
+    delete sessions[sessionId];
+
+    // Limpiar archivos de sesión
+    const lockFile = path.join(sessionDir, 'SingletonLock');
+    try {
+      if (fs.existsSync(lockFile)) {
+        fs.rmSync(lockFile, { force: true });
+        console.log(`[WEBCONNECT] 🗑️ SingletonLock eliminado para sesión ${sessionId}`);
+      }
+    } catch (err) {
+      console.error(`[WEBCONNECT] Error eliminando SingletonLock:`, err);
+    }
+    
+    console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} limpiada completamente`);
+    
+  } catch (error) {
+    console.error(`[WEBCONNECT] ❌ Error limpiando sesión ${sessionId}:`, error);
+    throw error;
+  }
+}
+/**
+ * Devuelve la instancia activa de WhatsApp para un sessionId.
+ */
+function getSession(sessionId) {
+  return sessions[sessionId];
+}
+
+/**
+ * Limpia la sesión específica y la elimina del pool de sesiones.
+ */
+async function clearSession(sessionId) {
+  // ... código de la función clearSession que te pasé antes
 }
 
 module.exports = { 
