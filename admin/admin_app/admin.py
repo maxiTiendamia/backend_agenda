@@ -12,8 +12,6 @@ import os
 import requests
 import threading
 
-print("✅ Servicio:", Servicio.tenant.property.back_populates)
-
 WEBCONNECT_URL = os.getenv("webconnect_url", "http://195.26.250.62:3000")
 basic_auth = BasicAuth()
 
@@ -178,7 +176,7 @@ class TenantModelView(SecureModelView):
 
     inline_models = [
         (Servicio, dict(
-            form_overrides={'working_hours': WorkingHoursField},  # 🆕 Agregar working_hours a servicios
+            form_overrides={'working_hours': WorkingHoursField},
             form_columns=['id', 'nombre', 'precio', 'duracion', 'cantidad', 'solo_horas_exactas', 'calendar_id', 'working_hours']
         )), 
         (Empleado, dict(

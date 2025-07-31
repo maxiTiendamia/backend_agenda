@@ -475,3 +475,61 @@ def cancelar_evento_google(calendar_id, reserva_id, service_account_info):
     except Exception as e:
         print("Error al cancelar evento:", e)
         return False
+
+def create_event_for_service(calendar_id, slot_dt, user_phone, service_account_info, duration_minutes, client_service, servicio_nombre):
+    """
+    Crea un evento específico para un servicio en Google Calendar
+    """
+    try:
+        from googleapiclient.discovery import build
+        from google.oauth2 import service_account
+        import pytz
+        from datetime import timedelta
+        
+        # Crear credenciales
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=['https://www.googleapis.com/auth/calendar']
+        )
+        
+        service = build('calendar', 'v3', credentials=credentials)
+        
+        # Configurar zona horaria
+        argentina_tz = pytz.timezone('America/Argentina/Buenos_Aires')
+        
+        # Asegurar que slot_dt tenga zona horaria
+        if slot_dt.tzinfo is None:
+            slot_dt = argentina_tz.localize(slot_dt)
+        
+        # Calcular fin del evento
+        end_time = slot_dt + timedelta(minutes=duration_minutes)
+        
+        # Crear evento
+        event = {
+            'summary': f'{servicio_nombre} - {client_service}',
+            'description': f'Cliente: {client_service}\nTeléfono: {user_phone}\nServicio: {servicio_nombre}',
+            'start': {
+                'dateTime': slot_dt.isoformat(),
+                'timeZone': 'America/Argentina/Buenos_Aires',
+            },
+            'end': {
+                'dateTime': end_time.isoformat(),
+                'timeZone': 'America/Argentina/Buenos_Aires',
+            },
+            'attendees': [
+                {'email': user_phone + '@placeholder.com'},
+            ],
+        }
+        
+        # Insertar evento
+        event_result = service.events().insert(
+            calendarId=calendar_id,
+            body=event
+        ).execute()
+        
+        print(f"✅ Evento creado para servicio: {event_result.get('id')}")
+        return event_result.get('id')
+        
+    except Exception as e:
+        print(f"❌ Error creando evento para servicio: {e}")
+        raise e

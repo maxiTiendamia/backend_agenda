@@ -1,15 +1,21 @@
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from fastapi import FastAPI
-from api.app.models import Tenant
+from fastapi.middleware.cors import CORSMiddleware
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
+
 from api.app.whatsapp_routes import router as whatsapp_router
-from starlette.middleware.cors import CORSMiddleware
+from api.app.admin_routes import router as admin_router
 
-app = FastAPI()
+app = FastAPI(
+    title="Backend Agenda API",
+    description="API para sistema de reservas con WhatsApp",
+    version="1.0.0"
+)
 
-# CORS (opcional)
+# Configurar CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,8 +24,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(whatsapp_router, prefix="/api")
+# Incluir routers
+app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["whatsapp"])
+app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 
 @app.get("/")
-def root():
-    return {"status": "API funcionando"}
+async def root():
+    return {"message": "Backend Agenda API funcionando correctamente"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "message": "API funcionando"}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

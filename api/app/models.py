@@ -14,7 +14,7 @@ class Tenant(Base):
     telefono = Column(String(20), nullable=True)
     fecha_creada = Column(DateTime, default=datetime.now(timezone.utc))
     direccion = Column(String(200), nullable=True)
-    qr_code = Column(Text, nullable=True)
+    qr_code = Column(Text, nullable=True)  # 🔧 CORREGIDO: era "Colum"
     informacion_local = Column(Text, nullable=True) 
     calendar_id_general = Column(String, nullable=True) 
     working_hours_general = Column(Text, nullable=True) 
@@ -43,6 +43,7 @@ class Reserva(Base):
 
     def __repr__(self):
         return f"<Reserva {self.fake_id} - {self.empresa} - {self.empleado_nombre}>"
+
 class Servicio(Base):
     __tablename__ = "servicios"
 
@@ -52,15 +53,17 @@ class Servicio(Base):
     duracion = Column(Integer, nullable=False)  # en minutos
     cantidad = Column(Integer, default=1)  # cantidad de canchas/recursos disponibles
     solo_horas_exactas = Column(Boolean, default=False)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"))
+    tenant_id = Column(Integer, ForeignKey("tenants.id"))  # ✅ AGREGAR SI FALTA
     
-    # 🆕 Nuevos campos para calendario y horarios por servicio
-    calendar_id = Column(String, nullable=True)  # ID del calendario de Google
+    # Campos para calendario y horarios por servicio
+    calendar_id = Column(String, nullable=True)
     working_hours = Column(Text, nullable=True)  # JSON con horarios laborales
 
     # Relación con Tenant
     tenant = relationship("Tenant", back_populates="servicios")
 
+    def __repr__(self):
+        return f"<Servicio {self.nombre}>"
 
 class Empleado(Base):
     __tablename__ = "empleados"
@@ -71,6 +74,9 @@ class Empleado(Base):
     working_hours = Column(JSON)
 
     tenant = relationship('Tenant', back_populates='empleados')
+
+    def __repr__(self):
+        return f"<Empleado {self.nombre}>"
     
 class ErrorLog(Base):
     __tablename__ = "error_logs"
@@ -91,3 +97,6 @@ class BlockedNumber(Base):
 
     empleado = relationship('Empleado')
     cliente = relationship('Tenant')
+
+    def __repr__(self):
+        return f"<BlockedNumber {self.telefono}>"
