@@ -263,7 +263,7 @@ def get_available_slots_for_service(
         if start_datetime and end_datetime:
             # Evento con hora específica
             start_dt = datetime.datetime.fromisoformat(start_datetime.replace('Z', '+00:00'))
-            end_dt = datetime.datetime.fromisoformat(endDatetime.replace('Z', '+00:00'))
+            end_dt = datetime.datetime.fromisoformat(end_datetime.replace('Z', '+00:00'))
             # Si no tiene tzinfo, agrégala
             if start_dt.tzinfo is None:
                 start_dt = start_dt.replace(tzinfo=URUGUAY_TZ)

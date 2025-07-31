@@ -29,8 +29,7 @@ app.add_middleware(
 )
 
 # Incluir routers
-app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["whatsapp"])
-app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
+app.include_router(whatsapp_router, prefix="/api", tags=["whatsapp"])
 
 @app.get("/")
 async def root():
