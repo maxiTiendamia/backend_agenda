@@ -278,7 +278,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     msg = "¿Qué servicio deseas?\n"
                     for i, s in enumerate(todos_servicios, 1):
                         es_informativo = getattr(s, 'es_informativo', False)
-                        emoji = "ℹ️" if es_informativo else "📅"
+                        emoji = "\nℹ️ " if es_informativo else "\n📅 "
                         msg += f"{emoji}{i}. {s.nombre}"
                         if not es_informativo:
                             msg += f" ({s.duracion} min, ${s.precio})"
@@ -352,7 +352,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                                 slots = get_available_slots_for_service(
                                     servicio=servicio,
                                     intervalo_entre_turnos=getattr(tenant, 'intervalo_entre_turnos', 20) or 20,
-                                    max_turnos=25,
+                                    max_turnos=30,
                                     credentials_json=GOOGLE_CREDENTIALS_JSON
                                 )
                                 
@@ -408,7 +408,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         msg = "❌ Opción inválida.\n¿Qué servicio deseas?\n"
                         for i, s in enumerate(servicios, 1):
                             es_informativo = getattr(s, 'es_informativo', False)
-                            emoji = "ℹ️" if es_informativo else "📅"
+                            emoji = "\nℹ️ " if es_informativo else "\n📅 "
                             msg += f"{emoji}{i}. {s.nombre}"
                             if not es_informativo:
                                 msg += f" ({getattr(s, 'duracion', 0)} min, ${getattr(s, 'precio', 0)})"
@@ -466,7 +466,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 slots_actuales = get_available_slots_for_service(
                     servicio=servicio,
                     intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,
-                    max_turnos=10,
+                    max_turnos=30,
                     credentials_json=GOOGLE_CREDENTIALS_JSON
                 )
                 ahora = datetime.now(pytz.timezone("America/Montevideo"))
@@ -592,7 +592,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         working_hours_json=empleado.working_hours,
                         service_duration=servicio.duracion,
                         intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,
-                        max_turnos=25,
+                        max_turnos=30,
                         cantidad=servicio.cantidad or 1,
                         solo_horas_exactas=getattr(servicio, 'solo_horas_exactas', False),
                         turnos_consecutivos=getattr(servicio, 'turnos_consecutivos', False)  # 🆕 ASEGURAR PARÁMETRO
