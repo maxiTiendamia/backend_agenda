@@ -175,10 +175,17 @@ class TenantModelView(SecureModelView):
 
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
     
+    # 🔍 VERIFICAR: Si working_hours_general existe, agregarlo aquí
     form_columns = (
         'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
-        'informacion_local', 'intervalo_entre_turnos'
+        'informacion_local', 'working_hours_general', 'intervalo_entre_turnos'
     )
+
+    # 🔥 AGREGAR form_overrides completo
+    form_overrides = {
+        'informacion_local': InformacionLocalField,
+        'working_hours_general': WorkingHoursField,  # 🆕 AGREGAR si existe el campo
+    }
 
     column_formatters = {
         'qr_code': lambda v, c, m, p: Markup(
@@ -210,6 +217,13 @@ class TenantModelView(SecureModelView):
 # 🔥 AGREGAR ModelViews separados para Servicio y Empleado
 class ServicioModelView(SecureModelView):
     """Vista personalizada para gestionar servicios"""
+    
+    # ✅ MANTENER form_overrides para WorkingHoursField
+    form_overrides = {
+        'working_hours': WorkingHoursField,
+    }
+    
+    # ✅ RESTO DE LA CONFIGURACIÓN SE MANTIENE IGUAL
     column_list = ('id', 'tenant', 'nombre', 'precio', 'duracion', 'es_informativo', 'calendar_id')
     column_searchable_list = ['nombre']
     column_filters = ['tenant.comercio', 'es_informativo']
@@ -221,7 +235,7 @@ class ServicioModelView(SecureModelView):
         'cantidad': 'Cantidad Disponible',
         'solo_horas_exactas': 'Solo Horas Exactas',
         'calendar_id': 'ID del Calendario',
-        'working_hours': 'Horarios de Trabajo (JSON)',
+        'working_hours': 'Horarios de Trabajo',  # ✅ Sin "(JSON)"
         'es_informativo': 'Es Informativo',
         'mensaje_personalizado': 'Mensaje Personalizado'
     }
@@ -232,11 +246,8 @@ class ServicioModelView(SecureModelView):
         'es_informativo', 'mensaje_personalizado'
     ]
     
+    # ✅ MANTENER form_widget_args solo para mensaje_personalizado
     form_widget_args = {
-        'working_hours': {
-            'rows': 5,
-            'placeholder': 'Formato JSON: {"monday": [{"from": "09:00", "to": "17:00"}], ...}'
-        },
         'mensaje_personalizado': {
             'rows': 8,
             'placeholder': 'Mensaje que se mostrará cuando el cliente seleccione este servicio informativo. Ejemplo: "Para este servicio, contacta directamente al 099 123 456 o visítanos en nuestro local."'
@@ -254,7 +265,7 @@ class ServicioModelView(SecureModelView):
             'description': 'ID del calendario de Google. Solo necesario para servicios con reservas automáticas.'
         },
         'working_hours': {
-            'description': 'Horarios en formato JSON. Solo necesario para servicios con reservas automáticas.'
+            'description': 'Horarios de trabajo del servicio. Solo necesario para servicios con reservas automáticas.'  # 🔥 CAMBIAR descripción
         }
     }
 
