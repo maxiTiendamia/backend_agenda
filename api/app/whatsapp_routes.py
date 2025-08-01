@@ -255,16 +255,37 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 servicios = tenant.servicios
                 empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                 
-                # 🆕 NUEVO: Si hay servicios con calendario configurado
-                servicios_con_calendario = [s for s in servicios if s.calendar_id and s.working_hours]
+                # 🔥 VERIFICACIÓN SEGURA: Separar servicios por tipo
+                servicios_con_calendario = []
+                servicios_informativos = []
+                servicios_con_empleados = []
                 
-                if servicios_con_calendario:
-                    msg = "¿Qué servicio deseas reservar?\n"
-                    for i, s in enumerate(servicios_con_calendario, 1):
-                        msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                for s in servicios:
+                    # Verificar si tiene el atributo es_informativo de forma segura
+                    es_informativo = getattr(s, 'es_informativo', False)
+                    
+                    if es_informativo:
+                        servicios_informativos.append(s)
+                    elif s.calendar_id and s.working_hours:
+                        servicios_con_calendario.append(s)
+                    else:
+                        servicios_con_empleados.append(s)
+                
+                # Combinar todos los servicios para mostrar en una sola lista
+                todos_servicios = servicios_con_calendario + servicios_informativos + servicios_con_empleados
+                
+                if todos_servicios:
+                    msg = "¿Qué servicio deseas?\n"
+                    for i, s in enumerate(todos_servicios, 1):
+                        es_informativo = getattr(s, 'es_informativo', False)
+                        emoji = "ℹ️" if es_informativo else "📅"
+                        msg += f"{emoji}{i}. {s.nombre}"
+                        if not es_informativo:
+                            msg += f" ({s.duracion} min, ${s.precio})"
+                        msg += "\n"
                     msg += "\nResponde con el número del servicio."
-                    state["step"] = "waiting_servicio_con_calendario"
-                    state["servicios"] = [s.id for s in servicios_con_calendario]
+                    state["step"] = "waiting_servicio_general"
+                    state["servicios"] = [s.id for s in todos_servicios]
                     set_user_state(telefono, state)
                     return JSONResponse(content={"mensaje": msg})
                 
@@ -283,60 +304,118 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 else:
                     return JSONResponse(content={"mensaje": "⚠️ No hay servicios disponibles para reservar turnos en este momento. Contacta con el establecimiento para más información."})
 
-        # 🆕 NUEVO: Manejo de servicios con calendario propio
-        if state.get("step") == "waiting_servicio_con_calendario":
+        # 🔥 CORREGIR: Manejo general de servicios (informativos y con reservas)
+        if state.get("step") == "waiting_servicio_general":
             if mensaje.isdigit():
-                idx = int(mensaje) - 1
-                servicios_ids = state.get("servicios", [])
-                if 0 <= idx < len(servicios_ids):
-                    servicio_id = servicios_ids[idx]
-                    servicio = db.query(Servicio).get(servicio_id)
+                try:
+                    idx = int(mensaje) - 1
+                    servicios_ids = state.get("servicios", [])
                     
-                    if not servicio.calendar_id or not servicio.working_hours:
-                        return JSONResponse(content={"mensaje": f"❌ El servicio {servicio.nombre} no está configurado correctamente. Contacta con el establecimiento."})
-                    
-                    # Usar la nueva función para obtener slots del servicio
-                    slots = get_available_slots_for_service(
-                        servicio=servicio,
-                        intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,
-                        max_turnos=25,
-                        credentials_json=GOOGLE_CREDENTIALS_JSON
-                    )
-                    
-                    ahora = datetime.now(pytz.timezone("America/Montevideo"))
-                    slots_futuros = [s for s in slots if s > ahora]
-                    # Filtrar según disponibilidad
-                    slots_disponibles = [s for s in slots_futuros if hay_disponibilidad_servicio(db, servicio, s)]
-                    
-                    if not slots_disponibles:
-                        return JSONResponse(content={"mensaje": f"⚠️ No hay turnos disponibles para {servicio.nombre} en este momento."})
-                    
-                    msg = f"📅 Turnos disponibles para {servicio.nombre}:\n"
-                    for i, slot in enumerate(slots_disponibles[:25], 1):
-                        msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
-                    msg += "\nResponde con el número del turno."
-                    
-                    state["step"] = "waiting_turno_servicio"
-                    state["servicio_id"] = servicio_id
-                    state["slots"] = [s.isoformat() for s in slots_disponibles[:25]]
-                    set_user_state(telefono, state)
-                    return JSONResponse(content={"mensaje": msg})
-                else:
-                    servicios_con_calendario = [db.query(Servicio).get(sid) for sid in state.get("servicios", [])]
-                    msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
-                    for i, s in enumerate(servicios_con_calendario, 1):
-                        msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-                    msg += "\nResponde con el número del servicio."
-                    return JSONResponse(content={"mensaje": msg})
+                    if 0 <= idx < len(servicios_ids):
+                        servicio_id = servicios_ids[idx]
+                        servicio = db.query(Servicio).get(servicio_id)
+                        
+                        if not servicio:
+                            return JSONResponse(content={"mensaje": "❌ Servicio no encontrado. Intenta nuevamente."})
+                        
+                        # 🔥 VERIFICACIÓN SEGURA del atributo es_informativo
+                        es_informativo = getattr(servicio, 'es_informativo', False)
+                        
+                        # SI ES SERVICIO INFORMATIVO
+                        if es_informativo:
+                            # Enviar mensaje personalizado y resetear estado
+                            state.clear()
+                            state = {"step": "welcome", "last_interaction": time.time(), "mode": "bot"}
+                            set_user_state(telefono, state)
+                            
+                            mensaje_personalizado = getattr(servicio, 'mensaje_personalizado', None)
+                            mensaje_final = mensaje_personalizado if mensaje_personalizado and mensaje_personalizado.strip() else f"ℹ️ Para el servicio *{servicio.nombre}*, contacta directamente con nosotros para más información."
+                            
+                            # Agregar información de contacto si está disponible
+                            if getattr(tenant, 'telefono', None):
+                                mensaje_final += f"\n\n📞 Teléfono: {tenant.telefono}"
+                            if getattr(tenant, 'direccion', None):
+                                mensaje_final += f"\n📍 Dirección: {tenant.direccion}"
+                                
+                            mensaje_final += "\n\n¿Necesitas algo más? Escribe *\"Turno\"* para otros servicios o *\"Ayuda\"* para hablar con un asesor."
+                            
+                            return JSONResponse(content={"mensaje": mensaje_final})
+                        
+                        # SI TIENE CALENDARIO PROPIO (servicio con reservas automáticas)
+                        elif getattr(servicio, 'calendar_id', None) and getattr(servicio, 'working_hours', None):
+                            try:
+                                # Obtener slots disponibles del servicio
+                                slots = get_available_slots_for_service(
+                                    servicio=servicio,
+                                    intervalo_entre_turnos=getattr(tenant, 'intervalo_entre_turnos', 20) or 20,
+                                    max_turnos=25,
+                                    credentials_json=GOOGLE_CREDENTIALS_JSON
+                                )
+                                
+                                ahora = datetime.now(pytz.timezone("America/Montevideo"))
+                                slots_futuros = [s for s in slots if s > ahora]
+                                slots_disponibles = [s for s in slots_futuros if hay_disponibilidad_servicio(db, servicio, s)]
+                                
+                                if not slots_disponibles:
+                                    return JSONResponse(content={"mensaje": f"⚠️ No hay turnos disponibles para {servicio.nombre} en este momento."})
+                                
+                                msg = f"📅 Turnos disponibles para {servicio.nombre}:\n"
+                                for i, slot in enumerate(slots_disponibles[:25], 1):
+                                    msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
+                                msg += "\nResponde con el número del turno."
+                                
+                                state["step"] = "waiting_turno_servicio"
+                                state["servicio_id"] = servicio_id
+                                state["slots"] = [s.isoformat() for s in slots_disponibles[:25]]
+                                set_user_state(telefono, state)
+                                return JSONResponse(content={"mensaje": msg})
+                                
+                            except Exception as e:
+                                print(f"❌ Error obteniendo slots para servicio {servicio.nombre}: {e}")
+                                return JSONResponse(content={"mensaje": f"❌ Error al consultar disponibilidad para {servicio.nombre}. Contacta con el establecimiento."})
+                        
+                        # SI NO TIENE CALENDARIO (servicio con empleados)
+                        else:
+                            empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
+                            
+                            if not empleados:
+                                return JSONResponse(content={"mensaje": "⚠️ No hay empleados disponibles para este servicio."})
+                            
+                            msg = "¿Con qué empleado?\n"
+                            for i, e in enumerate(empleados, 1):
+                                msg += f"🔹{i}. {e.nombre}\n"
+                            msg += "\nResponde con el número del empleado."
+                            
+                            state["step"] = "waiting_empleado"
+                            state["servicio_id"] = servicio_id
+                            state["empleados"] = [e.id for e in empleados]
+                            set_user_state(telefono, state)
+                            return JSONResponse(content={"mensaje": msg})
+                            
+                    else:
+                        # Mostrar servicios nuevamente si la opción es inválida
+                        servicios = [db.query(Servicio).get(sid) for sid in servicios_ids if db.query(Servicio).get(sid)]
+                        msg = "❌ Opción inválida.\n¿Qué servicio deseas?\n"
+                        for i, s in enumerate(servicios, 1):
+                            es_informativo = getattr(s, 'es_informativo', False)
+                            emoji = "ℹ️" if es_informativo else "📅"
+                            msg += f"{emoji}{i}. {s.nombre}"
+                            if not es_informativo:
+                                msg += f" ({getattr(s, 'duracion', 0)} min, ${getattr(s, 'precio', 0)})"
+                            msg += "\n"
+                        msg += "\nResponde con el número del servicio."
+                        return JSONResponse(content={"mensaje": msg})
+                        
+                except Exception as e:
+                    print(f"❌ Error procesando selección de servicio: {e}")
+                    return JSONResponse(content={"mensaje": "❌ Error al procesar tu selección. Escribe 'Turno' para intentar nuevamente."})
             else:
-                servicios_con_calendario = [db.query(Servicio).get(sid) for sid in state.get("servicios", [])]
-                msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
-                for i, s in enumerate(servicios_con_calendario, 1):
-                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-                msg += "\nResponde con el número del servicio."
-                return JSONResponse(content={"mensaje": msg})
+                return JSONResponse(content={"mensaje": "❌ Por favor, responde con el número del servicio que deseas."})
 
-        # 🆕 NUEVO: Selección de turno para servicio con calendario
+        # 🔥 ELIMINAR COMPLETAMENTE EL BLOQUE waiting_servicio_con_calendario (líneas 415-489)
+        # TODO ESTE BLOQUE DEBE SER ELIMINADO - ES CÓDIGO DUPLICADO QUE NUNCA SE EJECUTA
+
+        # 🆕 CONTINUAR CON waiting_turno_servicio (que ya está correcto)
         if state.get("step") == "waiting_turno_servicio":
             if mensaje.isdigit():
                 idx = int(mensaje) - 1

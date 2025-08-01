@@ -50,14 +50,18 @@ class Servicio(Base):
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String, nullable=False)
     precio = Column(Float, nullable=False)
-    duracion = Column(Integer, nullable=False)  # en minutos
-    cantidad = Column(Integer, default=1)  # cantidad de canchas/recursos disponibles
+    duracion = Column(Integer, nullable=False)
+    cantidad = Column(Integer, default=1)
     solo_horas_exactas = Column(Boolean, default=False)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"))  # ✅ AGREGAR SI FALTA
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     
     # Campos para calendario y horarios por servicio
     calendar_id = Column(String, nullable=True)
-    working_hours = Column(Text, nullable=True)  # JSON con horarios laborales
+    working_hours = Column(Text, nullable=True)
+    
+    # 🆕 CAMPOS PARA SERVICIOS INFORMATIVOS - ASEGURAR CONSISTENCIA:
+    es_informativo = Column(Boolean, default=False, nullable=False)
+    mensaje_personalizado = Column(Text, nullable=True)
 
     # Relación con Tenant
     tenant = relationship("Tenant", back_populates="servicios")
@@ -90,7 +94,7 @@ class ErrorLog(Base):
 class BlockedNumber(Base):
     __tablename__ = "blocked_numbers"
     id = Column(Integer, primary_key=True)
-    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=False)
+    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=True)  # 🔥 CAMBIAR A nullable=True
     cliente_id = Column(Integer, ForeignKey('tenants.id'), nullable=False)
     telefono = Column(String(30), nullable=False)
     fecha_bloqueo = Column(DateTime, default=datetime.now(timezone.utc))
