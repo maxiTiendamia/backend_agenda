@@ -147,41 +147,29 @@ def get_available_slots_for_service(
     credentials_json=""
 ):
     """
-    🔥 CORREGIR: Formato de working_hours y imports
+    🚀 VERSIÓN OPTIMIZADA - Sin logs excesivos
     """
     try:
-        print(f"🔧 DEBUG: Generando slots para servicio '{servicio.nombre}'")
+        # 🔥 SOLO LOG INICIAL
+        print(f"📅 Generando {max_turnos} slots para '{servicio.nombre}' ({servicio.duracion}min)")
         
-        # Configurar credenciales de Google
-        if not credentials_json:
-            raise ValueError("No se proporcionaron credenciales de Google")
-            
+        # Configurar credenciales (sin logs)
         service_account_info = json.loads(credentials_json)
         credentials = service_account.Credentials.from_service_account_info(
             service_account_info,
             scopes=['https://www.googleapis.com/auth/calendar']
         )
-        
         calendar_service = build('calendar', 'v3', credentials=credentials)
         
-        # Parsear horarios de trabajo
+        # Parsear horarios
         working_hours = json.loads(servicio.working_hours)
         service_duration = servicio.duracion
-        
-        # 🆕 VERIFICAR TIPO DE SERVICIO
         turnos_consecutivos = getattr(servicio, 'turnos_consecutivos', False)
         solo_horas_exactas = getattr(servicio, 'solo_horas_exactas', False)
         
-        print(f"🔧 DEBUG: Configuración del servicio:")
-        print(f"   - Duración: {service_duration} min")
-        print(f"   - Turnos consecutivos: {turnos_consecutivos}")
-        print(f"   - Solo horas exactas: {solo_horas_exactas}")
-        print(f"   - Intervalo entre turnos: {intervalo_entre_turnos} min")
-        print(f"   - Working hours RAW: {working_hours}")
-        
-        # Configurar zona horaria - 🔥 CORREGIR IMPORT
+        # Configurar zona horaria
         tz = pytz.timezone("America/Montevideo")
-        now = datetime.now(tz)  # 🔥 AHORA FUNCIONA
+        now = datetime.now(tz)
         end_date = now + timedelta(days=max_days)
         
         all_slots = []
@@ -189,24 +177,18 @@ def get_available_slots_for_service(
         
         while current_date <= end_date.date() and len(all_slots) < max_turnos:
             day_name = current_date.strftime('%A').lower()
-            
-            day_mapping = {
+            day_key = {
                 'monday': 'monday', 'tuesday': 'tuesday', 'wednesday': 'wednesday',
                 'thursday': 'thursday', 'friday': 'friday', 'saturday': 'saturday', 'sunday': 'sunday'
-            }
-            
-            day_key = day_mapping.get(day_name, day_name)
-            print(f"🔧 DEBUG: Procesando día {current_date} ({day_key}) - Slots actuales: {len(all_slots)}")
+            }.get(day_name, day_name)
             
             if day_key in working_hours and working_hours[day_key]:
                 day_periods = working_hours[day_key]
-                print(f"🔧 DEBUG: Períodos para {day_key}: {day_periods}")
                 
-                # 🔥 DETECTAR Y CONVERTIR FORMATO INCORRECTO
+                # 🔥 DETECTAR Y CONVERTIR FORMATO SIN LOGS EXCESIVOS
                 if isinstance(day_periods, list) and len(day_periods) > 0:
-                    # Verificar si es formato string "08:00-15:00"
                     if isinstance(day_periods[0], str) and '-' in day_periods[0]:
-                        print(f"🔧 DEBUG: Detectado formato string '{day_periods[0]}', convirtiendo...")
+                        # Convertir formato "08:00-15:00" a dict
                         converted_periods = []
                         for period_str in day_periods:
                             if '-' in period_str and period_str != "--:---:--":
@@ -215,61 +197,36 @@ def get_available_slots_for_service(
                                     'from': start_str.strip(),
                                     'to': end_str.strip()
                                 })
-                                print(f"🔧 DEBUG: Convertido '{period_str}' a {{'from': '{start_str.strip()}', 'to': '{end_str.strip()}'}}")
                         day_periods = converted_periods
-                        print(f"🔧 DEBUG: Períodos convertidos: {day_periods}")
-                    
-                    # Si ya es formato dict, mantenerlo
                     elif isinstance(day_periods[0], dict):
-                        pass  # Ya está en el formato correcto
-                    else:
-                        print(f"⚠️ Formato no reconocido: {day_periods}")
-                        current_date += timedelta(days=1)
-                        continue
-                        
+                        pass  # Ya está en formato correcto
                 elif isinstance(day_periods, dict):
-                    # Formato viejo: {"from": "08:00", "to": "15:00"}
                     day_periods = [day_periods]
-                else:
-                    print(f"⚠️ Formato de horarios no reconocido para {day_key}: {day_periods}")
-                    current_date += timedelta(days=1)
-                    continue
                 
+                # Procesar períodos
                 for period in day_periods:
                     if isinstance(period, dict) and 'from' in period and 'to' in period:
                         start_time_str = period['from']
                         end_time_str = period['to']
                         
-                        print(f"🔧 DEBUG: Procesando período {start_time_str}-{end_time_str}")
-                        
-                        # 🔥 VALIDAR FORMATO DE HORAS
                         if start_time_str == "--:--" or end_time_str == "--:--":
-                            print(f"🔧 DEBUG: Período inválido ignorado: {start_time_str}-{end_time_str}")
                             continue
                         
                         try:
-                            # Parsear horas
                             start_hour, start_minute = map(int, start_time_str.split(':'))
                             end_hour, end_minute = map(int, end_time_str.split(':'))
                             
                             period_start = tz.localize(datetime.combine(current_date, time(start_hour, start_minute)))
                             period_end = tz.localize(datetime.combine(current_date, time(end_hour, end_minute)))
                             
-                            # Si es al día siguiente (ej: 22:00 a 02:00)
                             if period_end <= period_start:
                                 period_end += timedelta(days=1)
                             
-                            print(f"🔧 DEBUG: Período convertido: {period_start} a {period_end}")
-                            
-                            # 🔥 SOLO PROCESAR SI EL PERÍODO ES EN EL FUTURO
                             if period_end <= now:
-                                print(f"🔧 DEBUG: Período {period_start}-{period_end} ya pasó, saltando")
                                 continue
                             
                             # Ajustar inicio si es en el pasado
                             if period_start <= now:
-                                print(f"🔧 DEBUG: Ajustando período que empezó en el pasado: {period_start}")
-                                # Redondear al siguiente intervalo válido
                                 minutes_diff = (now - period_start).total_seconds() / 60
                                 if turnos_consecutivos:
                                     intervals_passed = int(minutes_diff / service_duration) + 1
@@ -280,125 +237,49 @@ def get_available_slots_for_service(
                                 else:
                                     intervals_passed = int(minutes_diff / intervalo_entre_turnos) + 1
                                     period_start = period_start + timedelta(minutes=intervals_passed * intervalo_entre_turnos)
-                                
-                                print(f"🔧 DEBUG: Período ajustado al futuro: {period_start}")
-                            
 
-                            # 🆕 GENERAR SLOTS SEGÚN EL TIPO DE SERVICIO
+                            # 🚀 GENERAR SLOTS OPTIMIZADO
                             if turnos_consecutivos:
-                                print("🔧 DEBUG: Generando turnos consecutivos")
                                 current_slot_start = period_start
-                                slots_for_day = 0  # Contador para debug
-                                
-                                while current_slot_start + timedelta(minutes=service_duration) <= period_end:
-                                    slot_end = current_slot_start + timedelta(minutes=service_duration)
-                                    
-                                    # Verificar que el slot completo esté en el futuro
+                                while current_slot_start + timedelta(minutes=service_duration) <= period_end and len(all_slots) < max_turnos:
                                     if current_slot_start > now:
-                                        print(f"🔧 DEBUG: Verificando slot consecutivo: {current_slot_start.strftime('%H:%M')}-{slot_end.strftime('%H:%M')} ({service_duration}min)")
-                                        
-                                        # Verificar disponibilidad en Google Calendar
                                         if is_slot_available_in_calendar(calendar_service, servicio.calendar_id, current_slot_start, service_duration):
                                             all_slots.append(current_slot_start)
-                                            slots_for_day += 1
-                                            print(f"   ✅ Slot consecutivo agregado: {current_slot_start.strftime('%d/%m %H:%M')}-{slot_end.strftime('%H:%M')}")
-                                        else:
-                                            print(f"   ❌ Slot consecutivo ocupado: {current_slot_start.strftime('%d/%m %H:%M')}-{slot_end.strftime('%H:%M')}")
-                                    else:
-                                        print(f"🔧 DEBUG: Slot en el pasado saltado: {current_slot_start.strftime('%H:%M')}")
-                                    
-                                    # 🔑 CLAVE: Avanzar exactamente por la duración del servicio (sin solapamiento)
                                     current_slot_start += timedelta(minutes=service_duration)
-                                
-                                print(f"🔧 DEBUG: Día {current_date} - {slots_for_day} slots consecutivos generados")
                                     
                             elif solo_horas_exactas:
-                                print("🔧 DEBUG: Generando solo horas exactas (incluyendo medias horas)")
-                                # Empezar desde la hora exacta más cercana
                                 current_time = period_start.replace(minute=0, second=0, microsecond=0)
-                                
-                                # Si el período empieza después de una hora exacta, ir a la siguiente
                                 if current_time < period_start:
                                     current_time += timedelta(hours=1)
                                 
-                                slots_for_day = 0
-                                
-                                # 🔥 NUEVA LÓGICA: Generar slots cada 30 minutos (horas exactas Y medias horas)
-                                while current_time + timedelta(minutes=service_duration) <= period_end:
-                                    slot_end = current_time + timedelta(minutes=service_duration)
-                                    
-                                    # Solo agregar si está en punto de hora (00) o media hora (30)
-                                    if current_time.minute in [0, 30]:
-                                        if current_time > now:
-                                            print(f"🔧 DEBUG: Verificando slot hora exacta/media: {current_time.strftime('%H:%M')}-{slot_end.strftime('%H:%M')} ({service_duration}min)")
-                                            
-                                            # 🔥 PERMITIR SOLAPAMIENTO: No verificar Google Calendar, solo agregar
-                                            # En "solo horas exactas" se permite solapamiento
-                                            all_slots.append(current_time)
-                                            slots_for_day += 1
-                                            print(f"   ✅ Slot hora exacta/media agregado: {current_time.strftime('%d/%m %H:%M')}-{slot_end.strftime('%H:%M')} (con solapamiento permitido)")
-                                        else:
-                                            print(f"🔧 DEBUG: Slot hora exacta/media en el pasado: {current_time.strftime('%H:%M')}")
-                                    
-                                    # 🔑 AVANZAR CADA 30 MINUTOS para cubrir horas exactas Y medias horas
+                                while current_time + timedelta(minutes=service_duration) <= period_end and len(all_slots) < max_turnos:
+                                    if current_time.minute in [0, 30] and current_time > now:
+                                        all_slots.append(current_time)
                                     current_time += timedelta(minutes=30)
-                                
-                                print(f"🔧 DEBUG: Día {current_date} - {slots_for_day} slots de horas exactas/medias generados")
                                     
                             else:
-                                print("🔧 DEBUG: Generando turnos normales")
                                 current_slot_start = period_start
-                                slots_for_day = 0
-                                
-                                while current_slot_start + timedelta(minutes=service_duration) <= period_end:
-                                    slot_end = current_slot_start + timedelta(minutes=service_duration)
-                                    
+                                while current_slot_start + timedelta(minutes=service_duration) <= period_end and len(all_slots) < max_turnos:
                                     if current_slot_start > now:
-                                        print(f"🔧 DEBUG: Verificando slot normal: {current_slot_start.strftime('%H:%M')}-{slot_end.strftime('%H:%M')} (intervalo: {intervalo_entre_turnos}min)")
-                                        
                                         if is_slot_available_in_calendar(calendar_service, servicio.calendar_id, current_slot_start, service_duration):
                                             all_slots.append(current_slot_start)
-                                            slots_for_day += 1
-                                            print(f"   ✅ Slot normal agregado: {current_slot_start.strftime('%d/%m %H:%M')}-{slot_end.strftime('%H:%M')}")
-                                        else:
-                                            print(f"   ❌ Slot normal ocupado: {current_slot_start.strftime('%d/%m %H:%M')}-{slot_end.strftime('%H:%M')}")
-                                    else:
-                                        print(f"🔧 DEBUG: Slot normal en el pasado: {current_slot_start.strftime('%H:%M')}")
-                                    
-                                    # Avanzar por el intervalo configurado
                                     current_slot_start += timedelta(minutes=intervalo_entre_turnos)
-                                
-                                print(f"🔧 DEBUG: Día {current_date} - {slots_for_day} slots normales generados")
-                            
 
-                        except Exception as period_error:
-                            print(f"❌ Error procesando período {start_time_str}-{end_time_str}: {period_error}")
-                            import traceback
-                            traceback.print_exc()
-                            continue
-            else:
-                print(f"🔧 DEBUG: No hay horarios configurados para {day_key}")
+                        except Exception:
+                            continue  # Sin logs de error por cada período
             
             current_date += timedelta(days=1)
-            
-            # 🔥 DEBUG: Si es lunes y no genera slots, verificar
-            if day_key == 'monday' and len(all_slots) == 0:
-                print(f"⚠️ WARNING: Es lunes pero no se generaron slots. Working hours: {working_hours}")
         
-        # Ordenar y retornar slots únicos
+        # 🔥 SOLO LOG FINAL
         unique_slots = list(set(all_slots))
         unique_slots.sort()
+        result_slots = unique_slots[:max_turnos]
         
-        print(f"🔧 DEBUG: Total slots únicos generados: {len(unique_slots)}")
-        for i, slot in enumerate(unique_slots[:5]):
-            print(f"   {i+1}. {slot.strftime('%d/%m %H:%M')}")
-        
-        return unique_slots[:max_turnos]
+        print(f"✅ {len(result_slots)} slots generados en {(datetime.now(tz) - now).total_seconds():.2f}s")
+        return result_slots
         
     except Exception as e:
-        print(f"❌ Error generando slots para servicio {servicio.nombre}: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Error generando slots: {e}")
         return []
 
 def is_slot_available_in_calendar(calendar_service, calendar_id, slot_start, duration_minutes):

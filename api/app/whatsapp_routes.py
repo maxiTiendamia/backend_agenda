@@ -252,21 +252,21 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 return JSONResponse(content={"mensaje": generar_mensaje_bienvenida(tenant)})
 
             if "turno" in mensaje or "reservar" in mensaje or "agendar" in mensaje:
+                # 🔥 OPTIMIZAR: Cargar empleados una sola vez
                 servicios = tenant.servicios
                 empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
                 
-                # 🔥 VERIFICACIÓN SEGURA: Separar servicios por tipo
+                # Procesar servicios
                 servicios_con_calendario = []
                 servicios_informativos = []
                 servicios_con_empleados = []
                 
+                # 🔥 OPTIMIZADO: Un solo loop
                 for s in servicios:
-                    # Verificar si tiene el atributo es_informativo de forma segura
                     es_informativo = getattr(s, 'es_informativo', False)
-                    
                     if es_informativo:
                         servicios_informativos.append(s)
-                    elif s.calendar_id and s.working_hours:
+                    elif getattr(s, 'calendar_id', None) and getattr(s, 'working_hours', None):
                         servicios_con_calendario.append(s)
                     else:
                         servicios_con_empleados.append(s)
@@ -525,46 +525,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 print(f"❌ Error creando reserva para servicio: {e}")
                 return JSONResponse(content={"mensaje": "❌ Error al crear la reserva. Por favor, intenta nuevamente."})
 
-        # 🔥 ACTUALIZAR waiting_servicio para manejar solo empleados
-        if state.get("step") == "waiting_servicio":
-            # Esta lógica ahora solo se ejecuta cuando hay servicios SIN calendario y empleados disponibles
-            if mensaje.isdigit():
-                idx = int(mensaje) - 1
-                servicios_ids = state.get("servicios", [])
-                if 0 <= idx < len(servicios_ids):
-                    servicio_id = servicios_ids[idx]
-                    servicio = db.query(Servicio).get(servicio_id)
-                    empleados = db.query(Empleado).filter_by(tenant_id=tenant.id).all()
-                    
-                    if not empleados:
-                        return JSONResponse(content={"mensaje": "⚠️ No hay empleados disponibles para este servicio."})
-                    
-                    msg = "¿Con qué empleado?\n"
-                    for i, e in enumerate(empleados, 1):
-                        msg += f"🔹{i}. {e.nombre}\n"
-                    msg += "\nResponde con el número del empleado."
-                    
-                    state["step"] = "waiting_empleado"
-                    state["servicio_id"] = servicio_id  # 🆕 AGREGAR ESTA LÍNEA
-                    state["empleados"] = [e.id for e in empleados]
-                    set_user_state(telefono, state)
-                    return JSONResponse(content={"mensaje": msg})
-                else:
-                    # Mostrar servicios nuevamente
-                    servicios = [db.query(Servicio).get(sid) for sid in servicios_ids]
-                    msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
-                    for i, s in enumerate(servicios, 1):
-                        msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-                    msg += "\nResponde con el número del servicio."
-                    return JSONResponse(content={"mensaje": msg})
-            else:
-                servicios = [db.query(Servicio).get(sid) for sid in state.get("servicios", [])]
-                msg = "❌ Opción inválida.\n¿Qué servicio deseas reservar?\n"
-                for i, s in enumerate(servicios, 1):
-                    msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
-                msg += "\nResponde con el número del servicio."
-                return JSONResponse(content={"mensaje": msg})
-
         # 🆕 AGREGAR nuevo manejo para waiting_empleado_sin_servicio
         if state.get("step") == "waiting_empleado_sin_servicio":
             if mensaje.isdigit():
@@ -582,7 +542,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     if servicios:
                         msg = "¿Qué servicio deseas reservar?\n"
                         for i, s in enumerate(servicios, 1):
-                            msg += f"🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
+                            msg += f"\n🔹{i}. {s.nombre} ({s.duracion} min, ${s.precio})\n"
                         msg += "\nResponde con el número del servicio."
                         
                         state["step"] = "waiting_servicio"
@@ -607,7 +567,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 msg += "\nResponde con el número del empleado."
                 return JSONResponse(content={"mensaje": msg})
 
-        # 🔥 FALTA MANEJO DEL PASO waiting_empleado
+        # 🔥 CORREGIR LÍNEA 612
         if state.get("step") == "waiting_empleado":
             if mensaje.isdigit():
                 idx = int(mensaje) - 1
@@ -615,10 +575,15 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 if 0 <= idx < len(empleados_ids):
                     empleado_id = empleados_ids[idx]
                     empleado = db.query(Empleado).get(empleado_id)
-                    servicio = db.query(Servicio).get(state["servicio_id"])
                     
-                    if not empleado.calendar_id or not empleado.working_hours:
-                        return JSONResponse(content={"mensaje": f"❌ El empleado {empleado.nombre} no está configurado correctamente. Contacta con el establecimiento."})
+                    # 🔥 VERIFICACIÓN SEGURA
+                    servicio_id = state.get("servicio_id")
+                    if not servicio_id:
+                        return JSONResponse(content={"mensaje": "❌ Error de estado. Escribe 'Turno' para reiniciar."})
+                    
+                    servicio = db.query(Servicio).get(servicio_id)
+                    if not servicio:
+                        return JSONResponse(content={"mensaje": "❌ Servicio no encontrado. Escribe 'Turno' para reiniciar."})
                     
                     # Obtener slots disponibles del empleado
                     slots = get_available_slots(
