@@ -59,9 +59,12 @@ class Servicio(Base):
     calendar_id = Column(String, nullable=True)
     working_hours = Column(Text, nullable=True)
     
-    # 🆕 CAMPOS PARA SERVICIOS INFORMATIVOS - ASEGURAR CONSISTENCIA:
+    # Campos para servicios informativos
     es_informativo = Column(Boolean, default=False, nullable=False)
     mensaje_personalizado = Column(Text, nullable=True)
+    
+    # 🆕 NUEVO CAMPO: Turnos consecutivos sin solapamiento
+    turnos_consecutivos = Column(Boolean, default=False, nullable=False)
 
     # Relación con Tenant
     tenant = relationship("Tenant", back_populates="servicios")

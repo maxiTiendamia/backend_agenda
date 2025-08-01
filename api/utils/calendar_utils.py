@@ -29,441 +29,276 @@ def get_available_slots(
     working_hours_json,
     service_duration,
     intervalo_entre_turnos=20,
-    max_days=14,
-    max_turnos=25,
+    max_turnos=20,
     cantidad=1 ,
-    solo_horas_exactas=False
+    solo_horas_exactas=False,
+    turnos_consecutivos=False
 ):
-    service = build_service(credentials_json)
-    now = datetime.datetime.now(tz=URUGUAY_TZ)
-    end_date = now + datetime.timedelta(days=max_days)
-
-    # Obtener eventos ocupados
-    events_result = service.events().list(
-        calendarId=calendar_id,
-        timeMin=now.astimezone(datetime.timezone.utc).isoformat(),
-        timeMax=end_date.astimezone(datetime.timezone.utc).isoformat(),
-        singleEvents=True,
-        orderBy='startTime'
-    ).execute()
-
-    events = events_result.get('items', [])
-    busy = []
-    for e in events:
-        start_datetime = e['start'].get('dateTime')
-        start_date_only = e['start'].get('date')
-        end_datetime = e['end'].get('dateTime')
-        end_date_only = e['end'].get('date')
+    """
+    Obtiene slots disponibles para un empleado
+    Ahora incluye soporte para turnos consecutivos
+    """
+    try:
+        # Configurar credenciales de Google
+        service_account_info = json.loads(credentials_json)
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=['https://www.googleapis.com/auth/calendar']
+        )
         
-        if start_datetime and end_datetime:
-            # Evento con hora específica
-            start_dt = datetime.datetime.fromisoformat(start_datetime.replace('Z', '+00:00'))
-            end_dt = datetime.datetime.fromisoformat(end_datetime.replace('Z', '+00:00'))
-            # Si no tiene tzinfo, agrégala
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=URUGUAY_TZ)
-            else:
-                start_dt = start_dt.astimezone(URUGUAY_TZ)
-            if end_dt.tzinfo is None:
-                end_dt = end_dt.replace(tzinfo=URUGUAY_TZ)
-            else:
-                end_dt = end_dt.astimezone(URUGUAY_TZ)
-            busy.append((start_dt, end_dt))
-            print(f"📅 Evento con hora específica: {start_dt.strftime('%d/%m %H:%M')} - {end_dt.strftime('%d/%m %H:%M')}")
-        elif start_date_only and end_date_only:
-            # Evento de todo el día - bloquear desde las 00:00 hasta las 23:59
-            start_dt = datetime.datetime.fromisoformat(start_date_only).replace(hour=0, minute=0, second=0, tzinfo=URUGUAY_TZ)
-            end_dt = datetime.datetime.fromisoformat(end_date_only).replace(hour=23, minute=59, second=59, tzinfo=URUGUAY_TZ)
-            busy.append((start_dt, end_dt))
-            print(f"📅 Evento de todo el día detectado: {start_date_only} - Bloqueando día completo")
-
-    # Parsear y normalizar horarios laborales
-    if isinstance(working_hours_json, str):
-        try:
-            working_hours = json.loads(working_hours_json)
-        except json.JSONDecodeError:
-            return []
-    else:
-        working_hours = working_hours_json
-
-    if isinstance(working_hours, list):
-        normalized = {}
-        for item in working_hours:
-            if isinstance(item, dict) and 'day' in item and 'from' in item and 'to' in item:
-                day = item['day'].lower()
-                normalized.setdefault(day, []).append({"from": item['from'], "to": item['to']})
-        working_hours = normalized
-
-    available = []
-    turnos_generados = 0
-    current_date = now.date()
-
-    while current_date < end_date.date() and turnos_generados < max_turnos:
-        day_str = current_date.strftime('%A').lower()
-        print(f"🔍 Procesando día: {current_date.strftime('%d/%m')} ({day_str})")
-        print(f"🔍 Horarios disponibles para {day_str}: {working_hours.get(day_str, 'No definido')}")
+        calendar_service = build('calendar', 'v3', credentials=credentials)
         
-        if day_str in working_hours:
-            for period in working_hours[day_str]:
-                # Corregir el parsing de los horarios
-                if isinstance(period, dict):
-                    from_str = period['from']
-                    to_str = period['to']
-                else:
-                    # Si es string con formato "08:00-00:00"
-                    from_str, to_str = period.split('-')
-                
-                print(f"🔍 Procesando período: {from_str} - {to_str}")
-                
-                try:
-                    start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(from_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-                    
-                    # Manejar horarios que van hasta medianoche (00:00)
-                    if to_str == '00:00':
-                        # Si termina a medianoche, usar 23:59 del mismo día
-                        end_hour = datetime.datetime.combine(current_date, datetime.time(23, 59)).replace(tzinfo=URUGUAY_TZ)
-                    else:
-                        end_time = datetime.datetime.strptime(to_str, '%H:%M').time()
-                        # Si la hora de fin es menor que la de inicio, es del día siguiente
-                        if end_time < datetime.datetime.strptime(from_str, '%H:%M').time():
-                            end_hour = datetime.datetime.combine(current_date + datetime.timedelta(days=1), end_time).replace(tzinfo=URUGUAY_TZ)
-                        else:
-                            end_hour = datetime.datetime.combine(current_date, end_time).replace(tzinfo=URUGUAY_TZ)
-                    
-                    print(f"🔍 Horario calculado: {start_hour.strftime('%d/%m %H:%M')} - {end_hour.strftime('%d/%m %H:%M')}")
-                    
-                except ValueError as e:
-                    print(f"❌ Error al parsear horarios: {e}")
-                    continue
-                
-                # Si es hoy y el horario de inicio ya pasó, el primer turno debe ser al menos dentro de 20 minutos
-                if current_date == now.date() and start_hour < now + datetime.timedelta(minutes=20):
-                    slot_start = now + datetime.timedelta(minutes=20)
-                    if slot_start < start_hour:
-                        slot_start = start_hour
-                    
-                    # Si se requieren solo horas exactas, redondear al próximo horario válido
-                    if solo_horas_exactas:
-                        # Redondear hacia arriba al próximo horario en punto o media hora
-                        if slot_start.minute <= 30:
-                            if slot_start.minute == 0:
-                                pass  # Ya está en punto
-                            else:
-                                slot_start = slot_start.replace(minute=30, second=0, microsecond=0)
-                        else:
-                            slot_start = slot_start.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
-                else:
-                    slot_start = start_hour
-
-                slot_end = end_hour
-                delta = datetime.timedelta(minutes=service_duration + intervalo_entre_turnos)
-
-                print(f"🔍 Buscando slots desde {slot_start.strftime('%d/%m %H:%M')} hasta {slot_end.strftime('%d/%m %H:%M')}")
-                slots_encontrados_periodo = 0
-
-                while slot_start + datetime.timedelta(minutes=service_duration) <= slot_end:
-                    # No ofrecer turnos que empiecen antes de la hora actual + 20 minutos solo si es hoy y ya pasó el horario de inicio
-                    if current_date == now.date() and slot_start < now + datetime.timedelta(minutes=20):
-                        if solo_horas_exactas:
-                            if slot_start.minute == 0:
-                                slot_start = slot_start.replace(minute=30)
-                            else:
-                                slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                        else:
-                            slot_start += delta
-                        continue
-
-                    slot_final = slot_start + datetime.timedelta(minutes=service_duration)
-                    
-                    # Verificar que el turno no se extienda más allá del horario de cierre
-                    # Cambiar <= por < para permitir que termine exactamente al horario de cierre
-                    if slot_final > slot_end:
-                        break
-                    
-                    overlap_count = sum(
-                        b_start < slot_final and b_end > slot_start for b_start, b_end in busy
-                    )
-                    
-                    if overlap_count >= cantidad:
-                        # Ya hay suficientes reservas en este horario, avanzar al siguiente slot
-                        if solo_horas_exactas:
-                            if slot_start.minute == 0:
-                                slot_start = slot_start.replace(minute=30)
-                            else:
-                                slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                        else:
-                            slot_start += delta
-                        continue
-
-                    hay_cerca = any(
-                        0 < (slot_start - b_end).total_seconds() / 60 < intervalo_entre_turnos
-                        for b_start, b_end in busy if b_end <= slot_start
-                    )
-
-                    if overlap_count < cantidad and not hay_cerca:
-                        available.append(slot_start)
-                        turnos_generados += 1
-                        slots_encontrados_periodo += 1
-                        print(f"✅ Slot agregado: {slot_start.strftime('%d/%m %H:%M')} - Termina: {slot_final.strftime('%H:%M')} (Total: {turnos_generados})")
-                        if turnos_generados >= max_turnos:
-                            print(f"🔹 Se alcanzó el máximo de turnos: {max_turnos}")
-                            break
-
-                    # Avanza al próximo horario exacto (en punto o y media)
-                    if solo_horas_exactas:
-                        if slot_start.minute == 0:
-                            slot_start = slot_start.replace(minute=30)
-                        else:
-                            slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                    else:
-                        slot_start += delta
-                
-                print(f"🔍 Slots encontrados en este período: {slots_encontrados_periodo}")
-                
-                if turnos_generados >= max_turnos:
-                    break
-        else:
-            print(f"❌ No hay horarios definidos para {day_str}")
+        # Parsear horarios de trabajo
+        working_hours = json.loads(working_hours_json)
+        
+        # Configurar zona horaria
+        tz = pytz.timezone("America/Montevideo")
+        now = datetime.now(tz)
+        end_date = now + timedelta(days=14)
+        
+        all_slots = []
+        current_date = now.date()
+        
+        while current_date <= end_date.date() and len(all_slots) < max_turnos:
+            day_name = current_date.strftime('%A').lower()
+            day_mapping = {
+                'monday': 'monday', 'tuesday': 'tuesday', 'wednesday': 'wednesday',
+                'thursday': 'thursday', 'friday': 'friday', 'saturday': 'saturday', 'sunday': 'sunday'
+            }
             
-        current_date += datetime.timedelta(days=1)
-
-    print(f"🔍 Total de turnos disponibles encontrados: {len(available)}")
-    return available
+            day_key = day_mapping.get(day_name, day_name)
+            
+            if day_key in working_hours and working_hours[day_key]:
+                for period in working_hours[day_key]:
+                    if isinstance(period, dict) and 'from' in period and 'to' in period:
+                        start_time_str = period['from']
+                        end_time_str = period['to']
+                        
+                        start_hour, start_minute = map(int, start_time_str.split(':'))
+                        end_hour, end_minute = map(int, end_time_str.split(':'))
+                        
+                        period_start = tz.localize(datetime.combine(current_date, time(start_hour, start_minute)))
+                        period_end = tz.localize(datetime.combine(current_date, time(end_hour, end_minute)))
+                        
+                        if period_end <= period_start:
+                            period_end += timedelta(days=1)
+                        
+                        # 🆕 GENERAR SLOTS SEGÚN EL TIPO
+                        if turnos_consecutivos:
+                            # TURNOS CONSECUTIVOS
+                            current_slot_start = period_start
+                            
+                            while current_slot_start + timedelta(minutes=service_duration) <= period_end:
+                                if current_slot_start > now:
+                                    if is_slot_available_in_calendar(calendar_service, calendar_id, current_slot_start, service_duration):
+                                        all_slots.append(current_slot_start)
+                                
+                                current_slot_start += timedelta(minutes=service_duration)
+                                
+                        elif solo_horas_exactas:
+                            # SOLO HORAS EXACTAS
+                            current_hour = period_start.replace(minute=0, second=0, microsecond=0)
+                            
+                            while current_hour + timedelta(minutes=service_duration) <= period_end:
+                                if current_hour > now:
+                                    if is_slot_available_in_calendar(calendar_service, calendar_id, current_hour, service_duration):
+                                        all_slots.append(current_hour)
+                                
+                                current_hour += timedelta(hours=1)
+                                
+                        else:
+                            # TURNOS NORMALES
+                            current_slot_start = period_start
+                            
+                            while current_slot_start + timedelta(minutes=service_duration) <= period_end:
+                                if current_slot_start > now:
+                                    if is_slot_available_in_calendar(calendar_service, calendar_id, current_slot_start, service_duration):
+                                        all_slots.append(current_slot_start)
+                                
+                                current_slot_start += timedelta(minutes=intervalo_entre_turnos)
+            
+            current_date += timedelta(days=1)
+        
+        unique_slots = list(set(all_slots))
+        unique_slots.sort()
+        
+        return unique_slots[:max_turnos]
+        
+    except Exception as e:
+        print(f"❌ Error generando slots: {e}")
+        return []
 
 def get_available_slots_for_service(
     servicio,  # 🆕 Objeto Servicio completo en lugar de parámetros separados
     intervalo_entre_turnos=20,
     max_days=14,
-    max_turnos=25,
-    credentials_json=None
+    max_turnos=20,
+    credentials_json=""
 ):
     """
-    Obtiene slots disponibles para un servicio específico usando su calendario y horarios
+    Obtiene slots disponibles para un servicio específico
+    🔥 MANEJA TODOS LOS TIPOS: normales, consecutivos y horas exactas
     """
-    if not servicio.calendar_id:
-        print(f"❌ Servicio {servicio.nombre} no tiene calendar_id configurado")
-        return []
-    
-    if not servicio.working_hours:
-        print(f"❌ Servicio {servicio.nombre} no tiene working_hours configurado")
-        return []
-
-    service = build_service(credentials_json)
-    now = datetime.datetime.now(tz=URUGUAY_TZ)
-    end_date = now + datetime.timedelta(days=max_days)
-
-    # Obtener eventos ocupados del calendario del servicio
-    events_result = service.events().list(
-        calendarId=servicio.calendar_id,
-        timeMin=now.astimezone(datetime.timezone.utc).isoformat(),
-        timeMax=end_date.astimezone(datetime.timezone.utc).isoformat(),
-        singleEvents=True,
-        orderBy='startTime'
-    ).execute()
-
-    events = events_result.get('items', [])
-    busy = []
-    for e in events:
-        start_datetime = e['start'].get('dateTime')
-        start_date_only = e['start'].get('date')
-        end_datetime = e['end'].get('dateTime')
-        end_date_only = e['end'].get('date')
+    try:
+        print(f"🔧 DEBUG: Generando slots para servicio '{servicio.nombre}'")
         
-        if start_datetime and end_datetime:
-            # Evento con hora específica
-            start_dt = datetime.datetime.fromisoformat(start_datetime.replace('Z', '+00:00'))
-            end_dt = datetime.datetime.fromisoformat(end_datetime.replace('Z', '+00:00'))
-            # Si no tiene tzinfo, agrégala
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=URUGUAY_TZ)
-            else:
-                start_dt = start_dt.astimezone(URUGUAY_TZ)
-            if end_dt.tzinfo is None:
-                end_dt = end_dt.replace(tzinfo=URUGUAY_TZ)
-            else:
-                end_dt = end_dt.astimezone(URUGUAY_TZ)
-            busy.append((start_dt, end_dt))
-            print(f"📅 Evento con hora específica: {start_dt.strftime('%d/%m %H:%M')} - {end_dt.strftime('%d/%m %H:%M')}")
-        elif start_date_only and end_date_only:
-            # Evento de todo el día
-            start_dt = datetime.datetime.fromisoformat(start_date_only).replace(hour=0, minute=0, second=0, tzinfo=URUGUAY_TZ)
-            end_dt = datetime.datetime.fromisoformat(end_date_only).replace(hour=23, minute=59, second=59, tzinfo=URUGUAY_TZ)
-            busy.append((start_dt, end_dt))
-            print(f"📅 Evento de todo el día detectado: {start_date_only} - Bloqueando día completo")
-
-    # Parsear horarios laborales del servicio
-    working_hours_json = servicio.working_hours
-    if isinstance(working_hours_json, str):
-        try:
-            working_hours = json.loads(working_hours_json)
-        except json.JSONDecodeError:
-            print(f"❌ Error parseando working_hours para servicio {servicio.nombre}")
-            return []
-    else:
-        working_hours = working_hours_json
-
-    # 🔥 MEJORAR EL MAPEO DE DÍAS EN ESPAÑOL A INGLÉS
-    dias_es_en = {
-        'lunes': 'monday',
-        'martes': 'tuesday', 
-        'miércoles': 'wednesday',
-        'miercoles': 'wednesday',  # Sin tilde también
-        'jueves': 'thursday',
-        'viernes': 'friday',
-        'sábado': 'saturday',
-        'sabado': 'saturday',  # Sin tilde también
-        'domingo': 'sunday'
-    }
-
-    if isinstance(working_hours, list):
-        normalized = {}
-        for item in working_hours:
-            if isinstance(item, dict) and 'day' in item and 'from' in item and 'to' in item:
-                day = item['day'].lower().strip()
-                # 🔥 CONVERTIR DÍA EN ESPAÑOL A INGLÉS SI ES NECESARIO
-                day_en = dias_es_en.get(day, day)
-                normalized.setdefault(day_en, []).append({"from": item['from'], "to": item['to']})
-        working_hours = normalized
-    elif isinstance(working_hours, dict):
-        # Si ya es un dict, también normalizar las claves
-        normalized = {}
-        for day, periods in working_hours.items():
-            day_clean = day.lower().strip()
-            day_en = dias_es_en.get(day_clean, day_clean)
-            normalized[day_en] = periods
-        working_hours = normalized
-
-    available = []
-    turnos_generados = 0
-    current_date = now.date()
-
-    print(f"🔍 Generando slots para servicio: {servicio.nombre}")
-    print(f"🔍 Duración: {servicio.duracion} min, Cantidad: {servicio.cantidad}, Horas exactas: {servicio.solo_horas_exactas}")
-    print(f"🔍 Horarios normalizados: {working_hours}")
-
-    while current_date < end_date.date() and turnos_generados < max_turnos:
-        day_str = current_date.strftime('%A').lower()
-        print(f"🔍 Procesando día: {current_date.strftime('%d/%m')} ({day_str})")
-        print(f"🔍 Horarios disponibles para {day_str}: {working_hours.get(day_str, 'No definido')}")
-        
-        if day_str in working_hours:
-            periods = working_hours[day_str]
-            if not isinstance(periods, list):
-                periods = [periods]
-                
-            for period in periods:
-                if isinstance(period, dict):
-                    from_str = period['from']
-                    to_str = period['to']
-                else:
-                    from_str, to_str = period.split('-')
-                
-                print(f"🔍 Procesando período: {from_str} - {to_str}")
-                
-                try:
-                    start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(from_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-                    
-                    if to_str == '00:00':
-                        end_hour = datetime.datetime.combine(current_date, datetime.time(23, 59)).replace(tzinfo=URUGUAY_TZ)
-                    else:
-                        end_time = datetime.datetime.strptime(to_str, '%H:%M').time()
-                        if end_time < datetime.datetime.strptime(from_str, '%H:%M').time():
-                            end_hour = datetime.datetime.combine(current_date + datetime.timedelta(days=1), end_time).replace(tzinfo=URUGUAY_TZ)
-                        else:
-                            end_hour = datetime.datetime.combine(current_date, end_time).replace(tzinfo=URUGUAY_TZ)
-                    
-                    print(f"🔍 Horario calculado: {start_hour.strftime('%d/%m %H:%M')} - {end_hour.strftime('%d/%m %H:%M')}")
-                    
-                except ValueError as e:
-                    print(f"❌ Error al parsear horarios: {e}")
-                    continue
-                
-                # Si es hoy y el horario de inicio ya pasó
-                if current_date == now.date() and start_hour < now + datetime.timedelta(minutes=20):
-                    slot_start = now + datetime.timedelta(minutes=20)
-                    if slot_start < start_hour:
-                        slot_start = start_hour
-                    
-                    if servicio.solo_horas_exactas:
-                        if slot_start.minute <= 30:
-                            if slot_start.minute == 0:
-                                pass
-                            else:
-                                slot_start = slot_start.replace(minute=30, second=0, microsecond=0)
-                        else:
-                            slot_start = slot_start.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
-                else:
-                    slot_start = start_hour
-
-                slot_end = end_hour
-                delta = datetime.timedelta(minutes=servicio.duracion + intervalo_entre_turnos)
-
-                print(f"🔍 Buscando slots desde {slot_start.strftime('%d/%m %H:%M')} hasta {slot_end.strftime('%d/%m %H:%M')}")
-                slots_encontrados_periodo = 0
-
-                while slot_start + datetime.timedelta(minutes=servicio.duracion) <= slot_end:
-                    if current_date == now.date() and slot_start < now + datetime.timedelta(minutes=20):
-                        if servicio.solo_horas_exactas:
-                            if slot_start.minute == 0:
-                                slot_start = slot_start.replace(minute=30)
-                            else:
-                                slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                        else:
-                            slot_start += delta
-                        continue
-
-                    slot_final = slot_start + datetime.timedelta(minutes=servicio.duracion)
-                    
-                    if slot_final > slot_end:
-                        break
-                    
-                    overlap_count = sum(
-                        b_start < slot_final and b_end > slot_start for b_start, b_end in busy
-                    )
-                    
-                    if overlap_count >= (servicio.cantidad or 1):
-                        if servicio.solo_horas_exactas:
-                            if slot_start.minute == 0:
-                                slot_start = slot_start.replace(minute=30)
-                            else:
-                                slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                        else:
-                            slot_start += delta
-                        continue
-
-                    hay_cerca = any(
-                        0 < (slot_start - b_end).total_seconds() / 60 < intervalo_entre_turnos
-                        for b_start, b_end in busy if b_end <= slot_start
-                    )
-
-                    if overlap_count < (servicio.cantidad or 1) and not hay_cerca:
-                        available.append(slot_start)
-                        turnos_generados += 1
-                        slots_encontrados_periodo += 1
-                        print(f"✅ Slot agregado: {slot_start.strftime('%d/%m %H:%M')} - Termina: {slot_final.strftime('%H:%M')} (Total: {turnos_generados})")
-                        if turnos_generados >= max_turnos:
-                            print(f"🔹 Se alcanzó el máximo de turnos: {max_turnos}")
-                            break
-
-                    if servicio.solo_horas_exactas:
-                        if slot_start.minute == 0:
-                            slot_start = slot_start.replace(minute=30)
-                        else:
-                            slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                    else:
-                        slot_start += delta
-                
-                print(f"🔍 Slots encontrados en este período: {slots_encontrados_periodo}")
-                
-                if turnos_generados >= max_turnos:
-                    break
-        else:
-            print(f"❌ No hay horarios definidos para {day_str}")
+        # Configurar credenciales de Google
+        if not credentials_json:
+            raise ValueError("No se proporcionaron credenciales de Google")
             
-        current_date += datetime.timedelta(days=1)
+        service_account_info = json.loads(credentials_json)
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=['https://www.googleapis.com/auth/calendar']
+        )
+        
+        calendar_service = build('calendar', 'v3', credentials=credentials)
+        
+        # Parsear horarios de trabajo
+        working_hours = json.loads(servicio.working_hours)
+        service_duration = servicio.duracion
+        
+        # 🆕 VERIFICAR TIPO DE SERVICIO
+        turnos_consecutivos = getattr(servicio, 'turnos_consecutivos', False)
+        solo_horas_exactas = getattr(servicio, 'solo_horas_exactas', False)
+        
+        print(f"🔧 DEBUG: Configuración del servicio:")
+        print(f"   - Duración: {service_duration} min")
+        print(f"   - Turnos consecutivos: {turnos_consecutivos}")
+        print(f"   - Solo horas exactas: {solo_horas_exactas}")
+        print(f"   - Intervalo entre turnos: {intervalo_entre_turnos} min")
+        
+        # Configurar zona horaria
+        tz = pytz.timezone("America/Montevideo")
+        now = datetime.datetime.now(tz)
+        end_date = now + timedelta(days=14)  # 2 semanas adelante
+        
+        all_slots = []
+        current_date = now.date()
+        
+        while current_date <= end_date.date() and len(all_slots) < max_turnos:
+            day_name = current_date.strftime('%A').lower()
+            
+            # Mapeo de días en inglés
+            day_mapping = {
+                'monday': 'monday', 'tuesday': 'tuesday', 'wednesday': 'wednesday',
+                'thursday': 'thursday', 'friday': 'friday', 'saturday': 'saturday', 'sunday': 'sunday'
+            }
+            
+            day_key = day_mapping.get(day_name, day_name)
+            
+            if day_key in working_hours and working_hours[day_key]:
+                print(f"🔧 DEBUG: Procesando día {day_key} con {len(working_hours[day_key])} períodos")
+                
+                for period in working_hours[day_key]:
+                    if isinstance(period, dict) and 'from' in period and 'to' in period:
+                        start_time_str = period['from']
+                        end_time_str = period['to']
+                        
+                        # Parsear horas
+                        start_hour, start_minute = map(int, start_time_str.split(':'))
+                        end_hour, end_minute = map(int, end_time_str.split(':'))
+                        
+                        period_start = tz.localize(datetime.datetime.combine(current_date, datetime.time(start_hour, start_minute)))
+                        period_end = tz.localize(datetime.datetime.combine(current_date, datetime.time(end_hour, end_minute)))
+                        
+                        # Si es al día siguiente (ej: 22:00 a 02:00)
+                        if period_end <= period_start:
+                            period_end += timedelta(days=1)
+                        
+                        print(f"🔧 DEBUG: Período {start_time_str}-{end_time_str}")
+                        
+                        # 🆕 GENERAR SLOTS SEGÚN EL TIPO DE SERVICIO
+                        if turnos_consecutivos:
+                            print("🔧 DEBUG: Generando turnos consecutivos")
+                            # TURNOS CONSECUTIVOS: slots de duración exacta sin solapamiento
+                            current_slot_start = period_start
+                            
+                            while current_slot_start + timedelta(minutes=service_duration) <= period_end:
+                                # Verificar que el slot esté en el futuro
+                                if current_slot_start > now:
+                                    # Verificar disponibilidad en Google Calendar
+                                    if is_slot_available_in_calendar(calendar_service, servicio.calendar_id, current_slot_start, service_duration):
+                                        all_slots.append(current_slot_start)
+                                        print(f"   ✅ Slot consecutivo agregado: {current_slot_start.strftime('%d/%m %H:%M')}")
+                                
+                                # 🔑 CLAVE: Avanzar por la duración completa del servicio (sin solapamiento)
+                                current_slot_start += timedelta(minutes=service_duration)
+                                
+                        elif solo_horas_exactas:
+                            print("🔧 DEBUG: Generando solo horas exactas")
+                            # SOLO HORAS EXACTAS: solo en punto de hora
+                            current_hour = period_start.replace(minute=0, second=0, microsecond=0)
+                            
+                            while current_hour + timedelta(minutes=service_duration) <= period_end:
+                                if current_hour > now:
+                                    if is_slot_available_in_calendar(calendar_service, servicio.calendar_id, current_hour, service_duration):
+                                        all_slots.append(current_hour)
+                                        print(f"   ✅ Slot hora exacta agregado: {current_hour.strftime('%d/%m %H:%M')}")
+                                
+                                current_hour += timedelta(hours=1)
+                                
+                        else:
+                            print("🔧 DEBUG: Generando turnos normales")
+                            # TURNOS NORMALES: con intervalo personalizado
+                            current_slot_start = period_start
+                            
+                            while current_slot_start + timedelta(minutes=service_duration) <= period_end:
+                                # Verificar que el slot esté en el futuro
+                                if current_slot_start > now:
+                                    # Verificar disponibilidad en Google Calendar
+                                    if is_slot_available_in_calendar(calendar_service, servicio.calendar_id, current_slot_start, service_duration):
+                                        all_slots.append(current_slot_start)
+                                        print(f"   ✅ Slot normal agregado: {current_slot_start.strftime('%d/%m %H:%M')}")
+                                
+                                # Avanzar por el intervalo configurado
+                                current_slot_start += timedelta(minutes=intervalo_entre_turnos)
+            
+            current_date += timedelta(days=1)
+        
+        # Ordenar y retornar slots únicos
+        unique_slots = list(set(all_slots))
+        unique_slots.sort()
+        
+        print(f"🔧 DEBUG: Total slots generados: {len(unique_slots)}")
+        for i, slot in enumerate(unique_slots[:5]):  # Mostrar solo los primeros 5
+            print(f"   {i+1}. {slot.strftime('%d/%m %H:%M')}")
+        
+        return unique_slots[:max_turnos]
+        
+    except Exception as e:
+        print(f"❌ Error generando slots para servicio {servicio.nombre}: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
-    print(f"🔍 Total de turnos disponibles encontrados para {servicio.nombre}: {len(available)}")
-    return available
+def is_slot_available_in_calendar(calendar_service, calendar_id, slot_start, duration_minutes):
+    """
+    Verifica si un slot está disponible en Google Calendar
+    """
+    try:
+        slot_end = slot_start + timedelta(minutes=duration_minutes)
+        
+        # Convertir a formato RFC3339 para la API de Google
+        time_min = slot_start.isoformat()
+        time_max = slot_end.isoformat()
+        
+        # Consultar eventos en el rango
+        events_result = calendar_service.events().list(
+            calendarId=calendar_id,
+            timeMin=time_min,
+            timeMax=time_max,
+            singleEvents=True
+        ).execute()
+        
+        events = events_result.get('items', [])
+        
+        # Si hay eventos en el rango, el slot no está disponible
+        return len(events) == 0
+        
+    except Exception as e:
+        print(f"❌ Error verificando disponibilidad en calendario: {e}")
+        return False
 
 def create_event(calendar_id, slot_dt, user_phone, service_account_info, duration_minutes, client_service):
     service = build_service(service_account_info)

@@ -331,11 +331,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                             mensaje_personalizado = getattr(servicio, 'mensaje_personalizado', None)
                             mensaje_final = mensaje_personalizado if mensaje_personalizado and mensaje_personalizado.strip() else f"ℹ️ Para el servicio *{servicio.nombre}*, contacta directamente con nosotros para más información."
                             
-                            # Agregar información de contacto si está disponible
-                            if getattr(tenant, 'telefono', None):
-                                mensaje_final += f"\n\n📞 Teléfono: {tenant.telefono}"
-                            if getattr(tenant, 'direccion', None):
-                                mensaje_final += f"\n📍 Dirección: {tenant.direccion}"
+                            # 🔥 QUITAR información de contacto automática
+                            # if getattr(tenant, 'telefono', None):
+                            #     mensaje_final += f"\n\n📞 Teléfono: {tenant.telefono}"
+                            # if getattr(tenant, 'direccion', None):
+                            #     mensaje_final += f"\n📍 Dirección: {tenant.direccion}"
                                 
                             mensaje_final += "\n\n¿Necesitas algo más? Escribe *\"Turno\"* para otros servicios o *\"Ayuda\"* para hablar con un asesor."
                             
@@ -344,6 +344,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         # SI TIENE CALENDARIO PROPIO (servicio con reservas automáticas)
                         elif getattr(servicio, 'calendar_id', None) and getattr(servicio, 'working_hours', None):
                             try:
+                                print(f"🔧 DEBUG: Procesando servicio con calendario: {servicio.nombre}")
+                                print(f"   - Turnos consecutivos: {getattr(servicio, 'turnos_consecutivos', False)}")
+                                print(f"   - Solo horas exactas: {getattr(servicio, 'solo_horas_exactas', False)}")
+                                
                                 # Obtener slots disponibles del servicio
                                 slots = get_available_slots_for_service(
                                     servicio=servicio,
@@ -352,14 +356,27 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                                     credentials_json=GOOGLE_CREDENTIALS_JSON
                                 )
                                 
+                                print(f"🔧 DEBUG: Slots generados: {len(slots)}")
+                                
                                 ahora = datetime.now(pytz.timezone("America/Montevideo"))
                                 slots_futuros = [s for s in slots if s > ahora]
                                 slots_disponibles = [s for s in slots_futuros if hay_disponibilidad_servicio(db, servicio, s)]
                                 
+                                print(f"🔧 DEBUG: Slots futuros: {len(slots_futuros)}, Slots disponibles: {len(slots_disponibles)}")
+                                
                                 if not slots_disponibles:
                                     return JSONResponse(content={"mensaje": f"⚠️ No hay turnos disponibles para {servicio.nombre} en este momento."})
                                 
-                                msg = f"📅 Turnos disponibles para {servicio.nombre}:\n"
+                                # 🔥 MOSTRAR TIPO DE TURNO EN EL MENSAJE
+                                tipo_turno = ""
+                                if getattr(servicio, 'turnos_consecutivos', False):
+                                    tipo_turno = " (turnos consecutivos sin solapamiento)"
+                                elif getattr(servicio, 'solo_horas_exactas', False):
+                                    tipo_turno = " (solo en horas exactas)"
+                                else:
+                                    tipo_turno = " (turnos normales)"
+                                
+                                msg = f"📅 Turnos disponibles para {servicio.nombre}{tipo_turno}:\n"
                                 for i, slot in enumerate(slots_disponibles[:25], 1):
                                     msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                                 msg += "\nResponde con el número del turno."
@@ -372,6 +389,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                                 
                             except Exception as e:
                                 print(f"❌ Error obteniendo slots para servicio {servicio.nombre}: {e}")
+                                import traceback
+                                traceback.print_exc()
                                 return JSONResponse(content={"mensaje": f"❌ Error al consultar disponibilidad para {servicio.nombre}. Contacta con el establecimiento."})
                         
                         # SI NO TIENE CALENDARIO (servicio con empleados)
@@ -619,8 +638,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         intervalo_entre_turnos=tenant.intervalo_entre_turnos or 20,
                         max_turnos=25,
                         cantidad=servicio.cantidad or 1,
-                        solo_horas_exactas=servicio.solo_horas_exactas or False
+                        solo_horas_exactas=getattr(servicio, 'solo_horas_exactas', False),
+                        turnos_consecutivos=getattr(servicio, 'turnos_consecutivos', False)  # 🆕 ASEGURAR PARÁMETRO
                     )
+                    
+                    print(f"🔧 DEBUG: Slots empleado {empleado.nombre}: {len(slots)} generados")
                     
                     ahora = datetime.now(pytz.timezone("America/Montevideo"))
                     slots_futuros = [s for s in slots if s > ahora]
@@ -629,7 +651,16 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     if not slots_disponibles:
                         return JSONResponse(content={"mensaje": f"⚠️ No hay turnos disponibles para {empleado.nombre} en este momento."})
                     
-                    msg = f"📅 Turnos disponibles con {empleado.nombre} para {servicio.nombre}:\n"
+                    # 🔥 MOSTRAR TIPO DE TURNO EN EL MENSAJE
+                    tipo_turno = ""
+                    if getattr(servicio, 'turnos_consecutivos', False):
+                        tipo_turno = " (turnos consecutivos)"
+                    elif getattr(servicio, 'solo_horas_exactas', False):
+                        tipo_turno = " (solo horas exactas)"
+                    else:
+                        tipo_turno = " (turnos normales)"
+                    
+                    msg = f"📅 Turnos disponibles con {empleado.nombre} para {servicio.nombre}{tipo_turno}:\n"
                     for i, slot in enumerate(slots_disponibles[:25], 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                     msg += "\nResponde con el número del turno."
