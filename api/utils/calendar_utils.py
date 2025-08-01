@@ -97,14 +97,26 @@ def get_available_slots(
                                 current_slot_start += timedelta(minutes=service_duration)
                                 
                         elif solo_horas_exactas:
-                            current_hour = period_start.replace(minute=0, second=0, microsecond=0)
+                            print("🔧 DEBUG: Empleado - Generando solo horas exactas (incluyendo medias horas)")
+                            current_time = period_start.replace(minute=0, second=0, microsecond=0)
                             
-                            while current_hour + timedelta(minutes=service_duration) <= period_end:
-                                if current_hour > now:
-                                    if is_slot_available_in_calendar(calendar_service, calendar_id, current_hour, service_duration):
-                                        all_slots.append(current_hour)
+                            # Si el período empieza después de una hora exacta, ir a la siguiente
+                            if current_time < period_start:
+                                current_time += timedelta(hours=1)
+                            
+                            # 🔥 NUEVA LÓGICA: Generar slots cada 30 minutos
+                            while current_time + timedelta(minutes=service_duration) <= period_end:
+                                # Solo agregar si está en punto de hora (00) o media hora (30)
+                                if current_time.minute in [0, 30]:
+                                    if current_time > now:
+                                        print(f"🔧 DEBUG: Empleado - Verificando slot hora exacta/media: {current_time.strftime('%H:%M')}")
+                                        
+                                        # 🔥 PERMITIR SOLAPAMIENTO: No verificar Google Calendar
+                                        all_slots.append(current_time)
+                                        print(f"   ✅ Empleado - Slot hora exacta/media agregado: {current_time.strftime('%d/%m %H:%M')} (con solapamiento)")
                                 
-                                current_hour += timedelta(hours=1)
+                                # Avanzar cada 30 minutos
+                                current_time += timedelta(minutes=30)
                                 
                         else:
                             current_slot_start = period_start
@@ -301,35 +313,37 @@ def get_available_slots_for_service(
                                 print(f"🔧 DEBUG: Día {current_date} - {slots_for_day} slots consecutivos generados")
                                     
                             elif solo_horas_exactas:
-                                print("🔧 DEBUG: Generando solo horas exactas")
+                                print("🔧 DEBUG: Generando solo horas exactas (incluyendo medias horas)")
                                 # Empezar desde la hora exacta más cercana
-                                current_hour = period_start.replace(minute=0, second=0, microsecond=0)
+                                current_time = period_start.replace(minute=0, second=0, microsecond=0)
                                 
                                 # Si el período empieza después de una hora exacta, ir a la siguiente
-                                if current_hour < period_start:
-                                    current_hour += timedelta(hours=1)
+                                if current_time < period_start:
+                                    current_time += timedelta(hours=1)
                                 
                                 slots_for_day = 0
                                 
-                                while current_hour + timedelta(minutes=service_duration) <= period_end:
-                                    slot_end = current_hour + timedelta(minutes=service_duration)
+                                # 🔥 NUEVA LÓGICA: Generar slots cada 30 minutos (horas exactas Y medias horas)
+                                while current_time + timedelta(minutes=service_duration) <= period_end:
+                                    slot_end = current_time + timedelta(minutes=service_duration)
                                     
-                                    if current_hour > now:
-                                        print(f"🔧 DEBUG: Verificando slot hora exacta: {current_hour.strftime('%H:%M')}-{slot_end.strftime('%H:%M')} ({service_duration}min)")
-                                        
-                                        if is_slot_available_in_calendar(calendar_service, servicio.calendar_id, current_hour, service_duration):
-                                            all_slots.append(current_hour)
+                                    # Solo agregar si está en punto de hora (00) o media hora (30)
+                                    if current_time.minute in [0, 30]:
+                                        if current_time > now:
+                                            print(f"🔧 DEBUG: Verificando slot hora exacta/media: {current_time.strftime('%H:%M')}-{slot_end.strftime('%H:%M')} ({service_duration}min)")
+                                            
+                                            # 🔥 PERMITIR SOLAPAMIENTO: No verificar Google Calendar, solo agregar
+                                            # En "solo horas exactas" se permite solapamiento
+                                            all_slots.append(current_time)
                                             slots_for_day += 1
-                                            print(f"   ✅ Slot hora exacta agregado: {current_hour.strftime('%d/%m %H:%M')}-{slot_end.strftime('%H:%M')}")
+                                            print(f"   ✅ Slot hora exacta/media agregado: {current_time.strftime('%d/%m %H:%M')}-{slot_end.strftime('%H:%M')} (con solapamiento permitido)")
                                         else:
-                                            print(f"   ❌ Slot hora exacta ocupado: {current_hour.strftime('%d/%m %H:%M')}-{slot_end.strftime('%H:%M')}")
-                                    else:
-                                        print(f"🔧 DEBUG: Slot hora exacta en el pasado: {current_hour.strftime('%H:%M')}")
+                                            print(f"🔧 DEBUG: Slot hora exacta/media en el pasado: {current_time.strftime('%H:%M')}")
                                     
-                                    # Avanzar una hora completa
-                                    current_hour += timedelta(hours=1)
+                                    # 🔑 AVANZAR CADA 30 MINUTOS para cubrir horas exactas Y medias horas
+                                    current_time += timedelta(minutes=30)
                                 
-                                print(f"🔧 DEBUG: Día {current_date} - {slots_for_day} slots de horas exactas generados")
+                                print(f"🔧 DEBUG: Día {current_date} - {slots_for_day} slots de horas exactas/medias generados")
                                     
                             else:
                                 print("🔧 DEBUG: Generando turnos normales")

@@ -227,30 +227,25 @@ class ServicioModelView(SecureModelView):
     column_searchable_list = ['nombre']
     column_filters = ['tenant.comercio', 'es_informativo', 'solo_horas_exactas', 'turnos_consecutivos']
     column_labels = {
-        'tenant': 'Cliente/Comercio',
         'nombre': 'Nombre del Servicio',
-        'precio': 'Precio ($)',
+        'precio': 'Precio',
         'duracion': 'Duración (min)',
-        'cantidad': 'Cantidad Disponible',
-        'solo_horas_exactas': 'Solo Horas Exactas',
-        'turnos_consecutivos': 'Turnos Consecutivos',  # 🆕 NUEVO LABEL
-        'calendar_id': 'ID del Calendario',
-        'working_hours': 'Horarios de Trabajo',
+        'cantidad': 'Cantidad máxima',
+        'tenant_id': 'Cliente',
+        'solo_horas_exactas': 'Solo Horas Exactas y Medias',  # 🔥 ACTUALIZAR LABEL
+        'turnos_consecutivos': 'Turnos Consecutivos',
         'es_informativo': 'Es Informativo',
-        'mensaje_personalizado': 'Mensaje Personalizado'
+        'calendar_id': 'ID Calendar',
+        'working_hours': 'Horarios'
     }
     
-    form_columns = [
-        'tenant', 'nombre', 'precio', 'duracion', 'cantidad', 
-        'solo_horas_exactas', 'turnos_consecutivos',  # 🆕 AGREGAR NUEVO CAMPO
-        'calendar_id', 'working_hours',
-        'es_informativo', 'mensaje_personalizado'
-    ]
-    
+    # 🔥 ACTUALIZAR DESCRIPCIONES
     form_widget_args = {
-        'mensaje_personalizado': {
-            'rows': 8,
-            'placeholder': 'Mensaje que se mostrará cuando el cliente seleccione este servicio informativo. Ejemplo: "Para este servicio, contacta directamente al 099 123 456 o visítanos en nuestro local."'
+        'solo_horas_exactas': {
+            'description': 'Si está marcado, solo ofrecerá turnos en horas exactas y medias horas (8:00, 8:30, 9:00, 9:30, etc.) con solapamiento permitido. No compatible con turnos consecutivos.'
+        },
+        'turnos_consecutivos': {
+            'description': 'Si está marcado, ofrecerá turnos consecutivos sin solapamiento usando la duración completa del servicio. No compatible con solo horas exactas.'
         }
     }
     
