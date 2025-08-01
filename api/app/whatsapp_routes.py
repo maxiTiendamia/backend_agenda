@@ -367,16 +367,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                                 if not slots_disponibles:
                                     return JSONResponse(content={"mensaje": f"⚠️ No hay turnos disponibles para {servicio.nombre} en este momento."})
                                 
-                                # 🔥 MOSTRAR TIPO DE TURNO EN EL MENSAJE
-                                tipo_turno = ""
-                                if getattr(servicio, 'turnos_consecutivos', False):
-                                    tipo_turno = " (turnos consecutivos sin solapamiento)"
-                                elif getattr(servicio, 'solo_horas_exactas', False):
-                                    tipo_turno = " (solo en horas exactas)"
-                                else:
-                                    tipo_turno = " (turnos normales)"
-                                
-                                msg = f"📅 Turnos disponibles para {servicio.nombre}{tipo_turno}:\n"
+                                msg = f"📅 Turnos disponibles para {servicio.nombre}:\n"
                                 for i, slot in enumerate(slots_disponibles[:25], 1):
                                     msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                                 msg += "\nResponde con el número del turno."
@@ -651,16 +642,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     if not slots_disponibles:
                         return JSONResponse(content={"mensaje": f"⚠️ No hay turnos disponibles para {empleado.nombre} en este momento."})
                     
-                    # 🔥 MOSTRAR TIPO DE TURNO EN EL MENSAJE
-                    tipo_turno = ""
-                    if getattr(servicio, 'turnos_consecutivos', False):
-                        tipo_turno = " (turnos consecutivos)"
-                    elif getattr(servicio, 'solo_horas_exactas', False):
-                        tipo_turno = " (solo horas exactas)"
-                    else:
-                        tipo_turno = " (turnos normales)"
                     
-                    msg = f"📅 Turnos disponibles con {empleado.nombre} para {servicio.nombre}{tipo_turno}:\n"
+                    msg = f"📅 Turnos disponibles con {empleado.nombre} para {servicio.nombre}:\n"
                     for i, slot in enumerate(slots_disponibles[:25], 1):
                         msg += f"🔹{i}. {slot.strftime('%d/%m %H:%M')}\n"
                     msg += "\nResponde con el número del turno."
