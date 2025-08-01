@@ -218,15 +218,14 @@ class TenantModelView(SecureModelView):
 class ServicioModelView(SecureModelView):
     """Vista personalizada para gestionar servicios"""
     
-    # ✅ MANTENER form_overrides para WorkingHoursField
+    # Mantener form_overrides para WorkingHoursField
     form_overrides = {
         'working_hours': WorkingHoursField,
     }
     
-    # ✅ RESTO DE LA CONFIGURACIÓN SE MANTIENE IGUAL
-    column_list = ('id', 'tenant', 'nombre', 'precio', 'duracion', 'es_informativo', 'calendar_id')
+    column_list = ('id', 'tenant', 'nombre', 'precio', 'duracion', 'es_informativo', 'solo_horas_exactas', 'turnos_consecutivos', 'calendar_id')
     column_searchable_list = ['nombre']
-    column_filters = ['tenant.comercio', 'es_informativo']
+    column_filters = ['tenant.comercio', 'es_informativo', 'solo_horas_exactas', 'turnos_consecutivos']
     column_labels = {
         'tenant': 'Cliente/Comercio',
         'nombre': 'Nombre del Servicio',
@@ -234,19 +233,20 @@ class ServicioModelView(SecureModelView):
         'duracion': 'Duración (min)',
         'cantidad': 'Cantidad Disponible',
         'solo_horas_exactas': 'Solo Horas Exactas',
+        'turnos_consecutivos': 'Turnos Consecutivos',  # 🆕 NUEVO LABEL
         'calendar_id': 'ID del Calendario',
-        'working_hours': 'Horarios de Trabajo',  # ✅ Sin "(JSON)"
+        'working_hours': 'Horarios de Trabajo',
         'es_informativo': 'Es Informativo',
         'mensaje_personalizado': 'Mensaje Personalizado'
     }
     
     form_columns = [
         'tenant', 'nombre', 'precio', 'duracion', 'cantidad', 
-        'solo_horas_exactas', 'calendar_id', 'working_hours',
+        'solo_horas_exactas', 'turnos_consecutivos',  # 🆕 AGREGAR NUEVO CAMPO
+        'calendar_id', 'working_hours',
         'es_informativo', 'mensaje_personalizado'
     ]
     
-    # ✅ MANTENER form_widget_args solo para mensaje_personalizado
     form_widget_args = {
         'mensaje_personalizado': {
             'rows': 8,
@@ -265,7 +265,13 @@ class ServicioModelView(SecureModelView):
             'description': 'ID del calendario de Google. Solo necesario para servicios con reservas automáticas.'
         },
         'working_hours': {
-            'description': 'Horarios de trabajo del servicio. Solo necesario para servicios con reservas automáticas.'  # 🔥 CAMBIAR descripción
+            'description': 'Horarios de trabajo del servicio. Solo necesario para servicios con reservas automáticas.'
+        },
+        'solo_horas_exactas': {
+            'description': 'Si está marcado, solo ofrecerá turnos en horas exactas (ej: 8:00, 9:00, 10:00). No compatible con turnos consecutivos.'
+        },
+        'turnos_consecutivos': {  # 🆕 NUEVA DESCRIPCIÓN
+            'description': 'Si está marcado, ofrecerá turnos consecutivos sin solapamiento (ej: 8:00-9:30, 9:30-11:00). No compatible con solo horas exactas.'
         }
     }
 
@@ -276,7 +282,7 @@ class ServicioModelView(SecureModelView):
         return form_class
 
     def on_model_change(self, form, model, is_created):
-        # 🔥 VALIDACIÓN MEJORADA con manejo de errores
+        # Validación mejorada con manejo de errores
         try:
             es_informativo = getattr(model, 'es_informativo', False)
             
@@ -287,7 +293,16 @@ class ServicioModelView(SecureModelView):
                 # Limpiar campos no necesarios para servicios informativos
                 model.calendar_id = None
                 model.working_hours = None
+                model.solo_horas_exactas = False
+                model.turnos_consecutivos = False
             else:
+                # 🆕 VALIDACIÓN: solo_horas_exactas y turnos_consecutivos son mutuamente excluyentes
+                solo_horas_exactas = getattr(model, 'solo_horas_exactas', False)
+                turnos_consecutivos = getattr(model, 'turnos_consecutivos', False)
+                
+                if solo_horas_exactas and turnos_consecutivos:
+                    raise ValueError("Un servicio no puede tener 'Solo Horas Exactas' y 'Turnos Consecutivos' activados al mismo tiempo. Elige una opción.")
+                
                 # Para servicios normales, validar que tengan configuración
                 if not getattr(model, 'calendar_id', None) and not getattr(model, 'working_hours', None):
                     # Debe tener empleados asociados o configuración propia
@@ -302,7 +317,7 @@ class ServicioModelView(SecureModelView):
             db.session.rollback()
             raise ValueError(f"Error validando servicio: {str(e)}")
 
-    # 🔥 FORMATTER CORRECTO como método estático
+    # Formatter corregido como método estático
     @staticmethod
     def _es_informativo_formatter(view, context, model, name):
         try:
@@ -314,8 +329,25 @@ class ServicioModelView(SecureModelView):
         except Exception:
             return Markup('<span style="color: gray;">❓ Error</span>')
     
+    # 🆕 NUEVO FORMATTER para turnos consecutivos
+    @staticmethod
+    def _turnos_consecutivos_formatter(view, context, model, name):
+        try:
+            turnos_consecutivos = getattr(model, 'turnos_consecutivos', False)
+            solo_horas_exactas = getattr(model, 'solo_horas_exactas', False)
+            
+            if turnos_consecutivos:
+                return Markup('<span style="color: purple; font-weight: bold;">🔗 Consecutivos</span>')
+            elif solo_horas_exactas:
+                return Markup('<span style="color: orange; font-weight: bold;">⏰ Solo Exactas</span>')
+            else:
+                return Markup('<span style="color: gray;">⚪ Normal</span>')
+        except Exception:
+            return Markup('<span style="color: gray;">❓ Error</span>')
+    
     column_formatters = {
-        'es_informativo': _es_informativo_formatter
+        'es_informativo': _es_informativo_formatter,
+        'turnos_consecutivos': _turnos_consecutivos_formatter  # 🆕 NUEVO FORMATTER
     }
 
 

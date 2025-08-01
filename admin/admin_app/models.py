@@ -73,9 +73,12 @@ class Servicio(db.Model):
     calendar_id = db.Column(db.String, nullable=True)
     working_hours = db.Column(db.Text, nullable=True)
     
-    # 🆕 CAMPOS PARA SERVICIOS INFORMATIVOS - ASEGURAR CONSISTENCIA:
+    # Campos para servicios informativos
     es_informativo = db.Column(db.Boolean, default=False, nullable=False)
     mensaje_personalizado = db.Column(db.Text, nullable=True)
+    
+    # 🆕 CAMPO CRÍTICO: Turnos consecutivos sin solapamiento
+    turnos_consecutivos = db.Column(db.Boolean, default=False, nullable=False)
 
     # Relación inversa explícita
     tenant = db.relationship('Tenant', back_populates='servicios')
