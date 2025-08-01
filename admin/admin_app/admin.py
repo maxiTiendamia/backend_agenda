@@ -209,12 +209,104 @@ class TenantModelView(SecureModelView):
 
 # 🔥 AGREGAR ModelViews separados para Servicio y Empleado
 class ServicioModelView(SecureModelView):
-    form_overrides = {
-        'working_hours': WorkingHoursField,
+    """Vista personalizada para gestionar servicios"""
+    column_list = ('id', 'tenant', 'nombre', 'precio', 'duracion', 'es_informativo', 'calendar_id')
+    column_searchable_list = ['nombre']
+    column_filters = ['tenant.comercio', 'es_informativo']
+    column_labels = {
+        'tenant': 'Cliente/Comercio',
+        'nombre': 'Nombre del Servicio',
+        'precio': 'Precio ($)',
+        'duracion': 'Duración (min)',
+        'cantidad': 'Cantidad Disponible',
+        'solo_horas_exactas': 'Solo Horas Exactas',
+        'calendar_id': 'ID del Calendario',
+        'working_hours': 'Horarios de Trabajo (JSON)',
+        'es_informativo': 'Es Informativo',
+        'mensaje_personalizado': 'Mensaje Personalizado'
     }
-    column_list = ('id', 'nombre', 'precio', 'duracion', 'cantidad', 'tenant.comercio', 'calendar_id')
-    form_columns = ('tenant', 'nombre', 'precio', 'duracion', 'cantidad', 'solo_horas_exactas', 'calendar_id', 'working_hours')
-    column_labels = {'tenant.comercio': 'Cliente'}
+    
+    form_columns = [
+        'tenant', 'nombre', 'precio', 'duracion', 'cantidad', 
+        'solo_horas_exactas', 'calendar_id', 'working_hours',
+        'es_informativo', 'mensaje_personalizado'
+    ]
+    
+    form_widget_args = {
+        'working_hours': {
+            'rows': 5,
+            'placeholder': 'Formato JSON: {"monday": [{"from": "09:00", "to": "17:00"}], ...}'
+        },
+        'mensaje_personalizado': {
+            'rows': 8,
+            'placeholder': 'Mensaje que se mostrará cuando el cliente seleccione este servicio informativo. Ejemplo: "Para este servicio, contacta directamente al 099 123 456 o visítanos en nuestro local."'
+        }
+    }
+    
+    form_args = {
+        'es_informativo': {
+            'description': 'Si está marcado, este servicio no permitirá reservas y mostrará el mensaje personalizado.'
+        },
+        'mensaje_personalizado': {
+            'description': 'Mensaje que se enviará al cliente cuando seleccione este servicio. Solo se usa si "Es Informativo" está marcado.'
+        },
+        'calendar_id': {
+            'description': 'ID del calendario de Google. Solo necesario para servicios con reservas automáticas.'
+        },
+        'working_hours': {
+            'description': 'Horarios en formato JSON. Solo necesario para servicios con reservas automáticas.'
+        }
+    }
+
+    def scaffold_form(self):
+        form_class = super().scaffold_form()
+        form_class.tenant.query_factory = lambda: db.session.query(Tenant).order_by(Tenant.id)
+        form_class.tenant.get_label = lambda obj: f"{obj.id} - {obj.nombre} ({obj.comercio})"
+        return form_class
+
+    def on_model_change(self, form, model, is_created):
+        # 🔥 VALIDACIÓN MEJORADA con manejo de errores
+        try:
+            es_informativo = getattr(model, 'es_informativo', False)
+            
+            if es_informativo:
+                mensaje = getattr(model, 'mensaje_personalizado', '')
+                if not mensaje or mensaje.strip() == "":
+                    raise ValueError("Los servicios informativos deben tener un mensaje personalizado.")
+                # Limpiar campos no necesarios para servicios informativos
+                model.calendar_id = None
+                model.working_hours = None
+            else:
+                # Para servicios normales, validar que tengan configuración
+                if not getattr(model, 'calendar_id', None) and not getattr(model, 'working_hours', None):
+                    # Debe tener empleados asociados o configuración propia
+                    from admin_app.models import Empleado
+                    empleados = db.session.query(Empleado).filter_by(tenant_id=model.tenant_id).count()
+                    if empleados == 0:
+                        raise ValueError("Los servicios deben tener calendario propio O empleados disponibles en el sistema.")
+            
+            super().on_model_change(form, model, is_created)
+            
+        except Exception as e:
+            db.session.rollback()
+            raise ValueError(f"Error validando servicio: {str(e)}")
+
+    # 🔥 FORMATTER CORRECTO como método estático
+    @staticmethod
+    def _es_informativo_formatter(view, context, model, name):
+        try:
+            es_informativo = getattr(model, 'es_informativo', False)
+            if es_informativo:
+                return Markup('<span style="color: blue; font-weight: bold;">ℹ️ Informativo</span>')
+            else:
+                return Markup('<span style="color: green;">📅 Con Reservas</span>')
+        except Exception:
+            return Markup('<span style="color: gray;">❓ Error</span>')
+    
+    column_formatters = {
+        'es_informativo': _es_informativo_formatter
+    }
+
 
 class EmpleadoModelView(SecureModelView):
     form_overrides = {

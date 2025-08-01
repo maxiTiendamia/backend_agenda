@@ -65,15 +65,19 @@ class Servicio(db.Model):
     tenant_id = db.Column(db.Integer, db.ForeignKey('tenants.id'), nullable=False)
     nombre = db.Column(db.String(150), nullable=False)
     precio = db.Column(db.Float, nullable=False)
-    duracion = db.Column(db.Integer, nullable=False)  # minutos
+    duracion = db.Column(db.Integer, nullable=False)
     cantidad = db.Column(db.Integer, default=1)
     solo_horas_exactas = db.Column(db.Boolean, default=False)
     
-    # 🔥 CAMPOS FALTANTES AGREGADOS:
+    # Campos existentes
     calendar_id = db.Column(db.String, nullable=True)
     working_hours = db.Column(db.Text, nullable=True)
+    
+    # 🆕 CAMPOS PARA SERVICIOS INFORMATIVOS - ASEGURAR CONSISTENCIA:
+    es_informativo = db.Column(db.Boolean, default=False, nullable=False)
+    mensaje_personalizado = db.Column(db.Text, nullable=True)
 
-    # 🔥 CRÍTICO: Relación inversa explícita
+    # Relación inversa explícita
     tenant = db.relationship('Tenant', back_populates='servicios')
 
     def __repr__(self):
