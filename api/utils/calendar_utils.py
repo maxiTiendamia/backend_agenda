@@ -166,6 +166,7 @@ def get_available_slots_for_service(
         service_duration = servicio.duracion
         turnos_consecutivos = getattr(servicio, 'turnos_consecutivos', False)
         solo_horas_exactas = getattr(servicio, 'solo_horas_exactas', False)
+        cantidad_maxima = getattr(servicio, 'cantidad', 1)  # 🔥 NUEVA: Cantidad de canchas/recursos
         
         # Configurar zona horaria
         tz = pytz.timezone("America/Montevideo")
@@ -219,7 +220,10 @@ def get_available_slots_for_service(
                             period_start = tz.localize(datetime.combine(current_date, time(start_hour, start_minute)))
                             period_end = tz.localize(datetime.combine(current_date, time(end_hour, end_minute)))
                             
-                            if period_end <= period_start:
+                            # 🔥 CORREGIR: Horarios hasta 00:00 (medianoche)
+                            if end_hour == 0 and end_minute == 0:
+                                period_end = tz.localize(datetime.combine(current_date + timedelta(days=1), time(0, 0)))
+                            elif period_end <= period_start:
                                 period_end += timedelta(days=1)
                             
                             if period_end <= now:
@@ -227,46 +231,58 @@ def get_available_slots_for_service(
                             
                             # Ajustar inicio si es en el pasado
                             if period_start <= now:
-                                minutes_diff = (now - period_start).total_seconds() / 60
-                                if turnos_consecutivos:
+                                if solo_horas_exactas:
+                                    # Para horas exactas, ir a la siguiente media hora
+                                    next_slot = now.replace(second=0, microsecond=0)
+                                    if next_slot.minute < 30:
+                                        next_slot = next_slot.replace(minute=30)
+                                    else:
+                                        next_slot = next_slot.replace(minute=0) + timedelta(hours=1)
+                                    period_start = max(period_start, next_slot)
+                                else:
+                                    minutes_diff = (now - period_start).total_seconds() / 60
                                     intervals_passed = int(minutes_diff / service_duration) + 1
                                     period_start = period_start + timedelta(minutes=intervals_passed * service_duration)
-                                elif solo_horas_exactas:
-                                    next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-                                    period_start = max(period_start, next_hour)
-                                else:
-                                    intervals_passed = int(minutes_diff / intervalo_entre_turnos) + 1
-                                    period_start = period_start + timedelta(minutes=intervals_passed * intervalo_entre_turnos)
 
-                            # 🚀 GENERAR SLOTS OPTIMIZADO
-                            if turnos_consecutivos:
-                                current_slot_start = period_start
-                                while current_slot_start + timedelta(minutes=service_duration) <= period_end and len(all_slots) < max_turnos:
-                                    if current_slot_start > now:
-                                        if is_slot_available_in_calendar(calendar_service, servicio.calendar_id, current_slot_start, service_duration):
-                                            all_slots.append(current_slot_start)
-                                    current_slot_start += timedelta(minutes=service_duration)
-                                    
-                            elif solo_horas_exactas:
-                                current_time = period_start.replace(minute=0, second=0, microsecond=0)
-                                if current_time < period_start:
-                                    current_time += timedelta(hours=1)
+                            # 🚀 GENERAR SLOTS OPTIMIZADO CON MÚLTIPLES CANCHAS
+                            if solo_horas_exactas:
+                                # Para horas exactas y medias (00 y 30)
+                                current_time = period_start.replace(second=0, microsecond=0)
+                                
+                                # Ajustar a la próxima hora exacta o media hora
+                                if current_time.minute < 30:
+                                    current_time = current_time.replace(minute=30)
+                                elif current_time.minute > 30:
+                                    current_time = current_time.replace(minute=0) + timedelta(hours=1)
+                                # Si es exactamente 30, mantenerlo
                                 
                                 while current_time + timedelta(minutes=service_duration) <= period_end and len(all_slots) < max_turnos:
-                                    if current_time.minute in [0, 30] and current_time > now:
-                                        all_slots.append(current_time)
-                                    current_time += timedelta(minutes=30)
+                                    if current_time > now and current_time.minute in [0, 30]:
+                                        # 🔥 VERIFICAR DISPONIBILIDAD CONSIDERANDO MÚLTIPLES CANCHAS
+                                        slots_ocupados = count_occupied_slots_at_time(calendar_service, servicio.calendar_id, current_time, service_duration)
+                                        if slots_ocupados < cantidad_maxima:
+                                            all_slots.append(current_time)
+                                            print(f"✅ Slot agregado: {current_time.strftime('%d/%m %H:%M')} (ocupados: {slots_ocupados}/{cantidad_maxima})")
+                                    
+                                    current_time += timedelta(minutes=30)  # Cada 30 min para cubrir :00 y :30
                                     
                             else:
+                                # Para turnos normales o consecutivos
+                                intervalo = service_duration if turnos_consecutivos else intervalo_entre_turnos
                                 current_slot_start = period_start
+                                
                                 while current_slot_start + timedelta(minutes=service_duration) <= period_end and len(all_slots) < max_turnos:
                                     if current_slot_start > now:
-                                        if is_slot_available_in_calendar(calendar_service, servicio.calendar_id, current_slot_start, service_duration):
+                                        # 🔥 VERIFICAR DISPONIBILIDAD CONSIDERANDO MÚLTIPLES CANCHAS
+                                        slots_ocupados = count_occupied_slots_at_time(calendar_service, servicio.calendar_id, current_slot_start, service_duration)
+                                        if slots_ocupados < cantidad_maxima:
                                             all_slots.append(current_slot_start)
-                                    current_slot_start += timedelta(minutes=intervalo_entre_turnos)
+                                    
+                                    current_slot_start += timedelta(minutes=intervalo)
 
-                        except Exception:
-                            continue  # Sin logs de error por cada período
+                        except Exception as e:
+                            print(f"❌ Error procesando período {start_time_str}-{end_time_str}: {e}")
+                            continue
             
             current_date += timedelta(days=1)
         
@@ -281,6 +297,57 @@ def get_available_slots_for_service(
     except Exception as e:
         print(f"❌ Error generando slots: {e}")
         return []
+
+def count_occupied_slots_at_time(calendar_service, calendar_id, slot_start, duration_minutes):
+    """
+    🔥 NUEVA FUNCIÓN: Cuenta cuántos slots están ocupados en un momento específico
+    Para servicios con múltiples canchas/recursos
+    """
+    try:
+        slot_end = slot_start + timedelta(minutes=duration_minutes)
+        
+        # Buscar eventos que se solapen con este slot
+        events_result = calendar_service.events().list(
+            calendarId=calendar_id,
+            timeMin=(slot_start - timedelta(minutes=duration_minutes)).isoformat(),
+            timeMax=(slot_end + timedelta(minutes=duration_minutes)).isoformat(),
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        events = events_result.get('items', [])
+        occupied_count = 0
+        
+        for event in events:
+            if 'start' in event and 'end' in event:
+                try:
+                    event_start_str = event['start'].get('dateTime', event['start'].get('date'))
+                    event_end_str = event['end'].get('dateTime', event['end'].get('date'))
+                    
+                    if 'T' in event_start_str:  # Es dateTime
+                        event_start = datetime.fromisoformat(event_start_str.replace('Z', '+00:00'))
+                        event_end = datetime.fromisoformat(event_end_str.replace('Z', '+00:00'))
+                        
+                        # Convertir a zona horaria local si es necesario
+                        if event_start.tzinfo is None:
+                            event_start = pytz.timezone("America/Montevideo").localize(event_start)
+                        if event_end.tzinfo is None:
+                            event_end = pytz.timezone("America/Montevideo").localize(event_end)
+                        
+                        # Verificar si hay solapamiento
+                        if event_start < slot_end and event_end > slot_start:
+                            occupied_count += 1
+                            
+                except Exception as e:
+                    print(f"❌ Error procesando evento: {e}")
+                    continue
+        
+        print(f"🔧 Slot {slot_start.strftime('%d/%m %H:%M')}: {occupied_count} canchas ocupadas")
+        return occupied_count
+        
+    except Exception as e:
+        print(f"❌ Error contando slots ocupados: {e}")
+        return 999  # Si hay error, asumir que está completamente ocupado
 
 def is_slot_available_in_calendar(calendar_service, calendar_id, slot_start, duration_minutes):
     """
