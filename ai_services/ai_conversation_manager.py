@@ -128,63 +128,78 @@ class AIConversationManager:
         
         return {
             "negocio": {
-                "nombre": tenant.comercio,  # Campo comercio de tabla tenants
-                "direccion": tenant.direccion,  # Campo direccion de tabla tenants
-                "telefono": tenant.telefono,  # Campo telefono de tabla tenants
-                "informacion": tenant.informacion_local,  # Campo informacion_local de tabla tenants
-                "intervalo_turnos": tenant.intervalo_entre_turnos,  # Campo intervalo_entre_turnos de tabla tenants
-                "calendar_id_general": tenant.calendar_id_general,  # Campo calendar_id_general de tabla tenants
-                "working_hours_general": tenant.working_hours_general  # Campo working_hours_general de tabla tenants
+                "nombre": tenant.comercio,
+                "direccion": tenant.direccion,
+                "telefono": tenant.telefono,
+                "informacion": tenant.informacion_local,
+                "intervalo_turnos": tenant.intervalo_entre_turnos,
+                "calendar_id_general": tenant.calendar_id_general,
+                "working_hours_general": tenant.working_hours_general
             },
             "servicios": [
                 {
                     "id": s.id,
-                    "nombre": s.nombre,  # Campo nombre de tabla servicios
-                    "duracion": s.duracion,  # Campo duracion de tabla servicios
-                    "precio": s.precio,  # Campo precio de tabla servicios
-                    "cantidad": s.cantidad,  # Campo cantidad de tabla servicios
-                    "es_informativo": s.es_informativo,  # Campo es_informativo de tabla servicios
-                    "mensaje_personalizado": s.mensaje_personalizado,  # Campo mensaje_personalizado de tabla servicios
-                    "tiene_calendario": bool(s.calendar_id),  # Campo calendar_id de tabla servicios
-                    "calendar_id": s.calendar_id or "",  # Campo calendar_id de tabla servicios
-                    "horarios_trabajo": s.working_hours or "{}",  # Campo working_hours de tabla servicios
-                    "solo_horas_exactas": s.solo_horas_exactas,  # Campo solo_horas_exactas de tabla servicios
-                    "turnos_consecutivos": s.turnos_consecutivos  # Campo turnos_consecutivos de tabla servicios
+                    "nombre": s.nombre,
+                    "duracion": s.duracion,
+                    "precio": s.precio,
+                    "cantidad": s.cantidad,
+                    "es_informativo": s.es_informativo,
+                    "mensaje_personalizado": s.mensaje_personalizado,
+                    "tiene_calendario": bool(s.calendar_id),
+                    "calendar_id": s.calendar_id or "",
+                    "horarios_trabajo": s.working_hours or "{}",
+                    "solo_horas_exactas": s.solo_horas_exactas,
+                    "turnos_consecutivos": s.turnos_consecutivos
                 }
                 for s in servicios
             ],
             "empleados": [
                 {
                     "id": e.id,
-                    "nombre": e.nombre,  # Campo nombre de tabla empleados
-                    "tiene_calendario": bool(e.calendar_id),  # Campo calendar_id de tabla empleados
-                    "calendar_id": e.calendar_id or "",  # Campo calendar_id de tabla empleados
-                    "horarios_trabajo": json.dumps(e.working_hours) if e.working_hours else "{}"  # Campo working_hours de tabla empleados (JSON)
+                    "nombre": e.nombre,
+                    "tiene_calendario": bool(e.calendar_id),
+                    "calendar_id": e.calendar_id or "",
+                    # 🔥 CORREGIR: empleados.working_hours no existe en el modelo
+                    "horarios_trabajo": getattr(e, 'working_hours', '{}') or "{}"
                 }
                 for e in empleados
             ],
-            "credenciales_google": self.google_credentials  # 🔥 USAR VARIABLE DE ENTORNO
+            "credenciales_google": self.google_credentials
         }
     
     def _get_user_history(self, telefono: str, db: Session) -> dict:
         """Obtener historial del usuario desde tabla reservas"""
         reservas_activas = db.query(Reserva).filter(
-            Reserva.cliente_telefono == telefono,  # Campo cliente_telefono de tabla reservas
-            Reserva.estado == "activo"  # Campo estado de tabla reservas
+            Reserva.cliente_telefono == telefono,
+            Reserva.estado == "activo"
         ).all()
+        
+        # 🔥 CORREGIR: Usar timezone aware para comparaciones
+        now_aware = datetime.now(self.tz)
         
         return {
             "reservas_activas": [
                 {
-                    "codigo": r.fake_id,  # Campo fake_id de tabla reservas
-                    "servicio": r.servicio,  # Campo servicio de tabla reservas
-                    "empleado": r.empleado_nombre,  # Campo empleado_nombre de tabla reservas
-                    "fecha": r.fecha_reserva.strftime("%d/%m %H:%M") if r.fecha_reserva else "",  # Campo fecha_reserva de tabla reservas
-                    "puede_cancelar": r.fecha_reserva > datetime.now(self.tz) + timedelta(hours=1) if r.fecha_reserva else False
+                    "codigo": r.fake_id,
+                    "servicio": r.servicio,
+                    "empleado": r.empleado_nombre,
+                    "fecha": r.fecha_reserva.strftime("%d/%m %H:%M") if r.fecha_reserva else "",
+                    "puede_cancelar": self._puede_cancelar_reserva(r.fecha_reserva, now_aware)
                 }
                 for r in reservas_activas
             ]
         }
+    
+    def _puede_cancelar_reserva(self, fecha_reserva, now_aware):
+        """Verificar si se puede cancelar una reserva"""
+        if not fecha_reserva:
+            return False
+        
+        # Si fecha_reserva no tiene timezone, agregar la timezone local
+        if fecha_reserva.tzinfo is None:
+            fecha_reserva = self.tz.localize(fecha_reserva)
+        
+        return fecha_reserva > now_aware + timedelta(hours=1)
     
     async def _ai_process_conversation(self, mensaje: str, telefono: str, conversation_context: dict, user_history: dict, tenant: Tenant, db: Session) -> str:
         """
@@ -213,7 +228,7 @@ FUNCIONES DISPONIBLES:
 REGLAS DE COMPORTAMIENTO:
 - Responde SIEMPRE de forma amigable y profesional
 - Si el cliente saluda por primera vez, usa saludar_cliente
-- Si dice "turno", "reservar", "agendar", usa mostrar_servicios
+- Si dice "turno", "reservar", agendar", usa mostrar_servicios
 - Para servicios informativos, usa mostrar_info_servicio
 - Para servicios con calendario, busca horarios inteligentemente según preferencias del cliente
 - Para empleados, pregunta cuál prefiere si hay varios
@@ -505,8 +520,8 @@ INSTRUCCIONES ESPECIALES:
                 print(f"❌ No hay horarios de trabajo configurados para servicio {servicio_info['id']}")
                 return []
             
-            # Generar slots básicos
-            now = datetime.now(self.tz)
+            # 🔥 USAR DATETIME AWARE DESDE EL INICIO
+            now = datetime.now(self.tz)  # Ya está timezone-aware
             end_date = now + timedelta(days=14)  # 2 semanas
             all_slots = []
             
@@ -536,7 +551,7 @@ INSTRUCCIONES ESPECIALES:
                 
                 current_date += timedelta(days=1)
             
-            # Filtrar slots disponibles
+            # Filtrar slots disponibles - todas las comparaciones son timezone-aware
             available_slots = []
             for slot in all_slots:
                 if slot > now and self._verificar_disponibilidad_slot(
@@ -548,9 +563,9 @@ INSTRUCCIONES ESPECIALES:
                     available_slots.append(slot)
                     if len(available_slots) >= cantidad:
                         break
-            
-            return sorted(available_slots)
-            
+    
+            return sorted(available_slots)  # 🔥 MOVER RETURN FUERA DEL EXCEPT
+        
         except Exception as e:
             print(f"❌ Error generando horarios inteligentes: {e}")
             return []
@@ -618,8 +633,15 @@ INSTRUCCIONES ESPECIALES:
             if not reserva:
                 return "❌ No encontré esa reserva o ya fue cancelada. Verifica el código."
             
-            # Verificar tiempo de cancelación
-            if reserva.fecha_reserva <= datetime.now(self.tz) + timedelta(hours=1):
+            # 🔥 CORREGIR: Verificar tiempo de cancelación con timezone aware
+            now_aware = datetime.now(self.tz)
+            fecha_reserva = reserva.fecha_reserva
+            
+            # Si fecha_reserva no tiene timezone, agregar la timezone local
+            if fecha_reserva.tzinfo is None:
+                fecha_reserva = self.tz.localize(fecha_reserva)
+            
+            if fecha_reserva <= now_aware + timedelta(hours=1):
                 return "⏰ No puedes cancelar con menos de 1 hora de anticipación. Contacta con el establecimiento."
             
             # Cancelar en Google Calendar usando credenciales globales
@@ -642,14 +664,14 @@ INSTRUCCIONES ESPECIALES:
             except Exception as e:
                 print(f"⚠️ Error cancelando en Google Calendar: {e}")
                 # Continuar con cancelación en BD aunque falle Google
-            
+        
             # Marcar como cancelado
             reserva.estado = "cancelado"
             db.commit()
             
-            dia_sem = reserva.fecha_reserva.strftime('%A')
+            dia_sem = fecha_reserva.strftime('%A')
             dia_sem_es = self._traducir_dia(dia_sem)
-            fecha_formatted = f"{dia_sem_es} {reserva.fecha_reserva.strftime('%d/%m %H:%M')}"
+            fecha_formatted = f"{dia_sem_es} {fecha_reserva.strftime('%d/%m %H:%M')}"
             
             return f"✅ Tu reserva *{codigo}* fue cancelada correctamente.\n\n📅 Era para: {fecha_formatted}\n🎯 Servicio: {reserva.servicio}"
             
@@ -657,44 +679,118 @@ INSTRUCCIONES ESPECIALES:
             print(f"❌ Error cancelando reserva: {e}")
             return "❌ No pude cancelar la reserva. Contacta con el establecimiento."
     
-    # ... resto de métodos iguales pero actualizando las llamadas a credenciales
-    
-    # MÉTODOS AUXILIARES SIN CAMBIOS
-    def _determinar_filtro_horario(self, preferencia: str) -> dict:
-        """Determinar filtro de horario según preferencia"""
-        pref = preferencia.lower()
+    def _normalize_datetime(self, dt):
+        """Normalizar datetime para que tenga timezone"""
+        if dt is None:
+            return None
         
-        if "mañana" in pref:
-            return {"inicio": 6, "fin": 12}
-        elif "tarde" in pref:
-            return {"inicio": 12, "fin": 18}
-        elif "noche" in pref:
-            return {"inicio": 18, "fin": 23}
-        else:
-            return {"inicio": 0, "fin": 24}  # Sin filtro
-    
-    def _determinar_filtro_urgencia(self, preferencia: str) -> str:
-        """Determinar urgencia según preferencia"""
-        pref = preferencia.lower()
+        if dt.tzinfo is None:
+            return self.tz.localize(dt)
         
-        if "hoy" in pref or "ahora" in pref or "urgente" in pref:
-            return "hoy"
-        elif "mañana" in pref and "por la" not in pref:
-            return "mañana"
-        else:
-            return "normal"
+        return dt.astimezone(self.tz)
+
+    # Usar en _generar_slots_dia:
+    def _generar_slots_dia(self, date, periods, servicio_info, filtro_hora):
+        """Generar slots para un día específico con filtros"""
+        slots = []
+        
+        try:
+            # Normalizar períodos
+            if isinstance(periods, list) and periods:
+                if isinstance(periods[0], str) and '-' in periods[0]:
+                    periods = [
+                        {'from': p.split('-')[0].strip(), 'to': p.split('-')[1].strip()} 
+                        for p in periods if '-' in p and p != "--:---:--"
+                    ]
+        
+            for period in periods:
+                if isinstance(period, dict) and 'from' in period:
+                    period_slots = self._generar_slots_periodo(
+                        period, date, servicio_info, filtro_hora
+                    )
+                    slots.extend(period_slots)
+        
+            return slots
+        
+        except Exception as e:
+            print(f"❌ Error generando slots del día: {e}")
+            return []
+
+    def _generar_slots_periodo(self, period, date, servicio_info, filtro_hora):
+        """Generar slots para un período con filtros inteligentes"""
+        try:
+            start_time_str = period['from']
+            end_time_str = period['to']
+            
+            if start_time_str == "--:--" or end_time_str == "--:--":
+                return []
+            
+            start_hour, start_minute = map(int, start_time_str.split(':'))
+            end_hour, end_minute = map(int, end_time_str.split(':'))
+            
+            # Aplicar filtro de horario
+            if filtro_hora["inicio"] < 24:  # Si hay filtro
+                start_hour = max(start_hour, filtro_hora["inicio"])
+                end_hour = min(end_hour, filtro_hora["fin"])
+                
+                if start_hour >= end_hour:
+                    return []
+            
+            # 🔥 CREAR DATETIME CON TIMEZONE DESDE EL INICIO
+            period_start = self.tz.localize(
+                datetime.combine(date, datetime.min.time().replace(hour=start_hour, minute=start_minute))
+            )
+            period_end = self.tz.localize(
+                datetime.combine(date, datetime.min.time().replace(hour=end_hour, minute=end_minute))
+            )
+            
+            if period_end <= period_start:
+                return []
+            
+            slots = []
+            current_time = period_start
+            
+            # Determinar intervalo
+            if servicio_info.get('solo_horas_exactas'):
+                interval = 60  # Solo horas exactas
+                # Ajustar al próximo minuto 00
+                if current_time.minute != 0:
+                    current_time = current_time.replace(minute=0) + timedelta(hours=1)
+            else:
+                interval = 30  # Cada 30 minutos
+            
+            # 🔥 USAR DATETIME AWARE PARA COMPARACIÓN
+            now_aware = datetime.now(self.tz)
+            
+            while current_time + timedelta(minutes=servicio_info['duracion']) <= period_end:
+                if current_time > now_aware:  # Comparación entre timezone-aware datetimes
+                    slots.append(current_time)
+                current_time += timedelta(minutes=interval)
+            
+            return slots
+        
+        except Exception as e:
+            print(f"❌ Error generando slots período: {e}")
+            return []
     
-    def _traducir_dia(self, dia_ingles: str) -> str:
-        """Traducir día de la semana a español"""
-        traduccion = {
-            'Monday': 'Lunes',
-            'Tuesday': 'Martes', 
-            'Wednesday': 'Miércoles',
-            'Thursday': 'Jueves',
-            'Friday': 'Viernes',
-            'Saturday': 'Sábado',
-            'Sunday': 'Domingo'
-        }
-        return traduccion.get(dia_ingles, dia_ingles)
-    
-    # ... (resto de métodos auxiliares sin cambios)
+    def _verificar_disponibilidad_slot(self, calendar_service, calendar_id, start_time, duration):
+        """Verificar disponibilidad en Google Calendar"""
+        try:
+            # Asegurar que start_time tiene timezone
+            if start_time.tzinfo is None:
+                start_time = self.tz.localize(start_time)
+            
+            end_time = start_time + timedelta(minutes=duration)
+            
+            events_result = calendar_service.events().list(
+                calendarId=calendar_id,
+                timeMin=start_time.isoformat(),
+                timeMax=end_time.isoformat(),
+                singleEvents=True
+            ).execute()
+            
+            return len(events_result.get('items', [])) == 0
+            
+        except Exception as e:
+            print(f"❌ Error verificando disponibilidad: {e}")
+            return True  # En caso de error, asumir disponible
