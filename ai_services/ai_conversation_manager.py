@@ -142,6 +142,9 @@ class AIConversationManager:
     async def process_message(self, telefono: str, mensaje: str, cliente_id: int, db: Session):
         """Procesar mensaje con IA más natural y contextual"""
         try:
+            # 🔧 LIMPIAR CACHE SI ES NECESARIO (opcional, solo para debug)
+            # self._clear_business_cache(cliente_id)
+            
             # Verificar si está bloqueado
             if self._is_blocked_number(telefono, cliente_id, db):
                 return "❌ Este número está bloqueado."
@@ -185,15 +188,18 @@ class AIConversationManager:
         mensaje_stripped = mensaje.strip().lower()
         servicio_seleccionado = None
         
+        print(f"🔧 DEBUG: Mensaje recibido: '{mensaje}' - Servicios disponibles: {[s['nombre'] for s in business_context['servicios']]}")
+        
         # Verificar si es un número
         if mensaje_stripped.isdigit():
             try:
                 posicion = int(mensaje_stripped)
                 if 1 <= posicion <= len(business_context['servicios']):
                     servicio_seleccionado = business_context['servicios'][posicion - 1]
+                    print(f"🔧 DEBUG: Servicio seleccionado por número {posicion}: {servicio_seleccionado['nombre']} (ID: {servicio_seleccionado['id']})")
             except:
                 pass
-        
+    
         # Si no es número, buscar por nombre de servicio
         if not servicio_seleccionado:
             for servicio in business_context['servicios']:
@@ -203,8 +209,9 @@ class AIConversationManager:
                     mensaje_stripped in nombre_servicio or 
                     nombre_servicio in mensaje_stripped):
                     servicio_seleccionado = servicio
+                    print(f"🔧 DEBUG: Servicio seleccionado por nombre: {servicio_seleccionado['nombre']} (ID: {servicio_seleccionado['id']})")
                     break
-        
+    
         # Si no es servicio, buscar por nombre de empleado
         if not servicio_seleccionado:
             for empleado in business_context['empleados']:
@@ -217,12 +224,19 @@ class AIConversationManager:
         
         # Si encontró un servicio
         if servicio_seleccionado:
-            # Verificar si es servicio informativo
-            if servicio_seleccionado.get('es_informativo', False):
-                return servicio_seleccionado.get('mensaje_personalizado', 
-                    f"📋 *{servicio_seleccionado['nombre']}*\n\nEste es un servicio informativo. ¿Necesitas más información?")
+            # 🔧 VERIFICAR CORRECTAMENTE SI ES INFORMATIVO
+            es_informativo = servicio_seleccionado.get('es_informativo', False)
+            print(f"🔧 DEBUG: Servicio {servicio_seleccionado['nombre']} - Es informativo: {es_informativo}")
             
-            # Llamar directamente a buscar horarios con el ID real
+            if es_informativo:
+                mensaje_personalizado = servicio_seleccionado.get('mensaje_personalizado', '')
+                if mensaje_personalizado:
+                    return f"ℹ️ *{servicio_seleccionado['nombre']}*\n\n{mensaje_personalizado}\n\n💬 ¿Necesitas más información? 🤔"
+                else:
+                    return f"ℹ️ *{servicio_seleccionado['nombre']}*\n\nEste es un servicio informativo.\n\n💬 ¿En qué más puedo ayudarte? 🤔"
+            
+            # Si NO es informativo, buscar horarios
+            print(f"🔧 DEBUG: Buscando horarios para servicio ID {servicio_seleccionado['id']}")
             return await self._buscar_horarios_servicio_real(
                 servicio_seleccionado['id'],
                 business_context, 
@@ -644,11 +658,17 @@ class AIConversationManager:
 
     def _get_business_context(self, tenant: Tenant, db: Session) -> dict:
         """Obtener contexto completo del negocio"""
-        # Obtener servicios
+        # 🔧 FORZAR REFRESH DE LA SESIÓN
+        db.expire_all()
+        
+        # Obtener servicios FRESCOS de la base de datos
         servicios = db.query(Servicio).filter(Servicio.tenant_id == tenant.id).all()
+        
+        print(f"🔧 DEBUG: Servicios encontrados: {[s.nombre for s in servicios]}")  # Debug
+        
         servicios_data = []
         for servicio in servicios:
-            servicios_data.append({
+            servicio_data = {
                 'id': servicio.id,
                 'nombre': servicio.nombre,
                 'precio': servicio.precio,
@@ -660,7 +680,9 @@ class AIConversationManager:
                 'mensaje_personalizado': getattr(servicio, 'mensaje_personalizado', ''),
                 'calendar_id': getattr(servicio, 'calendar_id', None),
                 'working_hours': getattr(servicio, 'working_hours', None)
-            })
+            }
+            servicios_data.append(servicio_data)
+            print(f"🔧 DEBUG: Servicio {servicio.id}: {servicio.nombre} - Informativo: {servicio_data['es_informativo']}")
         
         # Obtener empleados
         empleados = db.query(Empleado).filter(Empleado.tenant_id == tenant.id).all()
@@ -725,12 +747,18 @@ class AIConversationManager:
         respuesta = "🏆 *¡Servicios disponibles!*\n\n"
         
         for i, servicio in enumerate(business_context['servicios'], 1):
-            precio_txt = f" - 💰${servicio['precio']}" if mostrar_precios else ""
-            duracion_txt = f" (⏱️{servicio['duracion']} min)" if mostrar_precios else ""
-            respuesta += f"✨ *{i}.* {servicio['nombre']}{precio_txt}{duracion_txt}\n"
+            # Icono según tipo de servicio
+            icono = "ℹ️" if servicio.get('es_informativo', False) else "🎾" if "padel" in servicio['nombre'].lower() else "✨"
+            
+            precio_txt = f" - 💰${servicio['precio']}" if mostrar_precios and not servicio.get('es_informativo', False) else ""
+            duracion_txt = f" (⏱️{servicio['duracion']} min)" if mostrar_precios and not servicio.get('es_informativo', False) else ""
+            tipo_txt = " (Informativo)" if servicio.get('es_informativo', False) else ""
+            
+            respuesta += f"{icono} *{i}.* {servicio['nombre']}{precio_txt}{duracion_txt}{tipo_txt}\n"
         
         respuesta += "\n🎯 Puedes escribir el *número* o el *nombre del servicio*"
-        respuesta += "\n👥 También puedes escribir el nombre de un profesional específico"
+        if business_context['empleados']:
+            respuesta += "\n👥 También puedes escribir el nombre de un profesional específico"
         respuesta += "\n\n🚀 ¿Qué te interesa?"
         
         return respuesta
@@ -772,6 +800,8 @@ class AIConversationManager:
         """Obtener horarios de trabajo para un día específico"""
         day_name = date.strftime('%A').lower()
         
+        print(f"🔧 DEBUG: Obteniendo horarios para {day_name} - Servicio: {servicio['nombre']}")
+        
         # Usar horarios del servicio si están configurados
         working_hours_config = servicio.get('working_hours')
         
@@ -781,24 +811,31 @@ class AIConversationManager:
                     hours_str = working_hours_config[day_name]
                     if hours_str and hours_str != "closed":
                         start_str, end_str = hours_str.split('-')
-                        return {
+                        result = {
                             'start': datetime.strptime(start_str.strip(), '%H:%M').time(),
                             'end': datetime.strptime(end_str.strip(), '%H:%M').time()
                         }
+                        print(f"🔧 DEBUG: Horarios del servicio: {result}")
+                        return result
             except Exception as e:
                 print(f"⚠️ Error parseando horarios del servicio: {e}")
         
-        # Fallback: horarios por defecto
+        # Fallback: horarios por defecto MEJORADOS
         if day_name in ['saturday', 'sunday']:
-            return {
-                'start': datetime.strptime('09:00', '%H:%M').time(),
-                'end': datetime.strptime('18:00', '%H:%M').time()
+            # Fines de semana
+            result = {
+                'start': datetime.strptime('10:00', '%H:%M').time(),
+                'end': datetime.strptime('20:00', '%H:%M').time()
             }
         else:
-            return {
-                'start': datetime.strptime('08:00', '%H:%M').time(),
-                'end': datetime.strptime('22:00', '%H:%M').time()
+            # Días de semana
+            result = {
+                'start': datetime.strptime('09:00', '%H:%M').time(),
+                'end': datetime.strptime('21:00', '%H:%M').time()
             }
+        
+        print(f"🔧 DEBUG: Horarios por defecto para {day_name}: {result}")
+        return result
 
     def _is_working_day(self, date, servicio: dict) -> bool:
         """Verificar si es día laborable"""
@@ -808,10 +845,13 @@ class AIConversationManager:
         working_hours_config = servicio.get('working_hours')
         
         if working_hours_config and isinstance(working_hours_config, dict):
-            return day_name in working_hours_config and working_hours_config[day_name] != "closed"
+            is_working = day_name in working_hours_config and working_hours_config[day_name] != "closed"
+        else:
+            # Fallback: trabajar todos los días
+            is_working = True
         
-        # Fallback: trabajar todos los días excepto domingos
-        return day_name != 'sunday'
+        print(f"🔧 DEBUG: Día {day_name} es laborable: {is_working}")
+        return is_working
 
     async def _buscar_horarios_fecha_especifica(self, args: dict, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
         """Buscar horarios en fecha específica"""
@@ -825,6 +865,18 @@ class AIConversationManager:
         except Exception as e:
             print(f"❌ Error buscando horarios por fecha: {e}")
             return "❌ Error buscando horarios para esa fecha."
+
+    def _clear_business_cache(self, tenant_id: int):
+        """Limpiar cache del negocio"""
+        try:
+            # Limpiar cualquier cache relacionado con este tenant
+            cache_pattern = f"business_context:{tenant_id}*"
+            keys = self.redis_client.keys(cache_pattern)
+            if keys:
+                self.redis_client.delete(*keys)
+                print(f"🔧 Cache limpiado para tenant {tenant_id}")
+        except Exception as e:
+            print(f"⚠️ Error limpiando cache: {e}")
 
 # FUERA DE LA CLASE - FUNCIÓN GLOBAL
 def _traducir_dia(dia_ingles: str) -> str:
