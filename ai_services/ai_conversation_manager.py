@@ -1,6 +1,6 @@
 import openai
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
 from sqlalchemy.orm import Session
 import sys
@@ -21,7 +21,238 @@ class AIConversationManager:
         self.redis_client = redis_client
         self.tz = pytz.timezone("America/Montevideo")
         self.webconnect_url = os.getenv("webconnect_url", "http://195.26.250.62:3000")  
-        self.google_credentials = os.getenv("GOOGLE_CREDENTIALS_JSON")  # 🔥 CREDENCIALES GLOBALES
+        self.google_credentials = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    
+    def _normalize_datetime(self, dt):
+        """🔧 NORMALIZAR datetime para que siempre tenga timezone"""
+        if dt is None:
+            return None
+        
+        # Si es naive, agregar timezone UTC (asumiendo que viene de BD)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        
+        # Convertir a timezone local para trabajar
+        return dt.astimezone(self.tz)
+    
+    def _get_user_history(self, telefono: str, db: Session) -> dict:
+        """Obtener historial del usuario desde tabla reservas"""
+        reservas_activas = db.query(Reserva).filter(
+            Reserva.cliente_telefono == telefono,
+            Reserva.estado == "activo"
+        ).all()
+        
+        # 🔧 USAR MÉTODO NORMALIZADO
+        now_aware = datetime.now(self.tz)
+        
+        return {
+            "reservas_activas": [
+                {
+                    "codigo": r.fake_id,
+                    "servicio": r.servicio,
+                    "empleado": r.empleado_nombre,
+                    "fecha": r.fecha_reserva.strftime("%d/%m %H:%M") if r.fecha_reserva else "",
+                    "puede_cancelar": self._puede_cancelar_reserva(r.fecha_reserva, now_aware)
+                }
+                for r in reservas_activas
+            ]
+        }
+    
+    def _puede_cancelar_reserva(self, fecha_reserva, now_aware):
+        """🔧 CORREGIDO: Verificar si se puede cancelar una reserva"""
+        if not fecha_reserva:
+            return False
+        
+        # Normalizar fecha de reserva
+        fecha_reserva_aware = self._normalize_datetime(fecha_reserva)
+        
+        return fecha_reserva_aware > now_aware + timedelta(hours=1)
+    
+    async def _cancelar_reserva_inteligente(self, args: dict, telefono: str, tenant: Tenant, db: Session) -> str:
+        """🔧 CORREGIDO: Cancelar reserva usando credenciales globales"""
+        try:
+            codigo = args["codigo_reserva"].upper()
+            
+            # Extraer código si viene en formato "cancelar CODIGO"
+            if " " in codigo:
+                codigo = codigo.split()[-1]
+            
+            reserva = db.query(Reserva).filter_by(
+                fake_id=codigo,
+                cliente_telefono=telefono,
+                estado="activo"
+            ).first()
+            
+            if not reserva:
+                return "❌ No encontré esa reserva o ya fue cancelada. Verifica el código."
+            
+            # 🔧 NORMALIZAR FECHAS ANTES DE COMPARAR
+            now_aware = datetime.now(self.tz)
+            fecha_reserva_aware = self._normalize_datetime(reserva.fecha_reserva)
+            
+            if fecha_reserva_aware <= now_aware + timedelta(hours=1):
+                return "⏰ No puedes cancelar con menos de 1 hora de anticipación. Contacta con el establecimiento."
+            
+            # Cancelar en Google Calendar
+            try:
+                if self.google_credentials:
+                    service_account_info = json.loads(self.google_credentials)
+                    credentials = service_account.Credentials.from_service_account_info(
+                        service_account_info,
+                        scopes=['https://www.googleapis.com/auth/calendar']
+                    )
+                    calendar_service = build('calendar', 'v3', credentials=credentials)
+                    
+                    calendar_service.events().delete(
+                        calendarId=reserva.empleado_calendar_id,
+                        eventId=reserva.event_id
+                    ).execute()
+                    
+            except Exception as e:
+                print(f"⚠️ Error cancelando en Google Calendar: {e}")
+                # Continuar con cancelación en BD aunque falle Google
+        
+            # Marcar como cancelado
+            reserva.estado = "cancelado"
+            db.commit()
+            
+            dia_sem = fecha_reserva_aware.strftime('%A')
+            dia_sem_es = self._traducir_dia(dia_sem)
+            fecha_formatted = f"{dia_sem_es} {fecha_reserva_aware.strftime('%d/%m %H:%M')}"
+            
+            return f"✅ Tu reserva *{codigo}* fue cancelada correctamente.\n\n📅 Era para: {fecha_formatted}\n🎯 Servicio: {reserva.servicio}"
+            
+        except Exception as e:
+            print(f"❌ Error cancelando reserva: {e}")
+            return "❌ No pude cancelar la reserva. Contacta con el establecimiento."
+    
+    def _generar_slots_periodo(self, period, date, servicio_info, filtro_hora):
+        """🔧 CORREGIDO: Generar slots para un período con filtros inteligentes"""
+        try:
+            start_time_str = period['from']
+            end_time_str = period['to']
+            
+            if start_time_str == "--:--" or end_time_str == "--:--":
+                return []
+            
+            start_hour, start_minute = map(int, start_time_str.split(':'))
+            end_hour, end_minute = map(int, end_time_str.split(':'))
+            
+            # Aplicar filtro de horario
+            if filtro_hora.get("inicio", 24) < 24:  # Si hay filtro
+                start_hour = max(start_hour, filtro_hora["inicio"])
+                end_hour = min(end_hour, filtro_hora["fin"])
+                
+                if start_hour >= end_hour:
+                    return []
+            
+            # 🔧 CREAR DATETIME CON TIMEZONE DESDE EL INICIO
+            period_start = self.tz.localize(
+                datetime.combine(date, datetime.min.time().replace(hour=start_hour, minute=start_minute))
+            )
+            period_end = self.tz.localize(
+                datetime.combine(date, datetime.min.time().replace(hour=end_hour, minute=end_minute))
+            )
+            
+            if period_end <= period_start:
+                return []
+            
+            slots = []
+            current_time = period_start
+            
+            # Determinar intervalo
+            if servicio_info.get('solo_horas_exactas'):
+                interval = 60  # Solo horas exactas
+                # Ajustar al próximo minuto 00
+                if current_time.minute != 0:
+                    current_time = current_time.replace(minute=0) + timedelta(hours=1)
+            else:
+                interval = 30  # Cada 30 minutos
+            
+            # 🔧 USAR DATETIME AWARE PARA COMPARACIÓN
+            now_aware = datetime.now(self.tz)
+            
+            while current_time + timedelta(minutes=servicio_info['duracion']) <= period_end:
+                if current_time > now_aware:  # ✅ Ambos son timezone-aware
+                    slots.append(current_time)
+                current_time += timedelta(minutes=interval)
+            
+            return slots
+        
+        except Exception as e:
+            print(f"❌ Error generando slots período: {e}")
+            return []
+    
+    # 🔧 AGREGAR MÉTODOS FALTANTES
+    def _determinar_filtro_horario(self, preferencia):
+        """Determinar filtro de horario según preferencia"""
+        preferencia = preferencia.lower()
+        
+        if "mañana" in preferencia:
+            return {"inicio": 8, "fin": 12}
+        elif "tarde" in preferencia:
+            return {"inicio": 12, "fin": 18}
+        elif "noche" in preferencia:
+            return {"inicio": 18, "fin": 22}
+        else:
+            return {"inicio": 24, "fin": 24}  # Sin filtro
+    
+    def _determinar_filtro_urgencia(self, preferencia):
+        """Determinar filtro de urgencia según preferencia"""
+        preferencia = preferencia.lower()
+        
+        if "hoy" in preferencia:
+            return "hoy"
+        elif "mañana" in preferencia:
+            return "mañana"
+        else:
+            return "normal"
+    
+    def _traducir_dia(self, dia_en_ingles):
+        """Traducir día de la semana"""
+        traducciones = {
+            'Monday': 'Lunes',
+            'Tuesday': 'Martes', 
+            'Wednesday': 'Miércoles',
+            'Thursday': 'Jueves',
+            'Friday': 'Viernes',
+            'Saturday': 'Sábado',
+            'Sunday': 'Domingo'
+        }
+        return traducciones.get(dia_en_ingles, dia_en_ingles)
+    
+    def _mostrar_info_servicio_detallada(self, args: dict, context: dict) -> str:
+        """Mostrar información detallada de servicio informativo"""
+        try:
+            servicio_id = args["servicio_id"]
+            servicio_info = next((s for s in context['servicios'] if s['id'] == servicio_id), None)
+            
+            if not servicio_info:
+                return "❌ Servicio no encontrado."
+            
+            if not servicio_info['es_informativo']:
+                return "❌ Este servicio no es informativo."
+            
+            mensaje = f"ℹ️ *{servicio_info['nombre']}*\n\n"
+            
+            if servicio_info.get('mensaje_personalizado'):
+                mensaje += servicio_info['mensaje_personalizado']
+            else:
+                mensaje += "Información no disponible."
+            
+            return mensaje
+            
+        except Exception as e:
+            print(f"❌ Error mostrando info servicio: {e}")
+            return "Tuve un problema obteniendo la información."
+    
+    async def _buscar_horarios_empleado_inteligente(self, args: dict, context: dict, telefono: str, db: Session) -> str:
+        """Buscar horarios con empleado específico"""
+        return "🔧 Función en desarrollo - buscar horarios con empleado específico"
+    
+    async def _crear_reserva_inteligente(self, args: dict, telefono: str, context: dict, tenant: Tenant, db: Session) -> str:
+        """Crear reserva inteligente"""
+        return "🔧 Función en desarrollo - crear reserva inteligente"
     
     async def process_message(self, telefono: str, mensaje: str, cliente_id: int, db: Session):
         """
@@ -174,7 +405,7 @@ class AIConversationManager:
             Reserva.estado == "activo"
         ).all()
         
-        # 🔥 CORREGIR: Usar timezone aware para comparaciones
+        # 🔧 USAR MÉTODO NORMALIZADO
         now_aware = datetime.now(self.tz)
         
         return {
@@ -191,15 +422,14 @@ class AIConversationManager:
         }
     
     def _puede_cancelar_reserva(self, fecha_reserva, now_aware):
-        """Verificar si se puede cancelar una reserva"""
+        """🔧 CORREGIDO: Verificar si se puede cancelar una reserva"""
         if not fecha_reserva:
             return False
         
-        # Si fecha_reserva no tiene timezone, agregar la timezone local
-        if fecha_reserva.tzinfo is None:
-            fecha_reserva = self.tz.localize(fecha_reserva)
+        # Normalizar fecha de reserva
+        fecha_reserva_aware = self._normalize_datetime(fecha_reserva)
         
-        return fecha_reserva > now_aware + timedelta(hours=1)
+        return fecha_reserva_aware > now_aware + timedelta(hours=1)
     
     async def _ai_process_conversation(self, mensaje: str, telefono: str, conversation_context: dict, user_history: dict, tenant: Tenant, db: Session) -> str:
         """
@@ -633,34 +863,28 @@ INSTRUCCIONES ESPECIALES:
             if not reserva:
                 return "❌ No encontré esa reserva o ya fue cancelada. Verifica el código."
             
-            # 🔥 CORREGIR: Verificar tiempo de cancelación con timezone aware
+            # 🔧 NORMALIZAR FECHAS ANTES DE COMPARAR
             now_aware = datetime.now(self.tz)
-            fecha_reserva = reserva.fecha_reserva
+            fecha_reserva_aware = self._normalize_datetime(reserva.fecha_reserva)
             
-            # Si fecha_reserva no tiene timezone, agregar la timezone local
-            if fecha_reserva.tzinfo is None:
-                fecha_reserva = self.tz.localize(fecha_reserva)
-            
-            if fecha_reserva <= now_aware + timedelta(hours=1):
+            if fecha_reserva_aware <= now_aware + timedelta(hours=1):
                 return "⏰ No puedes cancelar con menos de 1 hora de anticipación. Contacta con el establecimiento."
             
             # Cancelar en Google Calendar usando credenciales globales
             try:
-                if not self.google_credentials:
-                    raise Exception("No hay credenciales de Google")
-                
-                service_account_info = json.loads(self.google_credentials)
-                credentials = service_account.Credentials.from_service_account_info(
-                    service_account_info,
-                    scopes=['https://www.googleapis.com/auth/calendar']
-                )
-                calendar_service = build('calendar', 'v3', credentials=credentials)
-                
-                calendar_service.events().delete(
-                    calendarId=reserva.empleado_calendar_id,
-                    eventId=reserva.event_id
-                ).execute()
-                
+                if self.google_credentials:
+                    service_account_info = json.loads(self.google_credentials)
+                    credentials = service_account.Credentials.from_service_account_info(
+                        service_account_info,
+                        scopes=['https://www.googleapis.com/auth/calendar']
+                    )
+                    calendar_service = build('calendar', 'v3', credentials=credentials)
+                    
+                    calendar_service.events().delete(
+                        calendarId=reserva.empleado_calendar_id,
+                        eventId=reserva.event_id
+                    ).execute()
+                    
             except Exception as e:
                 print(f"⚠️ Error cancelando en Google Calendar: {e}")
                 # Continuar con cancelación en BD aunque falle Google
@@ -669,9 +893,9 @@ INSTRUCCIONES ESPECIALES:
             reserva.estado = "cancelado"
             db.commit()
             
-            dia_sem = fecha_reserva.strftime('%A')
+            dia_sem = fecha_reserva_aware.strftime('%A')
             dia_sem_es = self._traducir_dia(dia_sem)
-            fecha_formatted = f"{dia_sem_es} {fecha_reserva.strftime('%d/%m %H:%M')}"
+            fecha_formatted = f"{dia_sem_es} {fecha_reserva_aware.strftime('%d/%m %H:%M')}"
             
             return f"✅ Tu reserva *{codigo}* fue cancelada correctamente.\n\n📅 Era para: {fecha_formatted}\n🎯 Servicio: {reserva.servicio}"
             
@@ -717,7 +941,7 @@ INSTRUCCIONES ESPECIALES:
             return []
 
     def _generar_slots_periodo(self, period, date, servicio_info, filtro_hora):
-        """Generar slots para un período con filtros inteligentes"""
+        """🔧 CORREGIDO: Generar slots para un período con filtros inteligentes"""
         try:
             start_time_str = period['from']
             end_time_str = period['to']
@@ -729,14 +953,14 @@ INSTRUCCIONES ESPECIALES:
             end_hour, end_minute = map(int, end_time_str.split(':'))
             
             # Aplicar filtro de horario
-            if filtro_hora["inicio"] < 24:  # Si hay filtro
+            if filtro_hora.get("inicio", 24) < 24:  # Si hay filtro
                 start_hour = max(start_hour, filtro_hora["inicio"])
                 end_hour = min(end_hour, filtro_hora["fin"])
                 
                 if start_hour >= end_hour:
                     return []
             
-            # 🔥 CREAR DATETIME CON TIMEZONE DESDE EL INICIO
+            # 🔧 CREAR DATETIME CON TIMEZONE DESDE EL INICIO
             period_start = self.tz.localize(
                 datetime.combine(date, datetime.min.time().replace(hour=start_hour, minute=start_minute))
             )
@@ -759,11 +983,11 @@ INSTRUCCIONES ESPECIALES:
             else:
                 interval = 30  # Cada 30 minutos
             
-            # 🔥 USAR DATETIME AWARE PARA COMPARACIÓN
+            # 🔧 USAR DATETIME AWARE PARA COMPARACIÓN
             now_aware = datetime.now(self.tz)
             
             while current_time + timedelta(minutes=servicio_info['duracion']) <= period_end:
-                if current_time > now_aware:  # Comparación entre timezone-aware datetimes
+                if current_time > now_aware:  # ✅ Ambos son timezone-aware
                     slots.append(current_time)
                 current_time += timedelta(minutes=interval)
             

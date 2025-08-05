@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 import redis
 import os
 import sys
+from datetime import datetime, timezone
 
 # 🔥 AJUSTAR PATH PARA AI_SERVICES
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -52,22 +53,37 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         
         return JSONResponse(content={"mensaje": respuesta})
         
+    except ValueError as e:
+        error_msg = str(e)
+        if "offset-naive and offset-aware" in error_msg:
+            print(f"❌ Error de timezone en IA: {e}")
+            return JSONResponse(content={
+                "mensaje": "❌ Hay un problema temporal con el sistema. Intenta de nuevo en un momento."
+            })
+        elif "can't compare offset-naive and offset-aware datetimes" in error_msg:
+            print(f"❌ Error de comparación de fechas: {e}")
+            return JSONResponse(content={
+                "mensaje": "❌ Problema con las fechas del sistema. Contacta soporte."
+            })
+        raise e
+        
     except Exception as e:
         print(f"❌ Error en webhook IA: {e}")
         
-        # Log del error
+        # Log del error con fecha UTC consistente
         try:
             if 'data' in locals():
                 error_log = ErrorLog(
                     cliente=str(data.get("cliente_id", "Unknown")),
                     telefono=data.get("telefono", "Unknown"), 
                     mensaje=data.get("mensaje", "Unknown"),
-                    error=str(e)
+                    error=str(e),
+                    fecha=datetime.now(timezone.utc)  # 🔧 Asegurar UTC
                 )
                 db.add(error_log)
                 db.commit()
-        except:
-            pass
+        except Exception as log_error:
+            print(f"❌ Error guardando log: {log_error}")
         
         return JSONResponse(content={
             "mensaje": "❌ Tuve un problema procesando tu mensaje. ¿Podrías intentar de nuevo en unos minutos?"

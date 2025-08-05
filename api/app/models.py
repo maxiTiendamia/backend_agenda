@@ -34,7 +34,8 @@ class Reserva(Base):
     empleado_calendar_id = Column(String(200), nullable=False)
     cliente_nombre = Column(String(100), nullable=False)  
     cliente_telefono = Column(String(20), nullable=False)
-    fecha_reserva = Column(DateTime, default=datetime.now(timezone.utc))
+    # 🔧 CORREGIR: Asegurar que siempre use UTC
+    fecha_reserva = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     servicio = Column(String(150), nullable=False)
     estado = Column(String(20), nullable=False, default="activo") 
     cantidad = Column(Integer, default=1)
@@ -92,15 +93,17 @@ class ErrorLog(Base):
     telefono = Column(String(50))
     mensaje = Column(Text)
     error = Column(Text)
+    # 🔧 CORREGIR: Usar lambda para consistencia
     fecha = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class BlockedNumber(Base):
     __tablename__ = "blocked_numbers"
     id = Column(Integer, primary_key=True)
-    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=True)  # 🔥 CAMBIAR A nullable=True
+    empleado_id = Column(Integer, ForeignKey('empleados.id'), nullable=True)
     cliente_id = Column(Integer, ForeignKey('tenants.id'), nullable=False)
     telefono = Column(String(30), nullable=False)
-    fecha_bloqueo = Column(DateTime, default=datetime.now(timezone.utc))
+    # 🔧 CORREGIR: Usar lambda para consistencia
+    fecha_bloqueo = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     empleado = relationship('Empleado')
     cliente = relationship('Tenant')
