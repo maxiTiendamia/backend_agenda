@@ -139,45 +139,60 @@ class AIConversationManager:
         fecha_reserva_aware = self._normalize_datetime(fecha_reserva)
         return fecha_reserva_aware > now_aware + timedelta(hours=1)
     
+
     async def process_message(self, telefono: str, mensaje: str, cliente_id: int, db: Session):
         """Procesar mensaje con IA más natural y contextual"""
         try:
             # Verificar si está bloqueado
             if self._is_blocked_number(telefono, cliente_id, db):
                 return "❌ Este número está bloqueado."
-            
             # Verificar modo humano
             if self._is_human_mode(telefono):
                 await self._notify_human_support(cliente_id, telefono, mensaje)
                 return "👥 Tu mensaje fue enviado a nuestro equipo humano. Te responderemos pronto."
-            
             # Obtener contexto del negocio
             tenant = db.query(Tenant).filter(Tenant.id == cliente_id).first()
             if not tenant:
                 return "❌ No encontré información del negocio."
-            
             # Obtener historial del usuario
             user_history = self._get_user_history(telefono, db)
             business_context = self._get_business_context(tenant, db)
             conversation_history = self._get_conversation_history(telefono)
-            
             # Guardar mensaje del usuario
             self._save_conversation_message(telefono, "user", mensaje)
-            
-            # Procesar con IA
+
+            # --- FLUJO DE CANCELACIÓN ---
+            mensaje_stripped = mensaje.strip().lower()
+            if "cancelar" in mensaje_stripped or "anular" in mensaje_stripped:
+                codigo_match = re.search(r'\b([A-Z0-9]{6,})\b', mensaje)
+                if codigo_match:
+                    codigo_reserva = codigo_match.group(1)
+                    return await self.cancelar_reserva(codigo_reserva, telefono, db)
+                else:
+                    reservas_activas = user_history.get("reservas_activas", [])
+                    if not reservas_activas:
+                        return "No tienes reservas activas para cancelar."
+                    respuesta = "🔄 Tus reservas activas:\n"
+                    for r in reservas_activas:
+                        respuesta += f"- Código: {r['codigo']} | {r['servicio']} el {r['fecha']}\n"
+                    respuesta += "\n💬 Escribe el código de la reserva que deseas cancelar."
+                    return respuesta
+
+            # --- FLUJO DE CONSULTA DE SERVICIOS ---
+            if mensaje_stripped in ["servicios", "ver servicios", "lista", "menu"]:
+                return self.mostrar_servicios(business_context)
+
+            # --- FLUJO PRINCIPAL CON IA ---
             respuesta = await self._ai_process_conversation_natural(
                 mensaje, telefono, conversation_history, user_history, business_context, tenant, db
             )
-            
-            # Guardar respuesta de la IA
             self._save_conversation_message(telefono, "assistant", respuesta)
-            
             return respuesta
-            
+
         except Exception as e:
             print(f"❌ Error en AI manager: {e}")
             return "Disculpa, tuve un problema procesando tu mensaje. ¿Podrías intentar de nuevo?"
-    
+
     def _detectar_dia_mensaje(self, mensaje: str) -> str:
         """🔧 CORREGIDO: Detectar qué día quiere el usuario"""
         mensaje = mensaje.lower()
@@ -305,7 +320,7 @@ class AIConversationManager:
             print(f"❌ Error obteniendo slots específicos: {e}")
             return []
     
-    async def _ai_process_conversation_natural(self, mensaje: str, telefono: str, conversation_history: list, user_history: dict, business_context: dict, tenant: Tenant, db: Session) -> str:
+    async def _ai_process_conversation_natural(self, mensaje, telefono, conversation_history, user_history, business_context, tenant, db):
         """🔧 CORREGIDO: Procesamiento de IA más natural y contextual"""
         
         mensaje_stripped = mensaje.strip().lower()
@@ -785,13 +800,41 @@ class AIConversationManager:
             ).first()
             if reserva_existente:
                 return "❌ Ya existe una reserva activa para ese horario. Elige otro turno."
-            
+
             servicio = db.query(Servicio).filter(Servicio.id == servicio_id).first()
             empleado = db.query(Empleado).filter(Empleado.id == empleado_id).first() if empleado_id else None
             fake_id = generar_fake_id()
+
+            # Crear evento en Google Calendar
+            event_id = ""
+            try:
+                if self.google_credentials:
+                    credentials_info = json.loads(self.google_credentials)
+                    credentials = service_account.Credentials.from_service_account_info(credentials_info)
+                    service_gc = build('calendar', 'v3', credentials=credentials)
+                    calendar_id = empleado.calendar_id if empleado and empleado.calendar_id else servicio.calendar_id
+                    if not calendar_id:
+                        calendar_id = 'primary'
+                    event = {
+                        'summary': f"{servicio.nombre} - {nombre_cliente}",
+                        'description': f"Reserva generada por el sistema para {nombre_cliente} (tel: {telefono})",
+                        'start': {
+                            'dateTime': fecha_dt.isoformat(),
+                            'timeZone': str(self.tz)
+                        },
+                        'end': {
+                            'dateTime': (fecha_dt + timedelta(minutes=servicio.duracion)).isoformat(),
+                            'timeZone': str(self.tz)
+                        },
+                    }
+                    created_event = service_gc.events().insert(calendarId=calendar_id, body=event).execute()
+                    event_id = created_event.get('id', '')
+            except Exception as e:
+                print(f"❌ Error creando evento en Google Calendar: {e}")
+
             nueva_reserva = Reserva(
                 fake_id=fake_id,
-                event_id="",  # Completar con el ID del evento de Google Calendar
+                event_id=event_id,
                 empresa=servicio.tenant.nombre,
                 empleado_id=empleado.id if empleado else None,
                 empleado_nombre=empleado.nombre if empleado else "Sistema",
@@ -805,8 +848,51 @@ class AIConversationManager:
             )
             db.add(nueva_reserva)
             db.commit()
-            # Aquí deberías crear el evento en Google Calendar y guardar el event_id
             return f"✅ Reserva confirmada para *{servicio.nombre}* el {fecha_dt.strftime('%A %d/%m a las %H:%M')}."
         except Exception as e:
             print(f"❌ Error creando reserva: {e}")
             return "😵 No pude confirmar la reserva. Intenta de nuevo."
+    
+    async def cancelar_reserva(self, codigo_reserva: str, telefono: str, db: Session) -> str:
+        """Cancelar una reserva existente por código"""
+        try:
+            reserva = db.query(Reserva).filter(
+                Reserva.fake_id == codigo_reserva,
+                Reserva.cliente_telefono == telefono,
+                Reserva.estado == "activo"
+            ).first()
+            if not reserva:
+                return "❌ No encontré la reserva activa con ese código."
+
+            # Eliminar evento en Google Calendar si existe
+            try:
+                if self.google_credentials and reserva.event_id:
+                    credentials_info = json.loads(self.google_credentials)
+                    credentials = service_account.Credentials.from_service_account_info(credentials_info)
+                    service_gc = build('calendar', 'v3', credentials=credentials)
+                    calendar_id = reserva.empleado_calendar_id or reserva.empresa or 'primary'
+                    service_gc.events().delete(calendarId=calendar_id, eventId=reserva.event_id).execute()
+            except Exception as e:
+                print(f"❌ Error eliminando evento en Google Calendar: {e}")
+
+            reserva.estado = "cancelado"
+            db.commit()
+            return f"✅ Reserva cancelada correctamente.\nCódigo: {codigo_reserva}"
+        except Exception as e:
+            print(f"❌ Error cancelando reserva: {e}")
+            return "😵 No pude cancelar la reserva. Intenta de nuevo."
+    
+    def _format_servicios_with_real_ids(self, servicios: list) -> str:
+        """
+        Devuelve una lista de servicios con sus IDs reales para mostrar al usuario.
+        """
+        if not servicios:
+            return "No hay servicios disponibles."
+        lines = []
+        for s in servicios:
+            lines.append(f"{s['id']}: {s['nombre']}")
+        return "\n".join(lines)
+    
+    def mostrar_servicios(self, business_context: dict) -> str:
+        """Devuelve la lista de servicios disponibles para mostrar al cliente."""
+        return f"✨ Servicios disponibles:\n{self._format_servicios_with_real_ids(business_context['servicios'])}\n\n💬 Escribe el número o nombre del servicio que te interesa."
