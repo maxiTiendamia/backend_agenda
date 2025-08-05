@@ -181,6 +181,27 @@ class AIConversationManager:
     async def _ai_process_conversation_natural(self, mensaje: str, telefono: str, conversation_history: list, user_history: dict, business_context: dict, tenant: Tenant, db: Session) -> str:
         """Procesamiento de IA más natural y contextual"""
         
+        # 🔧 DETECTAR SI EL MENSAJE ES UN NÚMERO (SELECCIÓN DE SERVICIO)
+        mensaje_stripped = mensaje.strip()
+        if mensaje_stripped.isdigit():
+            try:
+                posicion = int(mensaje_stripped)
+                if 1 <= posicion <= len(business_context['servicios']):
+                    # Mapear posición a servicio real
+                    servicio_seleccionado = business_context['servicios'][posicion - 1]
+                    
+                    # Llamar directamente a buscar horarios con el ID real
+                    return await self._buscar_horarios_servicio(
+                        {"servicio_id": servicio_seleccionado['id']},
+                        business_context, 
+                        telefono, 
+                        db
+                    )
+                else:
+                    return f"❌ Por favor elige un número entre 1 y {len(business_context['servicios'])}."
+            except:
+                pass  # Si hay error, continuar con el procesamiento normal
+        
         # Construir contexto para la IA
         system_prompt = f"""Eres la IA asistente de {tenant.comercio}. 
 
@@ -195,20 +216,18 @@ INFORMACIÓN DEL CLIENTE (teléfono: {telefono}):
 - Reservas activas: {len(user_history['reservas_activas'])}
 - Historial: {len(user_history['historial'])} reservas anteriores
 
-INSTRUCCIONES:
+INSTRUCCIONES IMPORTANTES:
 1. Sé natural, amigable y personalizada
 2. Usa la información del cliente para personalizar respuestas
-3. Cuando te pidan un turno, pregunta específicamente qué servicio quiere
-4. Si dicen un número (1, 2, etc), interpreta que se refiere al servicio de esa posición
-5. Ofrece horarios específicos cuando sea apropiado
+3. Cuando te pidan un turno, muestra los servicios numerados (1, 2, 3...)
+4. Si el usuario dice un número, usa la función buscar_horarios_servicio con el ID REAL del servicio
+5. SERVICIOS CON SUS IDs REALES:
+{self._format_servicios_with_real_ids(business_context['servicios'])}
 6. Recuerda conversaciones anteriores
 7. Puedes responder preguntas generales sobre el negocio
 
-SERVICIOS DISPONIBLES:
-{self._format_servicios_for_ai(business_context['servicios'])}
-
 FUNCIONES DISPONIBLES:
-- buscar_horarios_servicio: Para mostrar horarios disponibles
+- buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio)
 - crear_reserva: Para confirmar una reserva
 - cancelar_reserva: Para cancelar reservas existentes
 """
@@ -231,11 +250,11 @@ FUNCIONES DISPONIBLES:
         functions = [
             {
                 "name": "buscar_horarios_servicio",
-                "description": "Buscar horarios disponibles para un servicio específico",
+                "description": "Buscar horarios disponibles para un servicio específico. IMPORTANTE: usa el ID real del servicio, no la posición en la lista",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "servicio_id": {"type": "integer", "description": "ID del servicio"},
+                        "servicio_id": {"type": "integer", "description": "ID REAL del servicio en la base de datos"},
                         "preferencia_horario": {"type": "string", "description": "mañana, tarde, noche o cualquiera"},
                         "preferencia_fecha": {"type": "string", "description": "hoy, mañana, esta_semana o cualquiera"},
                         "cantidad": {"type": "integer", "description": "Cantidad de personas", "default": 1}
@@ -249,7 +268,7 @@ FUNCIONES DISPONIBLES:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "servicio_id": {"type": "integer"},
+                        "servicio_id": {"type": "integer", "description": "ID REAL del servicio"},
                         "fecha_hora": {"type": "string", "description": "Fecha y hora en formato YYYY-MM-DD HH:MM"},
                         "empleado_id": {"type": "integer", "description": "ID del empleado (opcional)"},
                         "nombre_cliente": {"type": "string"},
@@ -459,16 +478,33 @@ FUNCIONES DISPONIBLES:
             print(f"❌ Error cancelando reserva: {e}")
             return "❌ No pude cancelar la reserva."
     
+    def _format_servicios_with_real_ids(self, servicios):
+        """Formatear servicios mostrando posición y ID real"""
+        formatted = ""
+        for i, servicio in enumerate(servicios, 1):
+            formatted += f"Posición {i} = ID real {servicio['id']} ({servicio['nombre']})\n"
+        return formatted
+    
     def _format_servicios_for_ai(self, servicios):
         """Formatear servicios para el prompt de IA"""
         formatted = ""
         for i, servicio in enumerate(servicios, 1):
-            formatted += f"{i}. {servicio['nombre']} - {servicio['duracion']} min - ${servicio['precio']}\n"
+            formatted += f"{i}. {servicio['nombre']} - {servicio['duracion']} min - ${servicio['precio']} (ID real: {servicio['id']})\n"
         return formatted
     
     def _generar_respuesta_fallback(self, mensaje, user_history, business_context):
         """Respuesta de emergencia cuando falla la IA"""
         mensaje_lower = mensaje.lower()
+        
+        # 🔧 MANEJO ESPECIAL PARA NÚMEROS
+        if mensaje.strip().isdigit():
+            try:
+                posicion = int(mensaje.strip())
+                if 1 <= posicion <= len(business_context['servicios']):
+                    servicio = business_context['servicios'][posicion - 1]
+                    return f"🎯 Elegiste: *{servicio['nombre']}*\n\n💰 Precio: ${servicio['precio']}\n⏱️ Duración: {servicio['duracion']} min\n\n📅 Buscando horarios disponibles..."
+            except:
+                pass
         
         if any(word in mensaje_lower for word in ['turno', 'reserva', 'cita', 'horario']):
             respuesta = "🤖 ¡Hola! Soy la IA asistente. "
