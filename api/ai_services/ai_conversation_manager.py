@@ -1,4 +1,3 @@
-    
 import openai
 import json
 from datetime import datetime, timedelta, timezone
@@ -928,3 +927,83 @@ class AIConversationManager:
     def mostrar_servicios(self, business_context: dict) -> str:
         """Devuelve la lista de servicios disponibles para mostrar al cliente."""
         return f"✨ Servicios disponibles:\n{self._format_servicios_with_real_ids(business_context['servicios'])}\n\n💬 Escribe el número o nombre del servicio que te interesa."
+
+    def _is_working_day(self, date_obj, servicio):
+        """
+        Devuelve True si el día es laborable para el servicio según la configuración en la base de datos.
+        Usa el campo working_hours si está definido, si no, usa días por defecto.
+        """
+        dia_nombre = self._traducir_dia(date_obj.strftime('%A'))
+        # Si el servicio tiene working_hours (JSON), úsalo
+        dias_laborables = None
+        wh = getattr(servicio, 'working_hours', None)
+        if wh:
+            try:
+                wh_data = json.loads(wh) if isinstance(wh, str) else wh
+                dias_laborables = [d['dia'] for d in wh_data if d.get('activo', True)]
+            except Exception:
+                pass
+        if not dias_laborables:
+            dias_laborables = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes']
+        return dia_nombre in dias_laborables
+
+    def _get_working_hours_for_day(self, date_obj, servicio):
+        """
+        Devuelve un diccionario con la hora de inicio y fin del servicio para el día dado.
+        Prioriza el campo working_hours (JSON) del servicio, luego Tenant, luego valores por defecto.
+        """
+        dia_nombre = self._traducir_dia(date_obj.strftime('%A'))
+        hora_inicio = 9
+        hora_fin = 18
+        wh = getattr(servicio, 'working_hours', None)
+        if wh:
+            try:
+                wh_data = json.loads(wh) if isinstance(wh, str) else wh
+                for d in wh_data:
+                    if self._traducir_dia(d.get('dia', '')) == dia_nombre and d.get('activo', True):
+                        hora_inicio = int(d.get('hora_inicio', hora_inicio))
+                        hora_fin = int(d.get('hora_fin', hora_fin))
+                        break
+            except Exception:
+                pass
+        else:
+            # Si el servicio no tiene working_hours, podrías consultar Tenant si lo necesitas
+            pass
+        return {
+            'start': date_obj.replace(hour=hora_inicio, minute=0, second=0, microsecond=0),
+            'end': date_obj.replace(hour=hora_fin, minute=0, second=0, microsecond=0)
+        }
+
+    def _generate_mock_slots(self, servicio, dias_adelante):
+        """
+        Genera slots simulados si falla la consulta a Google Calendar.
+        Usa la configuración real de working_hours y duración del servicio.
+        """
+        from datetime import datetime, timedelta
+        slots = []
+        now = datetime.now(self.tz)
+        duracion = getattr(servicio, 'duracion', 60)
+        wh = getattr(servicio, 'working_hours', None)
+        for i in range(dias_adelante):
+            fecha = now + timedelta(days=i)
+            dia_nombre = self._traducir_dia(fecha.strftime('%A'))
+            hora_inicio = 9
+            hora_fin = 18
+            activo = True
+            if wh:
+                try:
+                    wh_data = json.loads(wh) if isinstance(wh, str) else wh
+                    for d in wh_data:
+                        if self._traducir_dia(d.get('dia', '')) == dia_nombre:
+                            activo = d.get('activo', True)
+                            hora_inicio = int(d.get('hora_inicio', hora_inicio))
+                            hora_fin = int(d.get('hora_fin', hora_fin))
+                            break
+                except Exception:
+                    pass
+            if not activo:
+                continue
+            for hora in range(hora_inicio, hora_fin, duracion // 60):
+                slot_time = fecha.replace(hour=hora, minute=0, second=0, microsecond=0)
+                slots.append({'fecha': slot_time, 'fin': slot_time + timedelta(minutes=duracion)})
+        return slots
