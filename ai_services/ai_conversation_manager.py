@@ -308,8 +308,59 @@ class AIConversationManager:
     async def _ai_process_conversation_natural(self, mensaje: str, telefono: str, conversation_history: list, user_history: dict, business_context: dict, tenant: Tenant, db: Session) -> str:
         """🔧 CORREGIDO: Procesamiento de IA más natural y contextual"""
         
-        # 🔧 DETECTAR SELECCIÓN DE SERVICIO (NÚMERO O NOMBRE)
         mensaje_stripped = mensaje.strip().lower()
+        
+        # 🔧 VERIFICAR PRIMERO SI TIENE SERVICIO SELECCIONADO Y HORARIOS DISPONIBLES
+        servicio_key = f"servicio_seleccionado:{telefono}"
+        servicio_guardado_str = self.redis_client.get(servicio_key)
+        
+        if servicio_guardado_str:
+            servicio_guardado = json.loads(servicio_guardado_str)
+            
+            # Verificar si hay slots disponibles guardados
+            slots_key = f"slots:{telefono}:{servicio_guardado['id']}"
+            slots_data_str = self.redis_client.get(slots_key)
+            
+            if slots_data_str:
+                # El usuario está en modo selección de horario
+                slots_data = json.loads(slots_data_str)
+                
+                # Verificar si es selección de número de slot
+                if mensaje_stripped.isdigit():
+                    try:
+                        slot_numero = int(mensaje_stripped)
+                        if 1 <= slot_numero <= len(slots_data):
+                            slot_seleccionado = slots_data[slot_numero - 1]
+                            
+                            # Pedir nombre del cliente para confirmar
+                            return f"✅ Perfecto! Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*\n📅 {datetime.fromisoformat(slot_seleccionado['fecha_hora']).strftime('%A %d/%m a las %H:%M')}\n\n👤 Para confirmar, necesito tu *nombre completo* por favor:"
+                        else:
+                            return f"❌ Por favor elige un número entre 1 y {len(slots_data)}"
+                    except:
+                        pass
+                
+                # Verificar si es selección por hora (ej: "19:00")
+                import re
+                time_pattern = r'\b(\d{1,2}):(\d{2})\b'
+                time_match = re.search(time_pattern, mensaje_stripped)
+                if time_match:
+                    hora_buscada = f"{time_match.group(1).zfill(2)}:{time_match.group(2)}"
+                    for slot in slots_data:
+                        slot_hora = datetime.fromisoformat(slot['fecha_hora']).strftime('%H:%M')
+                        if slot_hora == hora_buscada:
+                            return f"✅ Perfecto! Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*\n📅 {datetime.fromisoformat(slot['fecha_hora']).strftime('%A %d/%m a las %H:%M')}\n\n👤 Para confirmar, necesito tu *nombre completo* por favor:"
+                    
+                    return f"❌ No encontré el horario {hora_buscada}. Los horarios disponibles son los numerados arriba."
+            
+            # Si tiene servicio pero no slots, está eligiendo día
+            dia_detectado = self._detectar_dia_mensaje(mensaje_stripped)
+            if dia_detectado:
+                print(f"🔧 DEBUG: Día detectado: {dia_detectado}")
+                return await self._buscar_horarios_dia_especifico(
+                    servicio_guardado, dia_detectado, telefono, business_context, tenant, db
+                )
+        
+        # 🔧 DETECCIÓN DE SELECCIÓN DE SERVICIO (solo si NO tiene servicio guardado)
         servicio_seleccionado = None
         
         print(f"🔧 DEBUG: Mensaje recibido: '{mensaje}' - Servicios disponibles: {[s['nombre'] for s in business_context['servicios']]}")
@@ -355,22 +406,7 @@ class AIConversationManager:
             
             return self._preguntar_dia_disponible(servicio_seleccionado, telefono)
         
-        # 🔧 VERIFICAR SI TIENE UN SERVICIO YA SELECCIONADO
-        servicio_key = f"servicio_seleccionado:{telefono}"
-        servicio_guardado_str = self.redis_client.get(servicio_key)
-
-        if servicio_guardado_str and not servicio_seleccionado:
-            # El usuario ya seleccionó un servicio, ahora está eligiendo día
-            servicio_guardado = json.loads(servicio_guardado_str)
-            dia_detectado = self._detectar_dia_mensaje(mensaje_stripped)
-            
-            if dia_detectado:
-                print(f"🔧 DEBUG: Día detectado: {dia_detectado}")
-                return await self._buscar_horarios_dia_especifico(
-                    servicio_guardado, dia_detectado, telefono, business_context, tenant, db
-                )
-        
-        # 🔧 RESTO DEL PROCESAMIENTO CON IA...
+        # 🔧 RESTO DEL PROCESAMIENTO CON IA
         # Construir contexto para la IA
         system_prompt = f"""🤖 Eres la IA asistente de {tenant.comercio}. 
 
@@ -624,11 +660,12 @@ class AIConversationManager:
                     microsecond=0
                 )
                 
-                # Si es hoy, empezar desde la hora actual + 1 hora
+                # 🔧 NUEVO: Si es hoy, ajustar al próximo horario válido
                 if check_date.date() == now.date():
                     min_start = now + timedelta(hours=1)
                     if current_time < min_start:
-                        current_time = min_start
+                        # 🔧 REDONDEAR al próximo horario válido
+                        current_time = self._round_to_next_valid_time(min_start, servicio)
                 
                 # Generar slots
                 while current_time + timedelta(minutes=duracion_minutos) <= end_work:
@@ -637,345 +674,71 @@ class AIConversationManager:
                     
                     is_free = True
                     for event in events:
-                        # 🔧 CORREGIR: Verificar que event sea un diccionario
                         if not isinstance(event, dict):
                             continue
-                            
-                        # 🔧 CORREGIR: Manejar diferentes formatos de fecha
                         event_start_info = event.get('start', {})
                         event_end_info = event.get('end', {})
-                        
                         if not event_start_info or not event_end_info:
                             continue
-                        
                         try:
-                            # Obtener fecha/hora de inicio del evento
                             if 'dateTime' in event_start_info:
                                 event_start_str = event_start_info['dateTime']
                             elif 'date' in event_start_info:
                                 event_start_str = event_start_info['date'] + 'T00:00:00'
                             else:
                                 continue
-                                
-                            # Obtener fecha/hora de fin del evento
                             if 'dateTime' in event_end_info:
                                 event_end_str = event_end_info['dateTime']
                             elif 'date' in event_end_info:
                                 event_end_str = event_end_info['date'] + 'T23:59:59'
                             else:
                                 continue
-                            
-                            # Parsear fechas
                             event_start = datetime.fromisoformat(event_start_str.replace('Z', '+00:00'))
                             event_end = datetime.fromisoformat(event_end_str.replace('Z', '+00:00'))
-                            
-                            # Convertir a timezone local
                             event_start = event_start.astimezone(self.tz)
                             event_end = event_end.astimezone(self.tz)
-                            
-                            # Verificar solapamiento
                             if (current_time < event_end and slot_end > event_start):
                                 is_free = False
                                 break
-                                
                         except (ValueError, TypeError) as e:
                             print(f"⚠️ Error parseando evento: {e}")
                             continue
-                    
                     if is_free:
                         available_slots.append({
                             'fecha': current_time,
                             'fin': slot_end
                         })
-                    
-                    # Incrementar según configuración
-                    increment = 30 if servicio.get('solo_horas_exactas') else 15
-                    if servicio.get('turnos_consecutivos'):
-                        increment = duracion_minutos
-                    
+                    increment = self._get_time_increment(servicio)
                     current_time += timedelta(minutes=increment)
-            
             return available_slots
-            
         except Exception as e:
             print(f"❌ Error consultando Google Calendar: {e}")
-            # 🔧 AGREGAR: Generar slots de ejemplo para testing
             return self._generate_mock_slots(servicio, dias_adelante)
 
-    def _generate_mock_slots(self, servicio: dict, dias_adelante: int = 7) -> list:
-        """Generar slots de ejemplo cuando no hay acceso a Google Calendar"""
-        print("🔧 Generando slots de ejemplo para testing...")
-        
-        mock_slots = []
-        now = datetime.now(self.tz)
-        
-        for day_offset in range(1, min(dias_adelante + 1, 4)):  # Solo 3 días de ejemplo
-            check_date = now + timedelta(days=day_offset)
-            
-            # Solo días laborables
-            if check_date.weekday() >= 5:  # Sábado y domingo
-                continue
-                
-            # Horarios de ejemplo: 9:00, 11:00, 15:00, 17:00, 19:00
-            horas_ejemplo = [9, 11, 15, 17, 19]
-            
-            for hora in horas_ejemplo:
-                slot_time = check_date.replace(hour=hora, minute=0, second=0, microsecond=0)
-                slot_end = slot_time + timedelta(minutes=servicio['duracion'])
-                
-                mock_slots.append({
-                    'fecha': slot_time,
-                    'fin': slot_end
-                })
-        
-        return mock_slots
-    
-    async def _crear_reserva_inteligente(self, args: dict, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
-        """Crear una nueva reserva de forma inteligente"""
-        try:
-            servicio_id = args["servicio_id"]
-            fecha_hora = args["fecha_hora"]
-            nombre_cliente = args["nombre_cliente"]
-            cantidad = args.get("cantidad", 1)
-            empleado_id = args.get("empleado_id")
-            
-            # TODO: Implementar lógica de creación de reserva
-            return f"✅ ¡Reserva confirmada!\n\n👤 Cliente: {nombre_cliente}\n📅 Fecha: {fecha_hora}\n🎯 En proceso de confirmación..."
-            
-        except Exception as e:
-            print(f"❌ Error creando reserva: {e}")
-            return "❌ No pude crear la reserva. Intenta de nuevo."
-
-    async def _cancelar_reserva_inteligente(self, args: dict, telefono: str, tenant: Tenant, db: Session) -> str:
-        """Cancelar una reserva existente"""
-        try:
-            codigo_reserva = args["codigo_reserva"]
-            
-            # TODO: Implementar lógica de cancelación
-            return f"✅ Reserva {codigo_reserva} cancelada correctamente."
-            
-        except Exception as e:
-            print(f"❌ Error cancelando reserva: {e}")
-            return "❌ No pude cancelar la reserva. Verifica el código."
-    
-    def _format_servicios_with_real_ids(self, servicios: list) -> str:
-        """Formatear servicios con sus IDs reales para el prompt"""
-        servicios_txt = ""
-        for servicio in servicios:
-            servicios_txt += f"- {servicio['nombre']} (ID: {servicio['id']})\n"
-        return servicios_txt
-
-    def _get_business_context(self, tenant: Tenant, db: Session) -> dict:
-        """Obtener contexto completo del negocio"""
-        # 🔧 FORZAR REFRESH COMPLETO
-        db.expire_all()
-        db.commit()  # Asegurar que la sesión esté limpia
-        
-        # Obtener servicios FRESCOS de la base de datos
-        servicios = db.query(Servicio).filter(Servicio.tenant_id == tenant.id).all()
-        
-        print(f"🔧 DEBUG: Servicios encontrados: {[f'{s.id}-{s.nombre}' for s in servicios]}")
-        
-        servicios_data = []
-        for servicio in servicios:
-            servicio_data = {
-                'id': servicio.id,
-                'nombre': servicio.nombre,
-                'precio': servicio.precio,
-                'duracion': servicio.duracion,
-                'cantidad_maxima': servicio.cantidad,  # 🔧 USAR CAMPO CORRECTO
-                'solo_horas_exactas': getattr(servicio, 'solo_horas_exactas', False),
-                'turnos_consecutivos': getattr(servicio, 'turnos_consecutivos', False),
-                'es_informativo': getattr(servicio, 'es_informativo', False),
-                'mensaje_personalizado': getattr(servicio, 'mensaje_personalizado', ''),
-                'calendar_id': getattr(servicio, 'calendar_id', None),
-                'working_hours': getattr(servicio, 'working_hours', None)
-            }
-            servicios_data.append(servicio_data)
-            print(f"🔧 DEBUG: Servicio {servicio.id}: {servicio.nombre} - Cantidad: {servicio.cantidad} - Calendar: {servicio_data['calendar_id']}")
-    
-        # Obtener empleados
-        empleados = db.query(Empleado).filter(Empleado.tenant_id == tenant.id).all()
-        empleados_data = []
-        for empleado in empleados:
-            empleados_data.append({
-                'id': empleado.id,
-                'nombre': empleado.nombre,
-                'calendar_id': getattr(empleado, 'calendar_id', None),
-                'working_hours': getattr(empleado, 'working_hours', None)
-            })
-        
-        return {
-            'servicios': servicios_data,
-            'empleados': empleados_data,
-            'comercio': tenant.comercio,
-            'horarios_generales': tenant.working_hours_general,
-            'calendar_id_general': getattr(tenant, 'calendar_id_general', None),
-            'tiene_empleados': len(empleados_data) > 0
-        }
-
-    def _mostrar_servicios_empleado(self, empleado: dict, business_context: dict) -> str:
-        """Mostrar servicios disponibles para un empleado específico"""
-        servicios_empleado = business_context['servicios']  # Por ahora todos los servicios
-        
-        if not servicios_empleado:
-            return f"❌ {empleado['nombre']} no tiene servicios disponibles."
-        
-        respuesta = f"👤 *Servicios disponibles con {empleado['nombre']}:*\n\n"
-        
-        for i, servicio in enumerate(servicios_empleado, 1):
-            respuesta += f"✨ *{i}.* {servicio['nombre']} - 💰${servicio['precio']} (⏱️{servicio['duracion']} min)\n"
-        
-        respuesta += f"\n💬 Elige el número del servicio que quieres con {empleado['nombre']} 🎯"
-        
-        return respuesta
-
-    def _generar_respuesta_fallback(self, mensaje: str, user_history: dict, business_context: dict) -> str:
-        """Generar respuesta de emergencia sin IA"""
-        mensaje_lower = mensaje.lower()
-        
-        # Detectar intenciones básicas
-        if any(word in mensaje_lower for word in ['turno', 'cita', 'reserva', 'horario']):
-            return self._mostrar_menu_servicios(business_context)
-        
-        elif any(word in mensaje_lower for word in ['cancelar', 'anular']):
-            if user_history['reservas_activas']:
-                reservas_txt = "\n".join([f"🎫 {r['codigo']} - {r['servicio']} (📅{r['fecha']})" 
-                                    for r in user_history['reservas_activas']])
-                return f"📋 *Tus reservas activas:*\n{reservas_txt}\n\n💬 Dime el código para cancelar ❌"
+    def _round_to_next_valid_time(self, datetime_obj: datetime, servicio: dict) -> datetime:
+        """🔧 CORREGIDA: Redondear según configuración real de la BD"""
+        solo_horas_exactas = servicio.get('solo_horas_exactas', False)
+        intervalo_entre_turnos = servicio.get('intervalo_entre_turnos', 15)
+        current_minute = datetime_obj.minute
+        next_hour = datetime_obj.hour
+        if solo_horas_exactas:
+            # Solo horarios en punto (00) y media (30)
+            if current_minute < 30:
+                next_minute = 30
             else:
-                return "😔 No tienes reservas activas para cancelar.\n\n🎯 ¿Quieres hacer una nueva reserva?"
-        
-        elif any(word in mensaje_lower for word in ['precio', 'costo', 'cuanto']):
-            return self._mostrar_menu_servicios(business_context, mostrar_precios=True)
-        
+                next_minute = 0
+                next_hour += 1
         else:
-            return f"👋 ¡Hola! Te ayudo con lo que necesites.\n\n{self._mostrar_menu_servicios(business_context)}"
-
-    def _mostrar_menu_servicios(self, business_context: dict, mostrar_precios: bool = False) -> str:
-        """Mostrar menú de servicios"""
-        respuesta = "🏆 *¡Servicios disponibles!*\n\n"
-        
-        for i, servicio in enumerate(business_context['servicios'], 1):
-            # Icono según tipo de servicio
-            icono = "ℹ️" if servicio.get('es_informativo', False) else "🎾" if "padel" in servicio['nombre'].lower() else "✨"
-            
-            precio_txt = f" - 💰${servicio['precio']}" if mostrar_precios and not servicio.get('es_informativo', False) else ""
-            duracion_txt = f" (⏱️{servicio['duracion']} min)" if mostrar_precios and not servicio.get('es_informativo', False) else ""
-            tipo_txt = " (Informativo)" if servicio.get('es_informativo', False) else ""
-            
-            respuesta += f"{icono} *{i}.* {servicio['nombre']}{precio_txt}{duracion_txt}{tipo_txt}\n"
-        
-        respuesta += "\n🎯 Puedes escribir el *número* o el *nombre del servicio*"
-        if business_context['empleados']:
-            respuesta += "\n👥 También puedes escribir el nombre de un profesional específico"
-        respuesta += "\n\n🚀 ¿Qué te interesa?"
-        
-        return respuesta
-    
-    async def _execute_ai_function(self, function_call: dict, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
-        """Ejecutar función solicitada por la IA"""
-        function_name = function_call["name"]
-        args = function_call["args"]
-        
-        try:
-            if function_name == "buscar_horarios_servicio":
-                # 🔧 YA NO BUSCAR HORARIOS DIRECTAMENTE, PREGUNTAR DÍA
-                servicio_id = args["servicio_id"]
-                servicio = next((s for s in business_context['servicios'] if s['id'] == servicio_id), None)
-                if servicio:
-                    return self._preguntar_dia_disponible(servicio, telefono)
-                else:
-                    return "❌ No encontré ese servicio."
-            
-            elif function_name == "crear_reserva":
-                return await self._crear_reserva_inteligente(
-                    args, telefono, business_context, tenant, db
-                )
-            
-            elif function_name == "cancelar_reserva":
-                return await self._cancelar_reserva_inteligente(
-                    args, telefono, tenant, db
-                )
-            
-            else:
-                return f"❌ Función {function_name} no implementada."
-                
-        except Exception as e:
-            print(f"❌ Error ejecutando función {function_name}: {e}")
-            return "❌ Error ejecutando la función solicitada."
-
-    def _get_working_hours_for_day(self, date, servicio: dict) -> dict:
-        """Obtener horarios de trabajo para un día específico"""
-        day_name = date.strftime('%A').lower()
-        
-        print(f"🔧 DEBUG: Obteniendo horarios para {day_name} - Servicio: {servicio['nombre']}")
-        
-        # Usar horarios del servicio si están configurados
-        working_hours_config = servicio.get('working_hours')
-        
-        if working_hours_config and isinstance(working_hours_config, dict):
-            try:
-                if day_name in working_hours_config:
-                    hours_str = working_hours_config[day_name]
-                    if hours_str and hours_str != "closed":
-                        start_str, end_str = hours_str.split('-')
-                        result = {
-                            'start': datetime.strptime(start_str.strip(), '%H:%M').time(),
-                            'end': datetime.strptime(end_str.strip(), '%H:%M').time()
-                        }
-                        print(f"🔧 DEBUG: Horarios del servicio: {result}")
-                        return result
-            except Exception as e:
-                print(f"⚠️ Error parseando horarios del servicio: {e}")
-        
-        # Fallback: horarios por defecto MEJORADOS
-        if day_name in ['saturday', 'sunday']:
-            result = {
-                'start': datetime.strptime('10:00', '%H:%M').time(),
-                'end': datetime.strptime('20:00', '%H:%M').time()
-            }
-        else:
-            result = {
-                'start': datetime.strptime('09:00', '%H:%M').time(),
-                'end': datetime.strptime('21:00', '%H:%M').time()
-            }
-        
-        print(f"🔧 DEBUG: Horarios por defecto para {day_name}: {result}")
-        return result
-
-    def _is_working_day(self, date, servicio: dict) -> bool:
-        """Verificar si es día laborable"""
-        day_name = date.strftime('%A').lower()
-        
-        # Verificar configuración del servicio
-        working_hours_config = servicio.get('working_hours')
-        
-        if working_hours_config and isinstance(working_hours_config, dict):
-            is_working = day_name in working_hours_config and working_hours_config[day_name] != "closed"
-        else:
-            # Fallback: trabajar todos los días
-            is_working = True
-        
-        print(f"🔧 DEBUG: Día {day_name} es laborable: {is_working}")
-        return is_working
-
-    def _preguntar_dia_disponible(self, servicio: dict, telefono: str) -> str:
-        """Preguntar al usuario qué día prefiere para el servicio"""
-        servicio_nombre = servicio['nombre']
-        
-        return f"📅 Para el servicio *{servicio_nombre}*, ¿qué día prefieres?\n\n🗓️ Responde con una fecha o elige entre las opciones:\n- Hoy\n- Mañana\n- (Nombre del día)"
-
-# FUERA DE LA CLASE - FUNCIÓN GLOBAL
-def _traducir_dia(dia_ingles: str) -> str:
-    """Traducir días de la semana"""
-    dias = {
-        'Monday': 'Lunes',
-        'Tuesday': 'Martes', 
-        'Wednesday': 'Miércoles',
-        'Thursday': 'Jueves',
-        'Friday': 'Viernes',
-        'Saturday': 'Sábado',
-        'Sunday': 'Domingo'
-    }
-    return dias.get(dia_ingles, dia_ingles)
+            next_minute = ((current_minute // intervalo_entre_turnos) + 1) * intervalo_entre_turnos
+            if next_minute >= 60:
+                next_minute = 0
+                next_hour += 1
+        rounded_time = datetime_obj.replace(
+            hour=next_hour,
+            minute=next_minute,
+            second=0,
+            microsecond=0
+        )
+        print(f"🔧 DEBUG: Redondeando {datetime_obj.strftime('%H:%M')} → {rounded_time.strftime('%H:%M')}")
+        print(f"🔧 DEBUG: Config: Solo horas exactas={solo_horas_exactas}, Intervalo={intervalo_entre_turnos} min")
+        return rounded_time
