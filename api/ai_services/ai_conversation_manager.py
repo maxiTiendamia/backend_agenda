@@ -633,11 +633,14 @@ class AIConversationManager:
     
     def mostrar_servicios(self, business_context: dict) -> str:
         """Devuelve la lista de servicios disponibles para mostrar al cliente (siempre actualizada)."""
-        # Obtener contexto actualizado del negocio
         servicios = business_context["servicios"]
         if not servicios:
             return "No hay servicios disponibles en este momento."
-        return f"✨ Servicios disponibles:\n{self._format_servicios_with_real_ids(servicios)}\n\n💬 Escribe el número o nombre del servicio que te interesa."
+        # Mostrar servicios numerados y por nombre, sin duplicados ni nombres erróneos
+        lines = []
+        for idx, s in enumerate(servicios, 1):
+            lines.append(f"{idx}. {s['nombre']}")
+        return f"✨ Servicios disponibles:\n" + "\n".join(lines) + "\n\n💬 Escribe el número o nombre del servicio que te interesa."
 
     def _get_business_context(self, tenant, db):
         """Obtener contexto del negocio: servicios y empleados desde models.py"""
