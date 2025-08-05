@@ -409,12 +409,13 @@ class AIConversationManager:
                 from api.utils import calendar_utils
                 # Obtener contexto actualizado del negocio (servicios y empleados)
                 business_context = self._get_business_context(tenant, db)
-                servicio_guardado = next((s for s in business_context["servicios"] if s["id"] == servicio_guardado["id"]), None)
-                if not servicio_guardado:
+                servicio_guardado_dict = next((s for s in business_context["servicios"] if s["id"] == servicio_guardado["id"]), None)
+                if not servicio_guardado_dict:
                     return "❌ Servicio no disponible. Intenta de nuevo."
+                # calendar_utils debe aceptar dicts, no modelos
                 slots = calendar_utils.get_available_slots_for_service(
-                    servicio_guardado,
-                    intervalo_entre_turnos=servicio_guardado.get("intervalo_entre_turnos", 15),
+                    servicio_guardado_dict,
+                    intervalo_entre_turnos=servicio_guardado_dict.get("intervalo_entre_turnos", 15),
                     max_days=7,
                     max_turnos=10,
                     credentials_json=self.google_credentials
@@ -434,9 +435,9 @@ class AIConversationManager:
                     dia_objetivo = (now + timedelta(days=dias_hasta)).date()
                 slots_dia = [s for s in slots if s['fecha'].date() == dia_objetivo]
                 if not slots_dia:
-                    return f"😔 No hay horarios disponibles para *{servicio_guardado['nombre']}* el {dia_detectado}.\n¿Quieres elegir otro día?"
+                    return f"😔 No hay horarios disponibles para *{servicio_guardado_dict['nombre']}* el {dia_detectado}.\n¿Quieres elegir otro día?"
                 # Guardar slots en Redis
-                slots_key = f"slots:{telefono}:{servicio_guardado['id']}"
+                slots_key = f"slots:{telefono}:{servicio_guardado_dict['id']}"
                 slots_data = [
                     {
                         "numero": i,
@@ -447,7 +448,7 @@ class AIConversationManager:
                     for i, slot in enumerate(slots_dia[:8], 1)
                 ]
                 self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
-                return (f"🎾 *Horarios para {servicio_guardado['nombre']}* el {dia_detectado}:\n"
+                return (f"🎾 *Horarios para {servicio_guardado_dict['nombre']}* el {dia_detectado}:\n"
                         + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
                         + "\n\n💬 Escribe el número o la hora que prefieres.")
         
