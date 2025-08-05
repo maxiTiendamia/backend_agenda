@@ -1,3 +1,4 @@
+    
 import openai
 import json
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,28 @@ class AIConversationManager:
         self.tz = pytz.timezone("America/Montevideo")
         self.webconnect_url = os.getenv("webconnect_url", "http://195.26.250.62:3000")  
         self.google_credentials = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+    def _traducir_dia(self, dia_en):
+        """Traduce el nombre de un día de la semana de inglés a español."""
+        dias = {
+            'monday': 'lunes',
+            'tuesday': 'martes',
+            'wednesday': 'miércoles',
+            'thursday': 'jueves',
+            'friday': 'viernes',
+            'saturday': 'sábado',
+            'sunday': 'domingo',
+            'lunes': 'lunes',
+            'martes': 'martes',
+            'miércoles': 'miércoles',
+            'miercoles': 'miércoles',
+            'jueves': 'jueves',
+            'viernes': 'viernes',
+            'sábado': 'sábado',
+            'sabado': 'sábado',
+            'domingo': 'domingo'
+        }
+        return dias.get(dia_en.lower(), dia_en)
     
     def _normalize_datetime(self, dt):
         """🔧 NORMALIZAR datetime para que siempre tenga timezone"""
@@ -32,6 +55,15 @@ class AIConversationManager:
             dt = dt.replace(tzinfo=timezone.utc)
         
         return dt.astimezone(self.tz)
+    
+    def _preguntar_dia_disponible(self, servicio_seleccionado, telefono):
+        """Pregunta al usuario por el día que desea para el servicio seleccionado."""
+        tipo_servicio = "🎾" if "padel" in servicio_seleccionado['nombre'].lower() else "✨"
+        respuesta = f"{tipo_servicio} *{servicio_seleccionado['nombre']}*\n"
+        respuesta += "\n📅 ¿Para qué día te gustaría reservar?\n"
+        respuesta += "Puedes responder con 'hoy', 'mañana', o el nombre de un día (ejemplo: 'viernes').\n"
+        respuesta += "\n💬 Escribe el día que prefieres."
+        return respuesta
     
     def _get_conversation_history(self, telefono: str) -> list:
         """Obtener historial de conversación desde Redis"""
