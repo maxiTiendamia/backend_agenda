@@ -654,12 +654,12 @@ class AIConversationManager:
                 'precio': servicio.precio,
                 'duracion': servicio.duracion,
                 'cantidad_maxima': servicio.cantidad,
-                'solo_horas_exactas': servicio.solo_horas_exactas,
-                'turnos_consecutivos': servicio.turnos_consecutivos,
-                'es_informativo': servicio.es_informativo,
-                'mensaje_personalizado': servicio.mensaje_personalizado,
-                'calendar_id': servicio.calendar_id,
-                'working_hours': servicio.working_hours
+                'solo_horas_exactas': getattr(servicio, 'solo_horas_exactas', False),
+                'turnos_consecutivos': getattr(servicio, 'turnos_consecutivos', False),
+                'es_informativo': getattr(servicio, 'es_informativo', False),
+                'mensaje_personalizado': getattr(servicio, 'mensaje_personalizado', ''),
+                'calendar_id': getattr(servicio, 'calendar_id', None),
+                'working_hours': getattr(servicio, 'working_hours', None)
             })
         
         # Obtener empleados
@@ -669,8 +669,8 @@ class AIConversationManager:
             empleados_data.append({
                 'id': empleado.id,
                 'nombre': empleado.nombre,
-                'calendar_id': empleado.calendar_id,
-                'working_hours': empleado.working_hours
+                'calendar_id': getattr(empleado, 'calendar_id', None),
+                'working_hours': getattr(empleado, 'working_hours', None)
             })
         
         return {
@@ -735,18 +735,38 @@ class AIConversationManager:
         
         return respuesta
     
-def _traducir_dia(dia_ingles: str) -> str:
-    """Traducir días de la semana"""
-    dias = {
-        'Monday': 'Lunes',
-        'Tuesday': 'Martes', 
-        'Wednesday': 'Miércoles',
-        'Thursday': 'Jueves',
-        'Friday': 'Viernes',
-        'Saturday': 'Sábado',
-        'Sunday': 'Domingo'
-    }
-    return dias.get(dia_ingles, dia_ingles)
+    async def _execute_ai_function(self, function_call: dict, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
+        """Ejecutar función solicitada por la IA"""
+        function_name = function_call["name"]
+        args = function_call["args"]
+        
+        try:
+            if function_name == "buscar_horarios_servicio":
+                return await self._buscar_horarios_servicio_real(
+                    args["servicio_id"], business_context, telefono, tenant, db
+                )
+            
+            elif function_name == "buscar_horarios_fecha_especifica":
+                return await self._buscar_horarios_fecha_especifica(
+                    args, telefono, business_context, tenant, db
+                )
+            
+            elif function_name == "crear_reserva":
+                return await self._crear_reserva_inteligente(
+                    args, telefono, business_context, tenant, db
+                )
+            
+            elif function_name == "cancelar_reserva":
+                return await self._cancelar_reserva_inteligente(
+                    args, telefono, tenant, db
+                )
+            
+            else:
+                return f"❌ Función {function_name} no implementada."
+                
+        except Exception as e:
+            print(f"❌ Error ejecutando función {function_name}: {e}")
+            return "❌ Error ejecutando la función solicitada."
 
     def _get_working_hours_for_day(self, date, servicio: dict) -> dict:
         """Obtener horarios de trabajo para un día específico"""
@@ -805,3 +825,17 @@ def _traducir_dia(dia_ingles: str) -> str:
         except Exception as e:
             print(f"❌ Error buscando horarios por fecha: {e}")
             return "❌ Error buscando horarios para esa fecha."
+
+# FUERA DE LA CLASE - FUNCIÓN GLOBAL
+def _traducir_dia(dia_ingles: str) -> str:
+    """Traducir días de la semana"""
+    dias = {
+        'Monday': 'Lunes',
+        'Tuesday': 'Martes', 
+        'Wednesday': 'Miércoles',
+        'Thursday': 'Jueves',
+        'Friday': 'Viernes',
+        'Saturday': 'Sábado',
+        'Sunday': 'Domingo'
+    }
+    return dias.get(dia_ingles, dia_ingles)
