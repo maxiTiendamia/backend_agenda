@@ -142,9 +142,6 @@ class AIConversationManager:
     async def process_message(self, telefono: str, mensaje: str, cliente_id: int, db: Session):
         """Procesar mensaje con IA más natural y contextual"""
         try:
-            # 🔧 LIMPIAR CACHE SI ES NECESARIO (opcional, solo para debug)
-            # self._clear_business_cache(cliente_id)
-            
             # Verificar si está bloqueado
             if self._is_blocked_number(telefono, cliente_id, db):
                 return "❌ Este número está bloqueado."
@@ -181,8 +178,135 @@ class AIConversationManager:
             print(f"❌ Error en AI manager: {e}")
             return "Disculpa, tuve un problema procesando tu mensaje. ¿Podrías intentar de nuevo?"
     
+    def _detectar_dia_mensaje(self, mensaje: str) -> str:
+        """🔧 CORREGIDO: Detectar qué día quiere el usuario"""
+        mensaje = mensaje.lower()
+        
+        if any(word in mensaje for word in ['hoy', 'today']):
+            return 'hoy'
+        elif any(word in mensaje for word in ['mañana', 'tomorrow']):
+            return 'mañana'
+        elif any(word in mensaje for word in ['lunes', 'monday']):
+            return 'lunes'
+        elif any(word in mensaje for word in ['martes', 'tuesday']):
+            return 'martes'
+        elif any(word in mensaje for word in ['miércoles', 'miercoles', 'wednesday']):
+            return 'miercoles'
+        elif any(word in mensaje for word in ['jueves', 'thursday']):
+            return 'jueves'
+        elif any(word in mensaje for word in ['viernes', 'friday']):
+            return 'viernes'
+        elif any(word in mensaje for word in ['sábado', 'sabado', 'saturday']):
+            return 'sabado'
+        elif any(word in mensaje for word in ['domingo', 'sunday']):
+            return 'domingo'
+        
+        return None
+
+    async def _buscar_horarios_dia_especifico(self, servicio: dict, dia: str, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
+        """🔧 CORREGIDO: Buscar horarios para un día específico"""
+        try:
+            # Limpiar selección de servicio
+            servicio_key = f"servicio_seleccionado:{telefono}"
+            self.redis_client.delete(servicio_key)
+            
+            # Calcular fecha objetivo
+            now = datetime.now(self.tz)
+            
+            if dia == 'hoy':
+                fecha_objetivo = now
+            elif dia == 'mañana':
+                fecha_objetivo = now + timedelta(days=1)
+            else:
+                # Encontrar el próximo día de la semana
+                dias_semana = {
+                    'lunes': 0, 'martes': 1, 'miercoles': 2, 'jueves': 3, 
+                    'viernes': 4, 'sabado': 5, 'domingo': 6
+                }
+                
+                if dia in dias_semana:
+                    dias_hasta = (dias_semana[dia] - now.weekday()) % 7
+                    if dias_hasta == 0:  # Es hoy
+                        dias_hasta = 7  # Próxima semana
+                    fecha_objetivo = now + timedelta(days=dias_hasta)
+                else:
+                    return "❌ No entendí qué día querés. Intentá de nuevo."
+            
+            print(f"🔧 DEBUG: Buscando horarios para {servicio['nombre']} el {fecha_objetivo.strftime('%d/%m/%Y')}")
+            
+            # Obtener horarios disponibles para ese día específico
+            calendar_id = servicio.get('calendar_id') or business_context.get('calendar_id_general', 'primary')
+            
+            # 🔧 USAR MÉTODO CORREGIDO
+            horarios_disponibles = await self._get_available_slots_for_specific_day(
+                calendar_id=calendar_id,
+                servicio=servicio,
+                fecha_objetivo=fecha_objetivo
+            )
+            
+            if not horarios_disponibles:
+                dia_nombre = fecha_objetivo.strftime('%A')
+                dia_traducido = _traducir_dia(dia_nombre)
+                return f"😔 No hay horarios disponibles para *{servicio['nombre']}* el {dia_traducido} {fecha_objetivo.strftime('%d/%m')}.\n\n📅 ¿Te gustaría elegir otro día? 🔄"
+            
+            # Formatear respuesta
+            tipo_servicio = "🎾" if "padel" in servicio['nombre'].lower() else "✨"
+            dia_nombre = _traducir_dia(fecha_objetivo.strftime('%A'))
+            
+            respuesta = f"{tipo_servicio} *Horarios para {servicio['nombre']}*\n"
+            respuesta += f"📅 {dia_nombre} {fecha_objetivo.strftime('%d/%m/%Y')}\n\n"
+            
+            # Mostrar horarios
+            for i, slot in enumerate(horarios_disponibles[:8], 1):  # Hasta 8 horarios
+                hora_str = slot['fecha'].strftime('%H:%M')
+                respuesta += f"🎯 *{i}.* {hora_str}\n"
+            
+            respuesta += "\n💬 Dime qué horario te conviene (ejemplo: '1' o '19:00') 🕐"
+            respuesta += "\n📝 Para confirmar necesitaré tu nombre completo 👤"
+            
+            # Guardar slots en Redis
+            slots_key = f"slots:{telefono}:{servicio['id']}"
+            slots_data = [
+                {
+                    "numero": i,
+                    "fecha_hora": slot['fecha'].isoformat(),
+                    "empleado_id": None,
+                    "empleado_nombre": "Sistema"
+                }
+                for i, slot in enumerate(horarios_disponibles[:8], 1)
+            ]
+            self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
+            
+            return respuesta
+            
+        except Exception as e:
+            print(f"❌ Error buscando horarios específicos: {e}")
+            return "😵 No pude consultar los horarios. Intenta de nuevo 🔄"
+
+    async def _get_available_slots_for_specific_day(self, calendar_id: str, servicio: dict, fecha_objetivo: datetime) -> list:
+        """🔧 NUEVA FUNCIÓN: Obtener slots para un día específico"""
+        try:
+            # Usar el método existente pero filtrar solo para ese día
+            slots_todos = await self._get_available_slots_from_calendar(
+                calendar_id=calendar_id,
+                servicio=servicio,
+                dias_adelante=1 if fecha_objetivo.date() == datetime.now(self.tz).date() else 2
+            )
+            
+            # Filtrar solo slots del día objetivo
+            slots_dia = []
+            for slot in slots_todos:
+                if slot['fecha'].date() == fecha_objetivo.date():
+                    slots_dia.append(slot)
+            
+            return slots_dia
+            
+        except Exception as e:
+            print(f"❌ Error obteniendo slots específicos: {e}")
+            return []
+    
     async def _ai_process_conversation_natural(self, mensaje: str, telefono: str, conversation_history: list, user_history: dict, business_context: dict, tenant: Tenant, db: Session) -> str:
-        """Procesamiento de IA más natural y contextual"""
+        """🔧 CORREGIDO: Procesamiento de IA más natural y contextual"""
         
         # 🔧 DETECTAR SELECCIÓN DE SERVICIO (NÚMERO O NOMBRE)
         mensaje_stripped = mensaje.strip().lower()
@@ -199,7 +323,7 @@ class AIConversationManager:
                     print(f"🔧 DEBUG: Servicio seleccionado por número {posicion}: {servicio_seleccionado['nombre']} (ID: {servicio_seleccionado['id']})")
             except:
                 pass
-    
+
         # Si no es número, buscar por nombre de servicio
         if not servicio_seleccionado:
             for servicio in business_context['servicios']:
@@ -211,20 +335,10 @@ class AIConversationManager:
                     servicio_seleccionado = servicio
                     print(f"🔧 DEBUG: Servicio seleccionado por nombre: {servicio_seleccionado['nombre']} (ID: {servicio_seleccionado['id']})")
                     break
-    
-        # Si no es servicio, buscar por nombre de empleado
-        if not servicio_seleccionado:
-            for empleado in business_context['empleados']:
-                nombre_empleado = empleado['nombre'].lower()
-                if (mensaje_stripped == nombre_empleado or 
-                    mensaje_stripped in nombre_empleado or 
-                    nombre_empleado in mensaje_stripped):
-                    # Si selecciona empleado, mostrar sus servicios disponibles
-                    return self._mostrar_servicios_empleado(empleado, business_context)
-        
+
         # Si encontró un servicio
         if servicio_seleccionado:
-            # 🔧 VERIFICAR CORRECTAMENTE SI ES INFORMATIVO
+            # 🔧 VERIFICAR SI ES INFORMATIVO
             es_informativo = servicio_seleccionado.get('es_informativo', False)
             print(f"🔧 DEBUG: Servicio {servicio_seleccionado['nombre']} - Es informativo: {es_informativo}")
             
@@ -235,17 +349,28 @@ class AIConversationManager:
                 else:
                     return f"ℹ️ *{servicio_seleccionado['nombre']}*\n\nEste es un servicio informativo.\n\n💬 ¿En qué más puedo ayudarte? 🤔"
             
-            # Si NO es informativo, buscar horarios
-            print(f"🔧 DEBUG: Buscando horarios para servicio ID {servicio_seleccionado['id']}")
-            return await self._buscar_horarios_servicio_real(
-                servicio_seleccionado['id'],
-                business_context, 
-                telefono, 
-                tenant,
-                db
-            )
+            # 🔧 GUARDAR SERVICIO SELECCIONADO Y PREGUNTAR DÍA
+            servicio_key = f"servicio_seleccionado:{telefono}"
+            self.redis_client.set(servicio_key, json.dumps(servicio_seleccionado), ex=1800)  # 30 min
+            
+            return self._preguntar_dia_disponible(servicio_seleccionado, telefono)
         
-        # Si no encontró coincidencias, continuar con procesamiento normal de IA
+        # 🔧 VERIFICAR SI TIENE UN SERVICIO YA SELECCIONADO
+        servicio_key = f"servicio_seleccionado:{telefono}"
+        servicio_guardado_str = self.redis_client.get(servicio_key)
+
+        if servicio_guardado_str and not servicio_seleccionado:
+            # El usuario ya seleccionó un servicio, ahora está eligiendo día
+            servicio_guardado = json.loads(servicio_guardado_str)
+            dia_detectado = self._detectar_dia_mensaje(mensaje_stripped)
+            
+            if dia_detectado:
+                print(f"🔧 DEBUG: Día detectado: {dia_detectado}")
+                return await self._buscar_horarios_dia_especifico(
+                    servicio_guardado, dia_detectado, telefono, business_context, tenant, db
+                )
+        
+        # 🔧 RESTO DEL PROCESAMIENTO CON IA...
         # Construir contexto para la IA
         system_prompt = f"""🤖 Eres la IA asistente de {tenant.comercio}. 
 
@@ -269,11 +394,9 @@ class AIConversationManager:
 {self._format_servicios_with_real_ids(business_context['servicios'])}
 6. 🧠 Recuerda conversaciones anteriores
 7. ❓ Puedes responder preguntas generales sobre el negocio
-8. 📅 Para fechas específicas, usa la función buscar_horarios_fecha_especifica
 
 🛠️ FUNCIONES DISPONIBLES:
 - 🔍 buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio)
-- 📅 buscar_horarios_fecha_especifica: Para horarios en fecha/hora específica  
 - ✅ crear_reserva: Para confirmar una reserva
 - ❌ cancelar_reserva: Para cancelar reservas existentes
 
@@ -311,20 +434,6 @@ class AIConversationManager:
                 }
             },
             {
-                "name": "buscar_horarios_fecha_especifica", 
-                "description": "Buscar horarios en una fecha/hora específica",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "servicio_id": {"type": "integer", "description": "ID del servicio"},
-                        "fecha_especifica": {"type": "string", "description": "Fecha en formato DD/MM o DD/MM/YYYY"},
-                        "hora_especifica": {"type": "string", "description": "Hora específica si se menciona (HH:MM)"},
-                        "cantidad": {"type": "integer", "default": 1}
-                    },
-                    "required": ["servicio_id", "fecha_especifica"]
-                }
-            },
-            {
                 "name": "crear_reserva",
                 "description": "Crear una nueva reserva",
                 "parameters": {
@@ -354,12 +463,12 @@ class AIConversationManager:
         
         try:
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",  # 🔧 CAMBIO: GPT-3.5-Turbo es más económico
+                model="gpt-3.5-turbo",
                 messages=messages,
                 functions=functions,
                 function_call="auto",
-                temperature=0.3,  # 🔧 REDUCIDO: Más consistente y enfocado
-                max_tokens=800   # 🔧 REDUCIDO: Suficiente para respuestas de chatbot
+                temperature=0.3,
+                max_tokens=800
             )
             
             message = response.choices[0].message
@@ -658,13 +767,14 @@ class AIConversationManager:
 
     def _get_business_context(self, tenant: Tenant, db: Session) -> dict:
         """Obtener contexto completo del negocio"""
-        # 🔧 FORZAR REFRESH DE LA SESIÓN
+        # 🔧 FORZAR REFRESH COMPLETO
         db.expire_all()
+        db.commit()  # Asegurar que la sesión esté limpia
         
         # Obtener servicios FRESCOS de la base de datos
         servicios = db.query(Servicio).filter(Servicio.tenant_id == tenant.id).all()
         
-        print(f"🔧 DEBUG: Servicios encontrados: {[s.nombre for s in servicios]}")  # Debug
+        print(f"🔧 DEBUG: Servicios encontrados: {[f'{s.id}-{s.nombre}' for s in servicios]}")
         
         servicios_data = []
         for servicio in servicios:
@@ -673,7 +783,7 @@ class AIConversationManager:
                 'nombre': servicio.nombre,
                 'precio': servicio.precio,
                 'duracion': servicio.duracion,
-                'cantidad_maxima': servicio.cantidad,
+                'cantidad_maxima': servicio.cantidad,  # 🔧 USAR CAMPO CORRECTO
                 'solo_horas_exactas': getattr(servicio, 'solo_horas_exactas', False),
                 'turnos_consecutivos': getattr(servicio, 'turnos_consecutivos', False),
                 'es_informativo': getattr(servicio, 'es_informativo', False),
@@ -682,8 +792,8 @@ class AIConversationManager:
                 'working_hours': getattr(servicio, 'working_hours', None)
             }
             servicios_data.append(servicio_data)
-            print(f"🔧 DEBUG: Servicio {servicio.id}: {servicio.nombre} - Informativo: {servicio_data['es_informativo']}")
-        
+            print(f"🔧 DEBUG: Servicio {servicio.id}: {servicio.nombre} - Cantidad: {servicio.cantidad} - Calendar: {servicio_data['calendar_id']}")
+    
         # Obtener empleados
         empleados = db.query(Empleado).filter(Empleado.tenant_id == tenant.id).all()
         empleados_data = []
@@ -770,14 +880,13 @@ class AIConversationManager:
         
         try:
             if function_name == "buscar_horarios_servicio":
-                return await self._buscar_horarios_servicio_real(
-                    args["servicio_id"], business_context, telefono, tenant, db
-                )
-            
-            elif function_name == "buscar_horarios_fecha_especifica":
-                return await self._buscar_horarios_fecha_especifica(
-                    args, telefono, business_context, tenant, db
-                )
+                # 🔧 YA NO BUSCAR HORARIOS DIRECTAMENTE, PREGUNTAR DÍA
+                servicio_id = args["servicio_id"]
+                servicio = next((s for s in business_context['servicios'] if s['id'] == servicio_id), None)
+                if servicio:
+                    return self._preguntar_dia_disponible(servicio, telefono)
+                else:
+                    return "❌ No encontré ese servicio."
             
             elif function_name == "crear_reserva":
                 return await self._crear_reserva_inteligente(
@@ -822,13 +931,11 @@ class AIConversationManager:
         
         # Fallback: horarios por defecto MEJORADOS
         if day_name in ['saturday', 'sunday']:
-            # Fines de semana
             result = {
                 'start': datetime.strptime('10:00', '%H:%M').time(),
                 'end': datetime.strptime('20:00', '%H:%M').time()
             }
         else:
-            # Días de semana
             result = {
                 'start': datetime.strptime('09:00', '%H:%M').time(),
                 'end': datetime.strptime('21:00', '%H:%M').time()
@@ -853,30 +960,11 @@ class AIConversationManager:
         print(f"🔧 DEBUG: Día {day_name} es laborable: {is_working}")
         return is_working
 
-    async def _buscar_horarios_fecha_especifica(self, args: dict, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
-        """Buscar horarios en fecha específica"""
-        try:
-            servicio_id = args["servicio_id"]
-            fecha_especifica = args["fecha_especifica"]
-            
-            # TODO: Implementar búsqueda por fecha específica
-            return f"🔍 Buscando horarios para el servicio {servicio_id} en fecha {fecha_especifica}...\n\n⚠️ Función en desarrollo."
-            
-        except Exception as e:
-            print(f"❌ Error buscando horarios por fecha: {e}")
-            return "❌ Error buscando horarios para esa fecha."
-
-    def _clear_business_cache(self, tenant_id: int):
-        """Limpiar cache del negocio"""
-        try:
-            # Limpiar cualquier cache relacionado con este tenant
-            cache_pattern = f"business_context:{tenant_id}*"
-            keys = self.redis_client.keys(cache_pattern)
-            if keys:
-                self.redis_client.delete(*keys)
-                print(f"🔧 Cache limpiado para tenant {tenant_id}")
-        except Exception as e:
-            print(f"⚠️ Error limpiando cache: {e}")
+    def _preguntar_dia_disponible(self, servicio: dict, telefono: str) -> str:
+        """Preguntar al usuario qué día prefiere para el servicio"""
+        servicio_nombre = servicio['nombre']
+        
+        return f"📅 Para el servicio *{servicio_nombre}*, ¿qué día prefieres?\n\n🗓️ Responde con una fecha o elige entre las opciones:\n- Hoy\n- Mañana\n- (Nombre del día)"
 
 # FUERA DE LA CLASE - FUNCIÓN GLOBAL
 def _traducir_dia(dia_ingles: str) -> str:
