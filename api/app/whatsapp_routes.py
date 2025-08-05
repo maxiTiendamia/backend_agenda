@@ -13,7 +13,7 @@ sys.path.insert(0, parent_dir)
 
 from app.deps import get_db
 from app.models import ErrorLog
-from ai_services.ai_conversation_manager import AIConversationManager
+from api.ai_services.ai_conversation_manager import AIConversationManager
 
 # Configuración
 REDIS_URL = os.getenv("REDIS_URL", "rediss://default:AcOQAAIjcDEzOGI2OWU1MzYxZDQ0YWQ2YWU3ODJlNWNmMGY5MjIzY3AxMA@literate-toucan-50064.upstash.io:6379")
