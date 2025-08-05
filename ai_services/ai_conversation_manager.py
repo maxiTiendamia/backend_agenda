@@ -56,6 +56,33 @@ class AIConversationManager:
         except Exception as e:
             print(f"Error guardando conversación: {e}")
     
+    def _is_blocked_number(self, telefono: str, cliente_id: int, db: Session) -> bool:
+        """Verificar si el número está bloqueado"""
+        try:
+            blocked = db.query(BlockedNumber).filter(
+                BlockedNumber.telefono == telefono,
+                BlockedNumber.cliente_id == cliente_id
+            ).first()
+            return blocked is not None
+        except:
+            return False
+    
+    def _is_human_mode(self, telefono: str) -> bool:
+        """Verificar si está en modo humano"""
+        try:
+            human_mode_key = f"human_mode:{telefono}"
+            return self.redis_client.get(human_mode_key) == "true"
+        except:
+            return False
+    
+    async def _notify_human_support(self, cliente_id: int, telefono: str, mensaje: str):
+        """Notificar a soporte humano"""
+        try:
+            # Aquí podrías implementar notificación por email, Slack, etc.
+            print(f"🚨 MODO HUMANO - Cliente {cliente_id} ({telefono}): {mensaje}")
+        except Exception as e:
+            print(f"Error notificando soporte humano: {e}")
+    
     def _get_user_history(self, telefono: str, db: Session) -> dict:
         """Obtener historial completo del usuario"""
         reservas_activas = db.query(Reserva).filter(
@@ -184,7 +211,6 @@ FUNCIONES DISPONIBLES:
 - buscar_horarios_servicio: Para mostrar horarios disponibles
 - crear_reserva: Para confirmar una reserva
 - cancelar_reserva: Para cancelar reservas existentes
-- mostrar_info_servicio: Para servicios informativos
 """
 
         # Construir historial de conversación
@@ -277,6 +303,162 @@ FUNCIONES DISPONIBLES:
             print(f"❌ Error en OpenAI: {e}")
             return self._generar_respuesta_fallback(mensaje, user_history, business_context)
     
+    async def _execute_ai_function(self, function_call: dict, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
+        """Ejecutar función llamada por la IA"""
+        function_name = function_call["name"]
+        args = function_call["args"]
+        
+        try:
+            if function_name == "buscar_horarios_servicio":
+                return await self._buscar_horarios_servicio(args, business_context, telefono, db)
+            elif function_name == "crear_reserva":
+                return await self._crear_reserva_inteligente(args, telefono, business_context, tenant, db)
+            elif function_name == "cancelar_reserva":
+                return await self._cancelar_reserva_inteligente(args, telefono, tenant, db)
+            else:
+                return "❌ Función no reconocida."
+        except Exception as e:
+            print(f"❌ Error ejecutando función {function_name}: {e}")
+            return "❌ Tuve un problema procesando tu solicitud."
+    
+    async def _buscar_horarios_servicio(self, args: dict, business_context: dict, telefono: str, db: Session) -> str:
+        """Buscar horarios disponibles para un servicio"""
+        try:
+            servicio_id = args["servicio_id"]
+            preferencia_horario = args.get("preferencia_horario", "cualquiera")
+            preferencia_fecha = args.get("preferencia_fecha", "cualquiera")
+            cantidad = args.get("cantidad", 1)
+            
+            # Buscar el servicio
+            servicio_info = next((s for s in business_context['servicios'] if s['id'] == servicio_id), None)
+            if not servicio_info:
+                return "❌ No encontré ese servicio."
+            
+            # Generar mensaje de horarios (simplificado para demo)
+            respuesta = f"📅 *Horarios disponibles para {servicio_info['nombre']}*\n\n"
+            respuesta += f"💰 Precio: ${servicio_info['precio']}\n"
+            respuesta += f"⏱️ Duración: {servicio_info['duracion']} minutos\n\n"
+            
+            # Horarios de ejemplo (aquí implementarías la lógica real de Google Calendar)
+            now = datetime.now(self.tz)
+            respuesta += "*Próximos horarios disponibles:*\n"
+            
+            for i in range(3):  # Mostrar 3 opciones
+                fecha_slot = now + timedelta(days=i, hours=2)
+                dia_nombre = self._traducir_dia(fecha_slot.strftime('%A'))
+                respuesta += f"• {dia_nombre} {fecha_slot.strftime('%d/%m a las %H:%M')}\n"
+            
+            respuesta += "\n💬 Dime qué horario te conviene o si necesitas otras opciones."
+            respuesta += f"\n\n📝 Para confirmar, necesitaré tu nombre completo."
+            
+            return respuesta
+            
+        except Exception as e:
+            print(f"❌ Error buscando horarios: {e}")
+            return "❌ No pude buscar los horarios. Intenta de nuevo."
+    
+    async def _crear_reserva_inteligente(self, args: dict, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
+        """Crear una nueva reserva"""
+        try:
+            servicio_id = args["servicio_id"]
+            fecha_hora = args["fecha_hora"]
+            nombre_cliente = args["nombre_cliente"]
+            cantidad = args.get("cantidad", 1)
+            empleado_id = args.get("empleado_id")
+            
+            # Buscar servicio
+            servicio_info = next((s for s in business_context['servicios'] if s['id'] == servicio_id), None)
+            if not servicio_info:
+                return "❌ No encontré ese servicio."
+            
+            # Buscar empleado (usar el primero si no se especifica)
+            if empleado_id:
+                empleado = next((e for e in business_context['empleados'] if e['id'] == empleado_id), None)
+            else:
+                empleado = business_context['empleados'][0] if business_context['empleados'] else None
+            
+            if not empleado:
+                return "❌ No hay empleados disponibles."
+            
+            # Crear reserva en BD
+            fake_id = generar_fake_id()
+            
+            # Parsear fecha
+            fecha_reserva = datetime.strptime(fecha_hora, "%Y-%m-%d %H:%M")
+            fecha_reserva = self.tz.localize(fecha_reserva)
+            
+            nueva_reserva = Reserva(
+                fake_id=fake_id,
+                event_id=f"evt_{fake_id}",  # Simplificado
+                empresa=tenant.comercio,
+                empleado_id=empleado['id'],
+                empleado_nombre=empleado['nombre'],
+                empleado_calendar_id=empleado['calendar_id'] or "default",
+                cliente_nombre=nombre_cliente,
+                cliente_telefono=telefono,
+                fecha_reserva=fecha_reserva.replace(tzinfo=timezone.utc),  # Convertir a UTC para BD
+                servicio=servicio_info['nombre'],
+                estado="activo",
+                cantidad=cantidad
+            )
+            
+            db.add(nueva_reserva)
+            db.commit()
+            
+            # Formatear respuesta
+            dia_nombre = self._traducir_dia(fecha_reserva.strftime('%A'))
+            fecha_formatted = f"{dia_nombre} {fecha_reserva.strftime('%d/%m a las %H:%M')}"
+            
+            respuesta = f"✅ *¡Reserva confirmada!*\n\n"
+            respuesta += f"🎫 *Código:* {fake_id}\n"
+            respuesta += f"👤 *Cliente:* {nombre_cliente}\n"
+            respuesta += f"🎯 *Servicio:* {servicio_info['nombre']}\n"
+            respuesta += f"📅 *Fecha:* {fecha_formatted}\n"
+            respuesta += f"👨‍💼 *Profesional:* {empleado['nombre']}\n"
+            respuesta += f"💰 *Precio:* ${servicio_info['precio']}\n\n"
+            respuesta += f"⚠️ *Recuerda:* Puedes cancelar hasta 1 hora antes.\n"
+            respuesta += f"🔄 Para cancelar envía: *cancelar {fake_id}*"
+            
+            return respuesta
+            
+        except Exception as e:
+            print(f"❌ Error creando reserva: {e}")
+            return "❌ No pude crear la reserva. Verifica los datos e intenta de nuevo."
+    
+    async def _cancelar_reserva_inteligente(self, args: dict, telefono: str, tenant: Tenant, db: Session) -> str:
+        """Cancelar una reserva existente"""
+        try:
+            codigo = args["codigo_reserva"].upper()
+            
+            reserva = db.query(Reserva).filter_by(
+                fake_id=codigo,
+                cliente_telefono=telefono,
+                estado="activo"
+            ).first()
+            
+            if not reserva:
+                return "❌ No encontré esa reserva o ya fue cancelada."
+            
+            # Verificar tiempo de cancelación
+            now_aware = datetime.now(self.tz)
+            fecha_reserva_aware = self._normalize_datetime(reserva.fecha_reserva)
+            
+            if fecha_reserva_aware <= now_aware + timedelta(hours=1):
+                return "⏰ No puedes cancelar con menos de 1 hora de anticipación."
+            
+            # Cancelar
+            reserva.estado = "cancelado"
+            db.commit()
+            
+            dia_nombre = self._traducir_dia(fecha_reserva_aware.strftime('%A'))
+            fecha_formatted = f"{dia_nombre} {fecha_reserva_aware.strftime('%d/%m a las %H:%M')}"
+            
+            return f"✅ *Reserva cancelada*\n\n🎫 Código: {codigo}\n📅 Era para: {fecha_formatted}\n🎯 Servicio: {reserva.servicio}"
+            
+        except Exception as e:
+            print(f"❌ Error cancelando reserva: {e}")
+            return "❌ No pude cancelar la reserva."
+    
     def _format_servicios_for_ai(self, servicios):
         """Formatear servicios para el prompt de IA"""
         formatted = ""
@@ -306,8 +488,6 @@ FUNCIONES DISPONIBLES:
             return respuesta
         
         return "🤖 ¡Hola! Soy la IA asistente. ¿En qué puedo ayudarte hoy? Puedo ayudarte con reservas, información sobre servicios, o cualquier consulta que tengas."
-    
-    # ... (mantener el resto de métodos existentes)
     
     def _get_business_context(self, tenant: Tenant, db: Session) -> dict:
         """Obtener contexto completo del negocio"""
@@ -343,4 +523,15 @@ FUNCIONES DISPONIBLES:
             ]
         }
     
-    # ... (implementar métodos faltantes de las funciones)
+    def _traducir_dia(self, dia_en_ingles):
+        """Traducir día de la semana"""
+        traducciones = {
+            'Monday': 'Lunes',
+            'Tuesday': 'Martes', 
+            'Wednesday': 'Miércoles',
+            'Thursday': 'Jueves',
+            'Friday': 'Viernes',
+            'Saturday': 'Sábado',
+            'Sunday': 'Domingo'
+        }
+        return traducciones.get(dia_en_ingles, dia_en_ingles)
