@@ -773,3 +773,40 @@ class AIConversationManager:
             "tiene_empleados": len(empleados) > 0,
             "calendar_id_general": getattr(tenant, "calendar_id_general", None)
         }
+    
+    async def crear_reserva(self, servicio_id, fecha_hora, empleado_id, nombre_cliente, telefono, db: Session):
+        try:
+            fecha_dt = datetime.fromisoformat(fecha_hora)
+            # Verificar duplicados
+            reserva_existente = db.query(Reserva).filter(
+                Reserva.servicio == servicio_id,
+                Reserva.fecha_reserva == fecha_dt,
+                Reserva.estado == "activo"
+            ).first()
+            if reserva_existente:
+                return "❌ Ya existe una reserva activa para ese horario. Elige otro turno."
+            
+            servicio = db.query(Servicio).filter(Servicio.id == servicio_id).first()
+            empleado = db.query(Empleado).filter(Empleado.id == empleado_id).first() if empleado_id else None
+            fake_id = generar_fake_id()
+            nueva_reserva = Reserva(
+                fake_id=fake_id,
+                event_id="",  # Completar con el ID del evento de Google Calendar
+                empresa=servicio.tenant.nombre,
+                empleado_id=empleado.id if empleado else None,
+                empleado_nombre=empleado.nombre if empleado else "Sistema",
+                empleado_calendar_id=empleado.calendar_id if empleado else servicio.calendar_id,
+                cliente_nombre=nombre_cliente,
+                cliente_telefono=telefono,
+                fecha_reserva=fecha_dt,
+                servicio=servicio.nombre,
+                estado="activo",
+                cantidad=1
+            )
+            db.add(nueva_reserva)
+            db.commit()
+            # Aquí deberías crear el evento en Google Calendar y guardar el event_id
+            return f"✅ Reserva confirmada para *{servicio.nombre}* el {fecha_dt.strftime('%A %d/%m a las %H:%M')}."
+        except Exception as e:
+            print(f"❌ Error creando reserva: {e}")
+            return "😵 No pude confirmar la reserva. Intenta de nuevo."
