@@ -742,3 +742,34 @@ class AIConversationManager:
         print(f"🔧 DEBUG: Redondeando {datetime_obj.strftime('%H:%M')} → {rounded_time.strftime('%H:%M')}")
         print(f"🔧 DEBUG: Config: Solo horas exactas={solo_horas_exactas}, Intervalo={intervalo_entre_turnos} min")
         return rounded_time
+
+    def _get_business_context(self, tenant: Tenant, db: Session) -> dict:
+        """Obtener contexto del negocio: servicios, empleados, configuración general"""
+        servicios = db.query(Servicio).filter(Servicio.tenant_id == tenant.id).all()
+        empleados = db.query(Empleado).filter(Empleado.tenant_id == tenant.id).all()
+        return {
+            "servicios": [
+                {
+                    "id": s.id,
+                    "nombre": s.nombre,
+                    "duracion": s.duracion,
+                    "precio": s.precio,
+                    "solo_horas_exactas": getattr(s, "solo_horas_exactas", False),
+                    "intervalo_entre_turnos": getattr(s, "intervalo_entre_turnos", 15),
+                    "calendar_id": getattr(s, "calendar_id", None),
+                    "es_informativo": getattr(s, "es_informativo", False),
+                    "mensaje_personalizado": getattr(s, "mensaje_personalizado", "")
+                }
+                for s in servicios
+            ],
+            "empleados": [
+                {
+                    "id": e.id,
+                    "nombre": e.nombre,
+                    "calendar_id": getattr(e, "calendar_id", None)
+                }
+                for e in empleados
+            ],
+            "tiene_empleados": len(empleados) > 0,
+            "calendar_id_general": getattr(tenant, "calendar_id_general", None)
+        }
