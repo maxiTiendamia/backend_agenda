@@ -233,35 +233,37 @@ class AIConversationManager:
         
         # Si no encontró coincidencias, continuar con procesamiento normal de IA
         # Construir contexto para la IA
-        system_prompt = f"""Eres la IA asistente de {tenant.comercio}. 
+        system_prompt = f"""🤖 Eres la IA asistente de {tenant.comercio}. 
 
-INFORMACIÓN DEL NEGOCIO:
-- Nombre: {tenant.comercio}
-- Servicios disponibles: {', '.join([s['nombre'] for s in business_context['servicios']])}
-- Empleados: {', '.join([e['nombre'] for e in business_context['empleados']])}
+📊 INFORMACIÓN DEL NEGOCIO:
+- 🏢 Nombre: {tenant.comercio}
+- ✨ Servicios disponibles: {', '.join([s['nombre'] for s in business_context['servicios']])}
+- 👥 Empleados: {', '.join([e['nombre'] for e in business_context['empleados']]) if business_context['empleados'] else 'Sin empleados (servicios directos)'}
 
-INFORMACIÓN DEL CLIENTE (teléfono: {telefono}):
-- Cliente recurrente: {'Sí' if user_history['es_cliente_recurrente'] else 'No (cliente nuevo)'}
-- Servicio favorito: {user_history['servicio_favorito'] or 'Ninguno aún'}
-- Reservas activas: {len(user_history['reservas_activas'])}
-- Historial: {len(user_history['historial'])} reservas anteriores
+👤 INFORMACIÓN DEL CLIENTE (📞 {telefono}):
+- 🔄 Cliente recurrente: {'🎯 Sí' if user_history['es_cliente_recurrente'] else '🆕 No (cliente nuevo)'}
+- ⭐ Servicio favorito: {user_history['servicio_favorito'] or '🤷 Ninguno aún'}
+- 📅 Reservas activas: {len(user_history['reservas_activas'])}
+- 📊 Historial: {len(user_history['historial'])} reservas anteriores
 
-INSTRUCCIONES IMPORTANTES:
-1. Sé natural, amigable y personalizada
-2. Usa la información del cliente para personalizar respuestas
-3. Cuando te pidan un turno, muestra los servicios numerados (1, 2, 3...)
-4. Si el usuario dice un número, usa la función buscar_horarios_servicio con el ID REAL del servicio
-5. SERVICIOS CON SUS IDs REALES:
+📋 INSTRUCCIONES IMPORTANTES:
+1. 😊 Sé natural, amigable y personalizada. Usa MUCHOS emojis
+2. 🎯 Usa la información del cliente para personalizar respuestas
+3. 📋 Cuando te pidan un turno, muestra los servicios numerados (1, 2, 3...)
+4. 🔢 Si el usuario dice un número, usa la función buscar_horarios_servicio con el ID REAL
+5. 🏆 SERVICIOS CON SUS IDs REALES:
 {self._format_servicios_with_real_ids(business_context['servicios'])}
-6. Recuerda conversaciones anteriores
-7. Puedes responder preguntas generales sobre el negocio
-8. Para fechas específicas, usa la función buscar_horarios_fecha_especifica
+6. 🧠 Recuerda conversaciones anteriores
+7. ❓ Puedes responder preguntas generales sobre el negocio
+8. 📅 Para fechas específicas, usa la función buscar_horarios_fecha_especifica
 
-FUNCIONES DISPONIBLES:
-- buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio)
-- buscar_horarios_fecha_especifica: Para horarios en fecha/hora específica
-- crear_reserva: Para confirmar una reserva
-- cancelar_reserva: Para cancelar reservas existentes
+🛠️ FUNCIONES DISPONIBLES:
+- 🔍 buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio)
+- 📅 buscar_horarios_fecha_especifica: Para horarios en fecha/hora específica  
+- ✅ crear_reserva: Para confirmar una reserva
+- ❌ cancelar_reserva: Para cancelar reservas existentes
+
+💡 IMPORTANTE: Este negocio {'tiene empleados' if business_context['tiene_empleados'] else 'NO tiene empleados (ej: canchas, padel)'}.
 """
 
         # Construir historial de conversación
@@ -376,13 +378,22 @@ FUNCIONES DISPONIBLES:
             if not servicio_info:
                 return "❌ No encontré ese servicio."
             
-            # Verificar que hay empleados
-            if not business_context['empleados']:
-                return "❌ No hay profesionales disponibles para este servicio."
+            # 🔧 NUEVA LÓGICA: Priorizar empleados, pero usar servicio si no hay empleados
+            calendar_id = None
+            empleado_asignado = None
             
-            # Usar el primer empleado o buscar uno específico para el servicio
-            empleado = business_context['empleados'][0]
-            calendar_id = empleado.get('calendar_id') or servicio_info.get('calendar_id', 'primary')
+            if business_context['empleados']:
+                # Si hay empleados, usar el primer empleado disponible
+                empleado_asignado = business_context['empleados'][0]
+                calendar_id = empleado_asignado.get('calendar_id') or servicio_info.get('calendar_id', 'primary')
+            else:
+                # Si NO hay empleados (ej: canchas, padel), usar calendario del servicio
+                calendar_id = servicio_info.get('calendar_id') or tenant.calendar_id_general or 'primary'
+                empleado_asignado = {
+                    'id': None,
+                    'nombre': 'Sistema',
+                    'calendar_id': calendar_id
+                }
             
             # Obtener horarios reales de Google Calendar
             horarios_disponibles = await self._get_available_slots_from_calendar(
@@ -392,25 +403,26 @@ FUNCIONES DISPONIBLES:
             )
             
             if not horarios_disponibles:
-                return f"❌ No hay horarios disponibles para *{servicio_info['nombre']}* en los próximos 7 días.\n\n💬 ¿Te gustaría que revise otra fecha específica?"
+                return f"😔 No hay horarios disponibles para *{servicio_info['nombre']}* en los próximos 7 días.\n\n📅 ¿Te gustaría que revise otra fecha específica? 🔍"
             
-            # Formatear respuesta
-            respuesta = f"📅 *Horarios disponibles para {servicio_info['nombre']}*\n\n"
+            # Formatear respuesta con más emojis
+            tipo_servicio = "🎾" if "padel" in servicio_info['nombre'].lower() else "✨"
+            respuesta = f"{tipo_servicio} *Horarios disponibles para {servicio_info['nombre']}*\n\n"
             respuesta += f"💰 Precio: ${servicio_info['precio']}\n"
             respuesta += f"⏱️ Duración: {servicio_info['duracion']} minutos\n"
             respuesta += f"👥 Máximo {servicio_info.get('cantidad_maxima', 1)} personas\n\n"
             
-            respuesta += "*📋 Próximos horarios disponibles:*\n"
+            respuesta += "📋 *Próximos horarios disponibles:*\n"
             
             # Mostrar hasta 6 horarios
             for i, slot in enumerate(horarios_disponibles[:6], 1):
-                dia_nombre = self._traducir_dia(slot['fecha'].strftime('%A'))
+                dia_nombre = _traducir_dia(slot['fecha'].strftime('%A'))
                 fecha_str = f"{dia_nombre} {slot['fecha'].strftime('%d/%m')}"
                 hora_str = slot['fecha'].strftime('%H:%M')
-                respuesta += f"*{i}.* {fecha_str} a las {hora_str}\n"
+                respuesta += f"🎯 *{i}.* {fecha_str} a las {hora_str}\n"
             
-            respuesta += "\n💬 Dime qué horario te conviene (ejemplo: '1' o 'mañana a las 19:00')"
-            respuesta += "\n📝 Para confirmar necesitaré tu nombre completo."
+            respuesta += "\n💬 Dime qué horario te conviene (ejemplo: '1' o 'mañana a las 19:00') 🕐"
+            respuesta += "\n📝 Para confirmar necesitaré tu nombre completo 👤"
             
             # Guardar slots en Redis para referencia posterior
             slots_key = f"slots:{telefono}:{servicio_id}"
@@ -418,7 +430,8 @@ FUNCIONES DISPONIBLES:
                 {
                     "numero": i,
                     "fecha_hora": slot['fecha'].isoformat(),
-                    "empleado_id": empleado['id']
+                    "empleado_id": empleado_asignado['id'],
+                    "empleado_nombre": empleado_asignado['nombre']
                 }
                 for i, slot in enumerate(horarios_disponibles[:6], 1)
             ]
@@ -428,7 +441,7 @@ FUNCIONES DISPONIBLES:
             
         except Exception as e:
             print(f"❌ Error buscando horarios reales: {e}")
-            return "❌ No pude consultar los horarios. Intenta de nuevo en un momento."
+            return "😵 No pude consultar los horarios. Intenta de nuevo en un momento 🔄"
 
     async def _get_available_slots_from_calendar(self, calendar_id: str, servicio: dict, dias_adelante: int = 7) -> list:
         """Obtener slots disponibles de Google Calendar"""
@@ -528,25 +541,55 @@ FUNCIONES DISPONIBLES:
             print(f"❌ Error consultando Google Calendar: {e}")
             return []
 
+    def _get_working_hours_for_day(self, date, servicio: dict) -> dict:
+        """Obtener horarios de trabajo para un día específico"""
+        day_name = date.strftime('%A').lower()
+        
+        # 🔧 NUEVA LÓGICA: Usar horarios del servicio si están configurados
+        working_hours_config = servicio.get('working_hours')
+        
+        if working_hours_config:
+            # Si el servicio tiene horarios específicos, usarlos
+            try:
+                # Aquí deberías parsear working_hours_config según tu formato
+                # Por ejemplo: {"monday": "08:00-20:00", "tuesday": "08:00-20:00"}
+                if day_name in working_hours_config:
+                    hours_str = working_hours_config[day_name]
+                    start_str, end_str = hours_str.split('-')
+                    return {
+                        'start': datetime.strptime(start_str, '%H:%M').time(),
+                        'end': datetime.strptime(end_str, '%H:%M').time()
+                    }
+            except:
+                pass
+        
+        # Fallback: horarios por defecto según el día
+        if day_name in ['saturday', 'sunday']:
+            # Fines de semana horario reducido
+            return {
+                'start': datetime.strptime('09:00', '%H:%M').time(),
+                'end': datetime.strptime('18:00', '%H:%M').time()
+            }
+        else:
+            # Días de semana horario normal
+            return {
+                'start': datetime.strptime('08:00', '%H:%M').time(),
+                'end': datetime.strptime('22:00', '%H:%M').time()
+            }
+
     def _is_working_day(self, date, servicio: dict) -> bool:
         """Verificar si es día laborable"""
         day_name = date.strftime('%A').lower()
-        # Aquí deberías verificar los horarios configurados del servicio
-        # Por ahora, asumimos lunes a viernes
-        return day_name not in ['saturday', 'sunday']
-
-    def _get_working_hours_for_day(self, date, servicio: dict) -> dict:
-        """Obtener horarios de trabajo para un día específico"""
-        # Según tu configuración: Lunes a Viernes 8:00 a 00:00
-        day_name = date.strftime('%A').lower()
         
-        if day_name in ['saturday', 'sunday']:
-            return None
+        # 🔧 NUEVA LÓGICA: Verificar configuración del servicio
+        working_hours_config = servicio.get('working_hours')
         
-        return {
-            'start': datetime.strptime('08:00', '%H:%M').time(),
-            'end': datetime.strptime('23:59', '%H:%M').time()
-        }
+        if working_hours_config:
+            # Si hay configuración específica, verificar si ese día está disponible
+            return day_name in working_hours_config and working_hours_config[day_name] != "closed"
+        
+        # Fallback: Por defecto trabajar todos los días excepto domingos
+        return day_name != 'sunday'
 
     async def _execute_ai_function(self, function_call: dict, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
         """Ejecutar función llamada por la IA"""
@@ -738,28 +781,30 @@ FUNCIONES DISPONIBLES:
         
         elif any(word in mensaje_lower for word in ['cancelar', 'anular']):
             if user_history['reservas_activas']:
-                reservas_txt = "\n".join([f"• {r['codigo']} - {r['servicio']} ({r['fecha']})" 
-                                    for r in user_history['reservas_activas']])
-                return f"📋 *Tus reservas activas:*\n{reservas_txt}\n\n💬 Dime el código para cancelar"
+                reservas_txt = "\n".join([f"🎫 {r['codigo']} - {r['servicio']} (📅{r['fecha']})" 
+                                for r in user_history['reservas_activas']])
+                return f"📋 *Tus reservas activas:*\n{reservas_txt}\n\n💬 Dime el código para cancelar ❌"
             else:
-                return "❌ No tienes reservas activas para cancelar."
+                return "😔 No tienes reservas activas para cancelar.\n\n🎯 ¿Quieres hacer una nueva reserva?"
         
         elif any(word in mensaje_lower for word in ['precio', 'costo', 'cuanto']):
             return self._mostrar_menu_servicios(business_context, mostrar_precios=True)
         
         else:
-            return self._mostrar_menu_servicios(business_context)
+            return f"👋 ¡Hola! Te ayudo con lo que necesites.\n\n{self._mostrar_menu_servicios(business_context)}"
 
     def _mostrar_menu_servicios(self, business_context: dict, mostrar_precios: bool = False) -> str:
         """Mostrar menú de servicios"""
-        respuesta = "📋 *Servicios disponibles:*\n\n"
+        respuesta = "🏆 *¡Servicios disponibles!*\n\n"
         
         for i, servicio in enumerate(business_context['servicios'], 1):
-            precio_txt = f" - ${servicio['precio']}" if mostrar_precios else ""
-            respuesta += f"*{i}.* {servicio['nombre']}{precio_txt}\n"
+            precio_txt = f" - 💰${servicio['precio']}" if mostrar_precios else ""
+            duracion_txt = f" (⏱️{servicio['duracion']} min)" if mostrar_precios else ""
+            respuesta += f"✨ *{i}.* {servicio['nombre']}{precio_txt}{duracion_txt}\n"
         
-        respuesta += "\n💬 Puedes escribir el *número* o el *nombre del servicio*"
-        respuesta += "\n👤 También puedes escribir el nombre de un profesional específico"
+        respuesta += "\n🎯 Puedes escribir el *número* o el *nombre del servicio*"
+        respuesta += "\n👥 También puedes escribir el nombre de un profesional específico"
+        respuesta += "\n\n🚀 ¿Qué te interesa?"
         
         return respuesta
 
@@ -786,7 +831,8 @@ FUNCIONES DISPONIBLES:
                 'turnos_consecutivos': servicio.turnos_consecutivos,
                 'es_informativo': servicio.es_informativo,
                 'mensaje_personalizado': servicio.mensaje_personalizado,
-                'calendar_id': servicio.calendar_id
+                'calendar_id': servicio.calendar_id,
+                'working_hours': servicio.working_hours  # 🔧 AGREGAR horarios del servicio
             })
         
         # Obtener empleados
@@ -796,14 +842,17 @@ FUNCIONES DISPONIBLES:
             empleados_data.append({
                 'id': empleado.id,
                 'nombre': empleado.nombre,
-                'calendar_id': empleado.calendar_id
+                'calendar_id': empleado.calendar_id,
+                'working_hours': empleado.working_hours  # 🔧 AGREGAR horarios del empleado
             })
         
         return {
             'servicios': servicios_data,
             'empleados': empleados_data,
             'comercio': tenant.comercio,
-            'horarios_generales': tenant.working_hours_general
+            'horarios_generales': tenant.working_hours_general,
+            'calendar_id_general': tenant.calendar_id_general,  # 🔧 AGREGAR calendario general
+            'tiene_empleados': len(empleados_data) > 0  # 🔧 INDICADOR útil
         }
         
 def _traducir_dia(dia_en_ingles):
