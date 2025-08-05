@@ -407,6 +407,11 @@ class AIConversationManager:
             if dia_detectado:
                 # Buscar horarios disponibles para el día elegido
                 from api.utils import calendar_utils
+                # Obtener contexto actualizado del negocio (servicios y empleados)
+                business_context = self._get_business_context(tenant, db)
+                servicio_guardado = next((s for s in business_context["servicios"] if s["id"] == servicio_guardado["id"]), None)
+                if not servicio_guardado:
+                    return "❌ Servicio no disponible. Intenta de nuevo."
                 slots = calendar_utils.get_available_slots_for_service(
                     servicio_guardado,
                     intervalo_entre_turnos=servicio_guardado.get("intervalo_entre_turnos", 15),
@@ -627,8 +632,12 @@ class AIConversationManager:
         return "\n".join(lines)
     
     def mostrar_servicios(self, business_context: dict) -> str:
-        """Devuelve la lista de servicios disponibles para mostrar al cliente."""
-        return f"✨ Servicios disponibles:\n{self._format_servicios_with_real_ids(business_context['servicios'])}\n\n💬 Escribe el número o nombre del servicio que te interesa."
+        """Devuelve la lista de servicios disponibles para mostrar al cliente (siempre actualizada)."""
+        # Obtener contexto actualizado del negocio
+        servicios = business_context["servicios"]
+        if not servicios:
+            return "No hay servicios disponibles en este momento."
+        return f"✨ Servicios disponibles:\n{self._format_servicios_with_real_ids(servicios)}\n\n💬 Escribe el número o nombre del servicio que te interesa."
 
     def _get_business_context(self, tenant, db):
         """Obtener contexto del negocio: servicios y empleados desde models.py"""
