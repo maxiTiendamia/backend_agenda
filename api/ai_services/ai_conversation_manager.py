@@ -16,6 +16,27 @@ import httpx
 import re
 
 class AIConversationManager:
+    async def _execute_ai_function(self, function_call, telefono, business_context, tenant, db):
+        """Ejecuta funciones llamadas por la IA"""
+        name = function_call["name"]
+        args = function_call["args"]
+        if name == "buscar_horarios_servicio":
+            return await self._buscar_horarios_servicio_real(
+                args["servicio_id"], business_context, telefono, tenant, db
+            )
+        elif name == "crear_reserva":
+            return await self.crear_reserva(
+                args["servicio_id"], args["fecha_hora"], args.get("empleado_id"), args["nombre_cliente"], telefono, db
+            )
+        elif name == "cancelar_reserva":
+            return await self.cancelar_reserva(
+                args["codigo_reserva"], telefono, db
+            )
+        return "Función no implementada."
+
+    def _generar_respuesta_fallback(self, mensaje, user_history, business_context):
+        """Respuesta fallback si falla la IA"""
+        return "Disculpa, tuve un problema procesando tu mensaje. ¿Podrías intentar de nuevo?"
     def __init__(self, api_key, redis_client):
         self.client = openai.OpenAI(api_key=api_key)
         self.redis_client = redis_client
@@ -231,7 +252,7 @@ class AIConversationManager:
 
         except Exception as e:
             print(f"❌ Error en AI manager: {e}")
-            return "Disculpa, tuve un problema procesando tu mensaje. ¿Podrías intentar de nuevo?"
+            return self._generar_respuesta_fallback(mensaje, None, None)
 
     def _detectar_dia_mensaje(self, mensaje: str) -> str:
         """🔧 CORREGIDO: Detectar qué día quiere el usuario"""
