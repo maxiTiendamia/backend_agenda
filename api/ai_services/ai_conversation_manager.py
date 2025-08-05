@@ -23,6 +23,15 @@ class AIConversationManager:
         self.webconnect_url = os.getenv("webconnect_url", "http://195.26.250.62:3000")  
         self.google_credentials = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
+    def _get_time_increment(self, servicio):
+        """
+        Devuelve el incremento de minutos entre turnos según la configuración del servicio o Tenant.
+        """
+        intervalo = getattr(servicio, 'intervalo_entre_turnos', None)
+        if intervalo:
+            return int(intervalo)
+        return 15
+
     def _traducir_dia(self, dia_en):
         """Traduce el nombre de un día de la semana de inglés a español."""
         dias = {
@@ -292,24 +301,24 @@ class AIConversationManager:
             
             if not horarios_disponibles:
                 dia_nombre = fecha_objetivo.strftime('%A')
-                dia_traducido = _traducir_dia(dia_nombre)
+                dia_traducido = self._traducir_dia(dia_nombre)
                 return f"😔 No hay horarios disponibles para *{servicio['nombre']}* el {dia_traducido} {fecha_objetivo.strftime('%d/%m')}.\n\n📅 ¿Te gustaría elegir otro día? 🔄"
-            
+
             # Formatear respuesta
             tipo_servicio = "🎾" if "padel" in servicio['nombre'].lower() else "✨"
-            dia_nombre = _traducir_dia(fecha_objetivo.strftime('%A'))
-            
+            dia_nombre = self._traducir_dia(fecha_objetivo.strftime('%A'))
+
             respuesta = f"{tipo_servicio} *Horarios para {servicio['nombre']}*\n"
             respuesta += f"📅 {dia_nombre} {fecha_objetivo.strftime('%d/%m/%Y')}\n\n"
-            
+
             # Mostrar horarios
             for i, slot in enumerate(horarios_disponibles[:8], 1):  # Hasta 8 horarios
                 hora_str = slot['fecha'].strftime('%H:%M')
                 respuesta += f"🎯 *{i}.* {hora_str}\n"
-            
+
             respuesta += "\n💬 Dime qué horario te conviene (ejemplo: '1' o '19:00') 🕐"
             respuesta += "\n📝 Para confirmar necesitaré tu nombre completo 👤"
-            
+
             # Guardar slots en Redis
             slots_key = f"slots:{telefono}:{servicio['id']}"
             slots_data = [
@@ -322,7 +331,7 @@ class AIConversationManager:
                 for i, slot in enumerate(horarios_disponibles[:8], 1)
             ]
             self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
-            
+
             return respuesta
             
         except Exception as e:
@@ -621,7 +630,7 @@ class AIConversationManager:
             
             # Mostrar hasta 6 horarios
             for i, slot in enumerate(horarios_disponibles[:6], 1):
-                dia_nombre = _traducir_dia(slot['fecha'].strftime('%A'))
+                dia_nombre = self._traducir_dia(slot['fecha'].strftime('%A'))
                 fecha_str = f"{dia_nombre} {slot['fecha'].strftime('%d/%m')}"
                 hora_str = slot['fecha'].strftime('%H:%M')
                 respuesta += f"🎯 *{i}.* {fecha_str} a las {hora_str}\n"
