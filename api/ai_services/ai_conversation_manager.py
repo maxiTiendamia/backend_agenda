@@ -16,22 +16,67 @@ import httpx
 import re
 
 class AIConversationManager:
+    # Eliminar lógica de búsqueda, reserva y cancelación de turnos. Solo delega a calendar_utils.
     async def _execute_ai_function(self, function_call, telefono, business_context, tenant, db):
-        """Ejecuta funciones llamadas por la IA"""
+        """Delegar funciones de turnos a calendar_utils"""
+        from api.utils import calendar_utils
         name = function_call["name"]
         args = function_call["args"]
         if name == "buscar_horarios_servicio":
-            return await self._buscar_horarios_servicio_real(
-                args["servicio_id"], business_context, telefono, tenant, db
+            # Buscar horarios disponibles usando calendar_utils
+            servicio_id = args["servicio_id"]
+            servicio = next((s for s in business_context["servicios"] if s["id"] == servicio_id), None)
+            if not servicio:
+                return "❌ Servicio no encontrado."
+            slots = calendar_utils.get_available_slots_for_service(
+                servicio,
+                intervalo_entre_turnos=servicio.get("intervalo_entre_turnos", 15),
+                max_days=7,
+                max_turnos=10,
+                credentials_json=self.google_credentials
             )
+            if not slots:
+                return f"😔 No hay horarios disponibles para {servicio['nombre']} esta semana."
+            respuesta = f"✨ Horarios disponibles para {servicio['nombre']}\n"
+            for i, slot in enumerate(slots[:8], 1):
+                hora_str = slot['fecha'].strftime('%d/%m %H:%M')
+                respuesta += f"{i}. {hora_str}\n"
+            respuesta += "\n💬 Escribe el número o la hora que prefieres."
+            return respuesta
         elif name == "crear_reserva":
-            return await self.crear_reserva(
-                args["servicio_id"], args["fecha_hora"], args.get("empleado_id"), args["nombre_cliente"], telefono, db
-            )
+            servicio_id = args["servicio_id"]
+            servicio = next((s for s in business_context["servicios"] if s["id"] == servicio_id), None)
+            if not servicio:
+                return "❌ Servicio no encontrado."
+            fecha_hora = args["fecha_hora"]
+            nombre_cliente = args["nombre_cliente"]
+            slot_dt = datetime.fromisoformat(fecha_hora)
+            try:
+                event_id = calendar_utils.create_event_for_service(
+                    servicio,
+                    slot_dt,
+                    telefono,
+                    self.google_credentials,
+                    nombre_cliente
+                )
+                return f"✅ Reserva confirmada para {servicio['nombre']} el {slot_dt.strftime('%d/%m %H:%M')} a nombre de {nombre_cliente}."
+            except Exception as e:
+                return f"❌ Error al crear la reserva: {e}"
         elif name == "cancelar_reserva":
-            return await self.cancelar_reserva(
-                args["codigo_reserva"], telefono, db
-            )
+            codigo_reserva = args["codigo_reserva"]
+            calendar_id = business_context.get("calendar_id_general", "primary")
+            try:
+                ok = calendar_utils.cancelar_evento_google(
+                    calendar_id,
+                    codigo_reserva,
+                    self.google_credentials
+                )
+                if ok:
+                    return "✅ Reserva cancelada correctamente."
+                else:
+                    return "❌ No se pudo cancelar la reserva."
+            except Exception as e:
+                return f"❌ Error al cancelar la reserva: {e}"
         return "Función no implementada."
 
     def _generar_respuesta_fallback(self, mensaje, user_history, business_context):
@@ -279,108 +324,6 @@ class AIConversationManager:
         
         return None
 
-    async def _buscar_horarios_dia_especifico(self, servicio: dict, dia: str, telefono: str, business_context: dict, tenant: Tenant, db: Session) -> str:
-        """🔧 CORREGIDO: Buscar horarios para un día específico"""
-        try:
-            # Limpiar selección de servicio
-            servicio_key = f"servicio_seleccionado:{telefono}"
-            self.redis_client.delete(servicio_key)
-            
-            # Calcular fecha objetivo
-            now = datetime.now(self.tz)
-            
-            if dia == 'hoy':
-                fecha_objetivo = now
-            elif dia == 'mañana':
-                fecha_objetivo = now + timedelta(days=1)
-            else:
-                # Encontrar el próximo día de la semana
-                dias_semana = {
-                    'lunes': 0, 'martes': 1, 'miercoles': 2, 'jueves': 3, 
-                    'viernes': 4, 'sabado': 5, 'domingo': 6
-                }
-                
-                if dia in dias_semana:
-                    dias_hasta = (dias_semana[dia] - now.weekday()) % 7
-                    if dias_hasta == 0:  # Es hoy
-                        dias_hasta = 7  # Próxima semana
-                    fecha_objetivo = now + timedelta(days=dias_hasta)
-                else:
-                    return "❌ No entendí qué día querés. Intentá de nuevo."
-            
-            print(f"🔧 DEBUG: Buscando horarios para {servicio['nombre']} el {fecha_objetivo.strftime('%d/%m/%Y')}")
-            
-            # Obtener horarios disponibles para ese día específico
-            calendar_id = servicio.get('calendar_id') or business_context.get('calendar_id_general', 'primary')
-            
-            # 🔧 USAR MÉTODO CORREGIDO
-            horarios_disponibles = await self._get_available_slots_for_specific_day(
-                calendar_id=calendar_id,
-                servicio=servicio,
-                fecha_objetivo=fecha_objetivo
-            )
-            
-            if not horarios_disponibles:
-                dia_nombre = fecha_objetivo.strftime('%A')
-                dia_traducido = self._traducir_dia(dia_nombre)
-                return f"😔 No hay horarios disponibles para *{servicio['nombre']}* el {dia_traducido} {fecha_objetivo.strftime('%d/%m')}.\n\n📅 ¿Te gustaría elegir otro día? 🔄"
-
-            # Formatear respuesta
-            tipo_servicio = "🎾" if "padel" in servicio['nombre'].lower() else "✨"
-            dia_nombre = self._traducir_dia(fecha_objetivo.strftime('%A'))
-
-            respuesta = f"{tipo_servicio} *Horarios para {servicio['nombre']}*\n"
-            respuesta += f"📅 {dia_nombre} {fecha_objetivo.strftime('%d/%m/%Y')}\n\n"
-
-            # Mostrar horarios
-            for i, slot in enumerate(horarios_disponibles[:8], 1):  # Hasta 8 horarios
-                hora_str = slot['fecha'].strftime('%H:%M')
-                respuesta += f"🎯 *{i}.* {hora_str}\n"
-
-            respuesta += "\n💬 Dime qué horario te conviene (ejemplo: '1' o '19:00') 🕐"
-            respuesta += "\n📝 Para confirmar necesitaré tu nombre completo 👤"
-
-            # Guardar slots en Redis
-            slots_key = f"slots:{telefono}:{servicio['id']}"
-            slots_data = [
-                {
-                    "numero": i,
-                    "fecha_hora": slot['fecha'].isoformat(),
-                    "empleado_id": None,
-                    "empleado_nombre": "Sistema"
-                }
-                for i, slot in enumerate(horarios_disponibles[:8], 1)
-            ]
-            self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
-
-            return respuesta
-            
-        except Exception as e:
-            print(f"❌ Error buscando horarios específicos: {e}")
-            return "😵 No pude consultar los horarios. Intenta de nuevo 🔄"
-
-    async def _get_available_slots_for_specific_day(self, calendar_id: str, servicio: dict, fecha_objetivo: datetime) -> list:
-        """🔧 NUEVA FUNCIÓN: Obtener slots para un día específico"""
-        try:
-            # Usar el método existente pero filtrar solo para ese día
-            slots_todos = await self._get_available_slots_from_calendar(
-                calendar_id=calendar_id,
-                servicio=servicio,
-                dias_adelante=1 if fecha_objetivo.date() == datetime.now(self.tz).date() else 2
-            )
-            
-            # Filtrar solo slots del día objetivo
-            slots_dia = []
-            for slot in slots_todos:
-                if slot['fecha'].date() == fecha_objetivo.date():
-                    slots_dia.append(slot)
-            
-            return slots_dia
-            
-        except Exception as e:
-            print(f"❌ Error obteniendo slots específicos: {e}")
-            return []
-    
     async def _ai_process_conversation_natural(self, mensaje, telefono, conversation_history, user_history, business_context, tenant, db):
         """🔧 CORREGIDO: Procesamiento de IA más natural y contextual"""
         
@@ -392,31 +335,28 @@ class AIConversationManager:
         
         if servicio_guardado_str:
             servicio_guardado = json.loads(servicio_guardado_str)
-            
-            # Verificar si hay slots disponibles guardados
             slots_key = f"slots:{telefono}:{servicio_guardado['id']}"
             slots_data_str = self.redis_client.get(slots_key)
-            
             if slots_data_str:
-                # El usuario está en modo selección de horario
                 slots_data = json.loads(slots_data_str)
-                
-                # Verificar si es selección de número de slot
+                # 1. Selección de horario por número
                 if mensaje_stripped.isdigit():
                     try:
                         slot_numero = int(mensaje_stripped)
                         if 1 <= slot_numero <= len(slots_data):
                             slot_seleccionado = slots_data[slot_numero - 1]
-                            
-                            # Pedir nombre del cliente para confirmar
-                            return f"✅ Perfecto! Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*\n📅 {datetime.fromisoformat(slot_seleccionado['fecha_hora']).strftime('%A %d/%m a las %H:%M')}\n\n👤 Para confirmar, necesito tu *nombre completo* por favor:"
+                            # Guardar slot seleccionado en Redis para el paso siguiente
+                            self.redis_client.set(f"slot_seleccionado:{telefono}", json.dumps(slot_seleccionado), ex=600)
+                            return (
+                                f"✅ Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*"
+                                f"\n📅 {datetime.fromisoformat(slot_seleccionado['fecha_hora']).strftime('%A %d/%m a las %H:%M')}"
+                                "\n\n👤 Para confirmar, por favor escribe tu *nombre completo*."
+                            )
                         else:
-                            return f"❌ Por favor elige un número entre 1 y {len(slots_data)}"
-                    except:
-                        pass
-                
-                # Verificar si es selección por hora (ej: "19:00")
-                import re
+                            return f"❌ Elige un número entre 1 y {len(slots_data)}."
+                    except ValueError:
+                        return "❌ No entendí el número. Intenta de nuevo."
+                # 2. Selección de horario por hora (ej: "19:00")
                 time_pattern = r'\b(\d{1,2}):(\d{2})\b'
                 time_match = re.search(time_pattern, mensaje_stripped)
                 if time_match:
@@ -424,17 +364,87 @@ class AIConversationManager:
                     for slot in slots_data:
                         slot_hora = datetime.fromisoformat(slot['fecha_hora']).strftime('%H:%M')
                         if slot_hora == hora_buscada:
-                            return f"✅ Perfecto! Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*\n📅 {datetime.fromisoformat(slot['fecha_hora']).strftime('%A %d/%m a las %H:%M')}\n\n👤 Para confirmar, necesito tu *nombre completo* por favor:"
-                    
-                    return f"❌ No encontré el horario {hora_buscada}. Los horarios disponibles son los numerados arriba."
-            
+                            self.redis_client.set(f"slot_seleccionado:{telefono}", json.dumps(slot), ex=600)
+                            return (
+                                f"✅ Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*"
+                                f"\n📅 {datetime.fromisoformat(slot['fecha_hora']).strftime('%A %d/%m a las %H:%M')}"
+                                "\n\n👤 Para confirmar, por favor escribe tu *nombre completo*."
+                            )
+                    return f"❌ No encontré el horario {hora_buscada}. Elige uno de los horarios numerados."
+                # 3. Confirmación de reserva (nombre completo)
+                slot_seleccionado_str = self.redis_client.get(f"slot_seleccionado:{telefono}")
+                if slot_seleccionado_str and len(mensaje_stripped.split()) >= 2:
+                    slot_seleccionado = json.loads(slot_seleccionado_str)
+                    nombre_cliente = mensaje.strip()
+                    # Llamar a la función de calendar_utils para crear la reserva
+                    from api.utils import calendar_utils
+                    servicio = servicio_guardado
+                    slot_dt = datetime.fromisoformat(slot_seleccionado['fecha_hora'])
+                    try:
+                        event_id = calendar_utils.create_event_for_service(
+                            servicio,
+                            slot_dt,
+                            telefono,
+                            self.google_credentials,
+                            nombre_cliente
+                        )
+                        # Limpiar selección en Redis
+                        self.redis_client.delete(f"servicio_seleccionado:{telefono}")
+                        self.redis_client.delete(f"slots:{telefono}:{servicio['id']}")
+                        self.redis_client.delete(f"slot_seleccionado:{telefono}")
+                        return (
+                            f"✅ Reserva confirmada para *{servicio['nombre']}*"
+                            f"\n📅 {slot_dt.strftime('%A %d/%m %H:%M')}"
+                            f"\n👤 A nombre de: {nombre_cliente}\n\n¡Gracias por reservar! 😊"
+                        )
+                    except Exception as e:
+                        return f"❌ Error al crear la reserva: {e}"
+                # Si no se reconoce el mensaje, pedir nombre completo
+                if slot_seleccionado_str:
+                    return "👤 Por favor, escribe tu *nombre completo* para confirmar la reserva."
             # Si tiene servicio pero no slots, está eligiendo día
             dia_detectado = self._detectar_dia_mensaje(mensaje_stripped)
             if dia_detectado:
-                print(f"🔧 DEBUG: Día detectado: {dia_detectado}")
-                return await self._buscar_horarios_dia_especifico(
-                    servicio_guardado, dia_detectado, telefono, business_context, tenant, db
+                # Buscar horarios disponibles para el día elegido
+                from api.utils import calendar_utils
+                slots = calendar_utils.get_available_slots_for_service(
+                    servicio_guardado,
+                    intervalo_entre_turnos=servicio_guardado.get("intervalo_entre_turnos", 15),
+                    max_days=7,
+                    max_turnos=10,
+                    credentials_json=self.google_credentials
                 )
+                # Filtrar slots por día
+                tz = pytz.timezone("America/Montevideo")
+                now = datetime.now(tz)
+                if dia_detectado == "hoy":
+                    dia_objetivo = now.date()
+                elif dia_detectado == "mañana":
+                    dia_objetivo = (now + timedelta(days=1)).date()
+                else:
+                    dias_semana = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+                    idx = dias_semana.index(dia_detectado)
+                    hoy_idx = now.weekday()
+                    dias_hasta = (idx - hoy_idx) % 7
+                    dia_objetivo = (now + timedelta(days=dias_hasta)).date()
+                slots_dia = [s for s in slots if s['fecha'].date() == dia_objetivo]
+                if not slots_dia:
+                    return f"😔 No hay horarios disponibles para *{servicio_guardado['nombre']}* el {dia_detectado}.\n¿Quieres elegir otro día?"
+                # Guardar slots en Redis
+                slots_key = f"slots:{telefono}:{servicio_guardado['id']}"
+                slots_data = [
+                    {
+                        "numero": i,
+                        "fecha_hora": slot['fecha'].isoformat(),
+                        "empleado_id": None,
+                        "empleado_nombre": "Sistema"
+                    }
+                    for i, slot in enumerate(slots_dia[:8], 1)
+                ]
+                self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
+                return (f"🎾 *Horarios para {servicio_guardado['nombre']}* el {dia_detectado}:\n"
+                        + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
+                        + "\n\n💬 Escribe el número o la hora que prefieres.")
         
         # 🔧 DETECCIÓN DE SELECCIÓN DE SERVICIO (solo si NO tiene servicio guardado)
         servicio_seleccionado = None
@@ -605,344 +615,6 @@ class AIConversationManager:
             print(f"❌ Error en OpenAI: {e}")
             return self._generar_respuesta_fallback(mensaje, user_history, business_context)
     
-    async def _buscar_horarios_servicio_real(self, servicio_id: int, business_context: dict, telefono: str, tenant: Tenant, db: Session) -> str:
-        """Buscar horarios disponibles REALES usando Google Calendar"""
-        try:
-            # Buscar el servicio
-            servicio_info = next((s for s in business_context['servicios'] if s['id'] == servicio_id), None)
-            if not servicio_info:
-                return "❌ No encontré ese servicio."
-            
-            # 🔧 NUEVA LÓGICA: Priorizar empleados, pero usar servicio si no hay empleados
-            calendar_id = None
-            empleado_asignado = None
-            
-            if business_context['empleados']:
-                # Si hay empleados, usar el primer empleado disponible
-                empleado_asignado = business_context['empleados'][0]
-                calendar_id = empleado_asignado.get('calendar_id') or servicio_info.get('calendar_id', 'primary')
-            else:
-                # Si NO hay empleados (ej: canchas, padel), usar calendario del servicio
-                calendar_id = servicio_info.get('calendar_id') or tenant.calendar_id_general or 'primary'
-                empleado_asignado = {
-                    'id': None,
-                    'nombre': 'Sistema',
-                    'calendar_id': calendar_id
-                }
-            
-            # Obtener horarios reales de Google Calendar
-            horarios_disponibles = await self._get_available_slots_from_calendar(
-                calendar_id=calendar_id,
-                servicio=servicio_info,
-                dias_adelante=7
-            )
-            
-            if not horarios_disponibles:
-                return f"😔 No hay horarios disponibles para *{servicio_info['nombre']}* en los próximos 7 días.\n\n📅 ¿Te gustaría que revise otra fecha específica? 🔍"
-            
-            # Formatear respuesta con más emojis
-            tipo_servicio = "🎾" if "padel" in servicio_info['nombre'].lower() else "✨"
-            respuesta = f"{tipo_servicio} *Horarios disponibles para {servicio_info['nombre']}*\n\n"
-            respuesta += f"💰 Precio: ${servicio_info['precio']}\n"
-            respuesta += f"⏱️ Duración: {servicio_info['duracion']} minutos\n"
-            respuesta += f"👥 Máximo {servicio_info.get('cantidad_maxima', 1)} personas\n\n"
-            
-            respuesta += "📋 *Próximos horarios disponibles:*\n"
-            
-            # Mostrar hasta 6 horarios
-            for i, slot in enumerate(horarios_disponibles[:6], 1):
-                dia_nombre = self._traducir_dia(slot['fecha'].strftime('%A'))
-                fecha_str = f"{dia_nombre} {slot['fecha'].strftime('%d/%m')}"
-                hora_str = slot['fecha'].strftime('%H:%M')
-                respuesta += f"🎯 *{i}.* {fecha_str} a las {hora_str}\n"
-            
-            respuesta += "\n💬 Dime qué horario te conviene (ejemplo: '1' o 'mañana a las 19:00') 🕐"
-            respuesta += "\n📝 Para confirmar necesitaré tu nombre completo 👤"
-            
-            # Guardar slots en Redis para referencia posterior
-            slots_key = f"slots:{telefono}:{servicio_id}"
-            slots_data = [
-                {
-                    "numero": i,
-                    "fecha_hora": slot['fecha'].isoformat(),
-                    "empleado_id": empleado_asignado['id'],
-                    "empleado_nombre": empleado_asignado['nombre']
-                }
-                for i, slot in enumerate(horarios_disponibles[:6], 1)
-            ]
-            self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)  # 30 min
-            
-            return respuesta
-            
-        except Exception as e:
-            print(f"❌ Error buscando horarios reales: {e}")
-            return "😵 No pude consultar los horarios. Intenta de nuevo en un momento 🔄"
-
-    async def _get_available_slots_from_calendar(self, calendar_id: str, servicio: dict, dias_adelante: int = 7) -> list:
-        """Obtener slots disponibles de Google Calendar"""
-        try:
-            if not self.google_credentials:
-                print("❌ No hay credenciales de Google configuradas")
-                return []
-            
-            # Configurar credenciales
-            credentials_info = json.loads(self.google_credentials)
-            credentials = service_account.Credentials.from_service_account_info(credentials_info)
-            service = build('calendar', 'v3', credentials=credentials)
-            
-            # Rangos de tiempo
-            now = datetime.now(self.tz)
-            end_time = now + timedelta(days=dias_adelante)
-            
-            # Obtener eventos existentes
-            events_result = service.events().list(
-                calendarId=calendar_id,
-                timeMin=now.isoformat(),
-                timeMax=end_time.isoformat(),
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-            
-            events = events_result.get('items', [])
-            
-            # Generar slots disponibles
-            available_slots = []
-            duracion_minutos = servicio['duracion']
-            
-            for day_offset in range(dias_adelante):
-                check_date = now + timedelta(days=day_offset)
-                
-                # Verificar si es día laborable para este servicio
-                if not self._is_working_day(check_date, servicio):
-                    continue
-                
-                # Obtener horarios de trabajo
-                working_hours = self._get_working_hours_for_day(check_date, servicio)
-                if not working_hours:
-                    continue
-                
-                # Generar slots posibles
-                current_time = check_date.replace(
-                    hour=working_hours['start'].hour,
-                    minute=working_hours['start'].minute,
-                    second=0,
-                    microsecond=0
-                )
-                
-                end_work = check_date.replace(
-                    hour=working_hours['end'].hour,
-                    minute=working_hours['end'].minute,
-                    second=0,
-                    microsecond=0
-                )
-                
-                # 🔧 NUEVO: Si es hoy, ajustar al próximo horario válido
-                if check_date.date() == now.date():
-                    min_start = now + timedelta(hours=1)
-                    if current_time < min_start:
-                        # 🔧 REDONDEAR al próximo horario válido
-                        current_time = self._round_to_next_valid_time(min_start, servicio)
-                
-                # Generar slots
-                while current_time + timedelta(minutes=duracion_minutos) <= end_work:
-                    # Verificar si el slot está libre
-                    slot_end = current_time + timedelta(minutes=duracion_minutos)
-                    
-                    is_free = True
-                    for event in events:
-                        if not isinstance(event, dict):
-                            continue
-                        event_start_info = event.get('start', {})
-                        event_end_info = event.get('end', {})
-                        if not event_start_info or not event_end_info:
-                            continue
-                        try:
-                            if 'dateTime' in event_start_info:
-                                event_start_str = event_start_info['dateTime']
-                            elif 'date' in event_start_info:
-                                event_start_str = event_start_info['date'] + 'T00:00:00'
-                            else:
-                                continue
-                            if 'dateTime' in event_end_info:
-                                event_end_str = event_end_info['dateTime']
-                            elif 'date' in event_end_info:
-                                event_end_str = event_end_info['date'] + 'T23:59:59'
-                            else:
-                                continue
-                            event_start = datetime.fromisoformat(event_start_str.replace('Z', '+00:00'))
-                            event_end = datetime.fromisoformat(event_end_str.replace('Z', '+00:00'))
-                            event_start = event_start.astimezone(self.tz)
-                            event_end = event_end.astimezone(self.tz)
-                            if (current_time < event_end and slot_end > event_start):
-                                is_free = False
-                                break
-                        except (ValueError, TypeError) as e:
-                            print(f"⚠️ Error parseando evento: {e}")
-                            continue
-                    if is_free:
-                        available_slots.append({
-                            'fecha': current_time,
-                            'fin': slot_end
-                        })
-                    increment = self._get_time_increment(servicio)
-                    current_time += timedelta(minutes=increment)
-            return available_slots
-        except Exception as e:
-            print(f"❌ Error consultando Google Calendar: {e}")
-            return self._generate_mock_slots(servicio, dias_adelante)
-
-    def _round_to_next_valid_time(self, datetime_obj: datetime, servicio: dict) -> datetime:
-        """🔧 CORREGIDA: Redondear según configuración real de la BD"""
-        solo_horas_exactas = servicio.get('solo_horas_exactas', False)
-        intervalo_entre_turnos = servicio.get('intervalo_entre_turnos', 15)
-        current_minute = datetime_obj.minute
-        next_hour = datetime_obj.hour
-        if solo_horas_exactas:
-            # Solo horarios en punto (00) y media (30)
-            if current_minute < 30:
-                next_minute = 30
-            else:
-                next_minute = 0
-                next_hour += 1
-        else:
-            next_minute = ((current_minute // intervalo_entre_turnos) + 1) * intervalo_entre_turnos
-            if next_minute >= 60:
-                next_minute = 0
-                next_hour += 1
-        rounded_time = datetime_obj.replace(
-            hour=next_hour,
-            minute=next_minute,
-            second=0,
-            microsecond=0
-        )
-        print(f"🔧 DEBUG: Redondeando {datetime_obj.strftime('%H:%M')} → {rounded_time.strftime('%H:%M')}")
-        print(f"🔧 DEBUG: Config: Solo horas exactas={solo_horas_exactas}, Intervalo={intervalo_entre_turnos} min")
-        return rounded_time
-
-    def _get_business_context(self, tenant: Tenant, db: Session) -> dict:
-        """Obtener contexto del negocio: servicios, empleados, configuración general"""
-        servicios = db.query(Servicio).filter(Servicio.tenant_id == tenant.id).all()
-        empleados = db.query(Empleado).filter(Empleado.tenant_id == tenant.id).all()
-        return {
-            "servicios": [
-                {
-                    "id": s.id,
-                    "nombre": s.nombre,
-                    "duracion": s.duracion,
-                    "precio": s.precio,
-                    "solo_horas_exactas": getattr(s, "solo_horas_exactas", False),
-                    "intervalo_entre_turnos": getattr(s, "intervalo_entre_turnos", 15),
-                    "calendar_id": getattr(s, "calendar_id", None),
-                    "es_informativo": getattr(s, "es_informativo", False),
-                    "mensaje_personalizado": getattr(s, "mensaje_personalizado", "")
-                }
-                for s in servicios
-            ],
-            "empleados": [
-                {
-                    "id": e.id,
-                    "nombre": e.nombre,
-                    "calendar_id": getattr(e, "calendar_id", None)
-                }
-                for e in empleados
-            ],
-            "tiene_empleados": len(empleados) > 0,
-            "calendar_id_general": getattr(tenant, "calendar_id_general", None)
-        }
-    
-    async def crear_reserva(self, servicio_id, fecha_hora, empleado_id, nombre_cliente, telefono, db: Session):
-        try:
-            fecha_dt = datetime.fromisoformat(fecha_hora)
-            # Verificar duplicados
-            reserva_existente = db.query(Reserva).filter(
-                Reserva.servicio == servicio_id,
-                Reserva.fecha_reserva == fecha_dt,
-                Reserva.estado == "activo"
-            ).first()
-            if reserva_existente:
-                return "❌ Ya existe una reserva activa para ese horario. Elige otro turno."
-
-            servicio = db.query(Servicio).filter(Servicio.id == servicio_id).first()
-            empleado = db.query(Empleado).filter(Empleado.id == empleado_id).first() if empleado_id else None
-            fake_id = generar_fake_id()
-
-            # Crear evento en Google Calendar
-            event_id = ""
-            try:
-                if self.google_credentials:
-                    credentials_info = json.loads(self.google_credentials)
-                    credentials = service_account.Credentials.from_service_account_info(credentials_info)
-                    service_gc = build('calendar', 'v3', credentials=credentials)
-                    calendar_id = empleado.calendar_id if empleado and empleado.calendar_id else servicio.calendar_id
-                    if not calendar_id:
-                        calendar_id = 'primary'
-                    event = {
-                        'summary': f"{servicio.nombre} - {nombre_cliente}",
-                        'description': f"Reserva generada por el sistema para {nombre_cliente} (tel: {telefono})",
-                        'start': {
-                            'dateTime': fecha_dt.isoformat(),
-                            'timeZone': str(self.tz)
-                        },
-                        'end': {
-                            'dateTime': (fecha_dt + timedelta(minutes=servicio.duracion)).isoformat(),
-                            'timeZone': str(self.tz)
-                        },
-                    }
-                    created_event = service_gc.events().insert(calendarId=calendar_id, body=event).execute()
-                    event_id = created_event.get('id', '')
-            except Exception as e:
-                print(f"❌ Error creando evento en Google Calendar: {e}")
-
-            nueva_reserva = Reserva(
-                fake_id=fake_id,
-                event_id=event_id,
-                empresa=servicio.tenant.nombre,
-                empleado_id=empleado.id if empleado else None,
-                empleado_nombre=empleado.nombre if empleado else "Sistema",
-                empleado_calendar_id=empleado.calendar_id if empleado else servicio.calendar_id,
-                cliente_nombre=nombre_cliente,
-                cliente_telefono=telefono,
-                fecha_reserva=fecha_dt,
-                servicio=servicio.nombre,
-                estado="activo",
-                cantidad=1
-            )
-            db.add(nueva_reserva)
-            db.commit()
-            return f"✅ Reserva confirmada para *{servicio.nombre}* el {fecha_dt.strftime('%A %d/%m a las %H:%M')}."
-        except Exception as e:
-            print(f"❌ Error creando reserva: {e}")
-            return "😵 No pude confirmar la reserva. Intenta de nuevo."
-    
-    async def cancelar_reserva(self, codigo_reserva: str, telefono: str, db: Session) -> str:
-        """Cancelar una reserva existente por código"""
-        try:
-            reserva = db.query(Reserva).filter(
-                Reserva.fake_id == codigo_reserva,
-                Reserva.cliente_telefono == telefono,
-                Reserva.estado == "activo"
-            ).first()
-            if not reserva:
-                return "❌ No encontré la reserva activa con ese código."
-
-            # Eliminar evento en Google Calendar si existe
-            try:
-                if self.google_credentials and reserva.event_id:
-                    credentials_info = json.loads(self.google_credentials)
-                    credentials = service_account.Credentials.from_service_account_info(credentials_info)
-                    service_gc = build('calendar', 'v3', credentials=credentials)
-                    calendar_id = reserva.empleado_calendar_id or reserva.empresa or 'primary'
-                    service_gc.events().delete(calendarId=calendar_id, eventId=reserva.event_id).execute()
-            except Exception as e:
-                print(f"❌ Error eliminando evento en Google Calendar: {e}")
-
-            reserva.estado = "cancelado"
-            db.commit()
-            return f"✅ Reserva cancelada correctamente.\nCódigo: {codigo_reserva}"
-        except Exception as e:
-            print(f"❌ Error cancelando reserva: {e}")
-            return "😵 No pude cancelar la reserva. Intenta de nuevo."
-    
     def _format_servicios_with_real_ids(self, servicios: list) -> str:
         """
         Devuelve una lista de servicios con sus IDs reales para mostrar al usuario.
@@ -957,83 +629,3 @@ class AIConversationManager:
     def mostrar_servicios(self, business_context: dict) -> str:
         """Devuelve la lista de servicios disponibles para mostrar al cliente."""
         return f"✨ Servicios disponibles:\n{self._format_servicios_with_real_ids(business_context['servicios'])}\n\n💬 Escribe el número o nombre del servicio que te interesa."
-
-    def _is_working_day(self, date_obj, servicio):
-        """
-        Devuelve True si el día es laborable para el servicio según la configuración en la base de datos.
-        Usa el campo working_hours si está definido, si no, usa días por defecto.
-        """
-        dia_nombre = self._traducir_dia(date_obj.strftime('%A'))
-        # Si el servicio tiene working_hours (JSON), úsalo
-        dias_laborables = None
-        wh = getattr(servicio, 'working_hours', None)
-        if wh:
-            try:
-                wh_data = json.loads(wh) if isinstance(wh, str) else wh
-                dias_laborables = [d['dia'] for d in wh_data if d.get('activo', True)]
-            except Exception:
-                pass
-        if not dias_laborables:
-            dias_laborables = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes']
-        return dia_nombre in dias_laborables
-
-    def _get_working_hours_for_day(self, date_obj, servicio):
-        """
-        Devuelve un diccionario con la hora de inicio y fin del servicio para el día dado.
-        Prioriza el campo working_hours (JSON) del servicio, luego Tenant, luego valores por defecto.
-        """
-        dia_nombre = self._traducir_dia(date_obj.strftime('%A'))
-        hora_inicio = 9
-        hora_fin = 18
-        wh = getattr(servicio, 'working_hours', None)
-        if wh:
-            try:
-                wh_data = json.loads(wh) if isinstance(wh, str) else wh
-                for d in wh_data:
-                    if self._traducir_dia(d.get('dia', '')) == dia_nombre and d.get('activo', True):
-                        hora_inicio = int(d.get('hora_inicio', hora_inicio))
-                        hora_fin = int(d.get('hora_fin', hora_fin))
-                        break
-            except Exception:
-                pass
-        else:
-            # Si el servicio no tiene working_hours, podrías consultar Tenant si lo necesitas
-            pass
-        return {
-            'start': date_obj.replace(hour=hora_inicio, minute=0, second=0, microsecond=0),
-            'end': date_obj.replace(hour=hora_fin, minute=0, second=0, microsecond=0)
-        }
-
-    def _generate_mock_slots(self, servicio, dias_adelante):
-        """
-        Genera slots simulados si falla la consulta a Google Calendar.
-        Usa la configuración real de working_hours y duración del servicio.
-        """
-        from datetime import datetime, timedelta
-        slots = []
-        now = datetime.now(self.tz)
-        duracion = getattr(servicio, 'duracion', 60)
-        wh = getattr(servicio, 'working_hours', None)
-        for i in range(dias_adelante):
-            fecha = now + timedelta(days=i)
-            dia_nombre = self._traducir_dia(fecha.strftime('%A'))
-            hora_inicio = 9
-            hora_fin = 18
-            activo = True
-            if wh:
-                try:
-                    wh_data = json.loads(wh) if isinstance(wh, str) else wh
-                    for d in wh_data:
-                        if self._traducir_dia(d.get('dia', '')) == dia_nombre:
-                            activo = d.get('activo', True)
-                            hora_inicio = int(d.get('hora_inicio', hora_inicio))
-                            hora_fin = int(d.get('hora_fin', hora_fin))
-                            break
-                except Exception:
-                    pass
-            if not activo:
-                continue
-            for hora in range(hora_inicio, hora_fin, duracion // 60):
-                slot_time = fecha.replace(hour=hora, minute=0, second=0, microsecond=0)
-                slots.append({'fecha': slot_time, 'fin': slot_time + timedelta(minutes=duracion)})
-        return slots
