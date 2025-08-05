@@ -659,7 +659,8 @@ class AIConversationManager:
                     "intervalo_entre_turnos": getattr(s, "intervalo_entre_turnos", 15),
                     "calendar_id": getattr(s, "calendar_id", None),
                     "es_informativo": getattr(s, "es_informativo", False),
-                    "mensaje_personalizado": getattr(s, "mensaje_personalizado", "")
+                    "mensaje_personalizado": getattr(s, "mensaje_personalizado", ""),
+                    "working_hours": _parse_working_hours(getattr(s, "working_hours", None))
                 }
                 for s in servicios
             ],
@@ -667,10 +668,21 @@ class AIConversationManager:
                 {
                     "id": e.id,
                     "nombre": e.nombre,
-                    "calendar_id": getattr(e, "calendar_id", None)
+                    "calendar_id": getattr(e, "calendar_id", None),
+                    "working_hours": _parse_working_hours(getattr(e, "working_hours", None))
                 }
                 for e in empleados
             ],
             "tiene_empleados": len(empleados) > 0,
             "calendar_id_general": getattr(tenant, "calendar_id_general", None)
         }
+
+def _parse_working_hours(wh):
+    if wh is None:
+        return None
+    if isinstance(wh, str):
+        try:
+            return json.loads(wh)
+        except Exception:
+            return None
+    return wh
