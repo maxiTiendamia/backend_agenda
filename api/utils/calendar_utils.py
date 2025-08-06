@@ -231,7 +231,7 @@ def get_available_slots(
     return available
 
 def get_available_slots_for_service(
-    servicio,  # 🆕 Objeto Servicio completo en lugar de parámetros separados
+    servicio,  # Objeto Servicio completo
     intervalo_entre_turnos=20,
     max_days=14,
     max_turnos=25,
@@ -240,11 +240,11 @@ def get_available_slots_for_service(
     """
     Obtiene slots disponibles para un servicio específico usando su calendario y horarios
     """
-    if not servicio["calendar_id"]:
-        print(f"❌ Servicio {servicio['nombre']} no tiene calendar_id configurado")
+    if not servicio.calendar_id:
+        print(f"❌ Servicio {servicio.nombre} no tiene calendar_id configurado")
         return []
-    if not servicio.get("working_hours"):
-        print(f"❌ Servicio {servicio['nombre']} no tiene working_hours configurado")
+    if not servicio.working_hours:
+        print(f"❌ Servicio {servicio.nombre} no tiene working_hours configurado")
         return []
 
     service = build_service(credentials_json)
@@ -253,7 +253,7 @@ def get_available_slots_for_service(
 
     # Obtener eventos ocupados del calendario del servicio
     events_result = service.events().list(
-        calendarId=servicio["calendar_id"],
+        calendarId=servicio.calendar_id,
         timeMin=now.astimezone(datetime.timezone.utc).isoformat(),
         timeMax=end_date.astimezone(datetime.timezone.utc).isoformat(),
         singleEvents=True,
@@ -269,7 +269,7 @@ def get_available_slots_for_service(
         end_date_only = e['end'].get('date')
         if start_datetime and end_datetime:
             start_dt = datetime.datetime.fromisoformat(start_datetime.replace('Z', '+00:00'))
-            end_dt = datetime.datetime.fromisoformat(end_datetime.replace('Z', '+00:00'))
+            end_dt = datetime.datetime.fromisoformat(endDatetime.replace('Z', '+00:00'))
             if start_dt.tzinfo is None:
                 start_dt = start_dt.replace(tzinfo=URUGUAY_TZ)
             else:
@@ -286,15 +286,13 @@ def get_available_slots_for_service(
             busy.append((start_dt, end_dt))
             print(f"📅 Evento de todo el día detectado: {start_date_only} - Bloqueando día completo")
 
-    working_hours_json = servicio.get("working_hours")
-    if isinstance(working_hours_json, str):
+    working_hours = servicio.working_hours
+    if isinstance(working_hours, str):
         try:
-            working_hours = json.loads(working_hours_json)
-        except json.JSONDecodeError:
-            print(f"❌ Error parseando working_hours para servicio {servicio['nombre']}")
+            working_hours = json.loads(working_hours)
+        except Exception:
+            print(f"❌ Error parseando working_hours para servicio {servicio.nombre}")
             return []
-    else:
-        working_hours = working_hours_json
 
     dias_es_en = {
         'lunes': 'monday',
@@ -328,8 +326,8 @@ def get_available_slots_for_service(
     turnos_generados = 0
     current_date = now.date()
 
-    print(f"🔍 Generando slots para servicio: {servicio['nombre']}")
-    print(f"🔍 Duración: {servicio['duracion']} min, Horas exactas: {servicio.get('solo_horas_exactas', False)}")
+    print(f"🔍 Generando slots para servicio: {servicio.nombre}")
+    print(f"🔍 Duración: {servicio.duracion} min, Horas exactas: {getattr(servicio, 'solo_horas_exactas', False)}")
     print(f"🔍 Horarios normalizados: {working_hours}")
 
     while current_date < end_date.date() and turnos_generados < max_turnos:
@@ -353,7 +351,6 @@ def get_available_slots_for_service(
                 
                 try:
                     start_hour = datetime.datetime.combine(current_date, datetime.datetime.strptime(from_str, '%H:%M').time()).replace(tzinfo=URUGUAY_TZ)
-                    
                     if to_str == '00:00':
                         end_hour = datetime.datetime.combine(current_date, datetime.time(23, 59)).replace(tzinfo=URUGUAY_TZ)
                     else:
@@ -362,27 +359,18 @@ def get_available_slots_for_service(
                             end_hour = datetime.datetime.combine(current_date + datetime.timedelta(days=1), end_time).replace(tzinfo=URUGUAY_TZ)
                         else:
                             end_hour = datetime.datetime.combine(current_date, end_time).replace(tzinfo=URUGUAY_TZ)
-                    
-                    print(f"🔍 Horario calculado: {start_hour.strftime('%d/%m %H:%M')} - {end_hour.strftime('%d/%m %H:%M')}")
-                    
                 except ValueError as e:
                     print(f"❌ Error al parsear horarios: {e}")
                     continue
-                
                 # Si es hoy y el horario de inicio ya pasó
                 if current_date == now.date() and start_hour < now + datetime.timedelta(minutes=20):
                     slot_start = now + datetime.timedelta(minutes=20)
                     if slot_start < start_hour:
                         slot_start = start_hour
-                    
-                    if servicio.solo_horas_exactas:
-                        if slot_start.minute <= 30:
-                            if slot_start.minute == 0:
-                                pass
-                            else:
-                                slot_start = slot_start.replace(minute=30, second=0, microsecond=0)
-                        else:
-                            slot_start = slot_start.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
+                    if getattr(servicio, 'solo_horas_exactas', False):
+                        minutos = slot_start.minute
+                        if minutos != 0:
+                            slot_start = slot_start.replace(minute=0, second=0) + datetime.timedelta(hours=1)
                 else:
                     slot_start = start_hour
 
@@ -394,39 +382,21 @@ def get_available_slots_for_service(
 
                 while slot_start + datetime.timedelta(minutes=servicio.duracion) <= slot_end:
                     if current_date == now.date() and slot_start < now + datetime.timedelta(minutes=20):
-                        if servicio.solo_horas_exactas:
-                            if slot_start.minute == 0:
-                                slot_start = slot_start.replace(minute=30)
-                            else:
-                                slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                        else:
-                            slot_start += delta
+                        slot_start += delta
                         continue
-
                     slot_final = slot_start + datetime.timedelta(minutes=servicio.duracion)
-                    
                     if slot_final > slot_end:
                         break
-                    
                     overlap_count = sum(
                         b_start < slot_final and b_end > slot_start for b_start, b_end in busy
                     )
-                    
                     if overlap_count >= (servicio.cantidad or 1):
-                        if servicio.solo_horas_exactas:
-                            if slot_start.minute == 0:
-                                slot_start = slot_start.replace(minute=30)
-                            else:
-                                slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                        else:
-                            slot_start += delta
+                        slot_start += delta
                         continue
-
                     hay_cerca = any(
                         0 < (slot_start - b_end).total_seconds() / 60 < intervalo_entre_turnos
                         for b_start, b_end in busy if b_end <= slot_start
                     )
-
                     if overlap_count < (servicio.cantidad or 1) and not hay_cerca:
                         available.append(slot_start)
                         turnos_generados += 1
@@ -435,126 +405,13 @@ def get_available_slots_for_service(
                         if turnos_generados >= max_turnos:
                             print(f"🔹 Se alcanzó el máximo de turnos: {max_turnos}")
                             break
-
-                    if servicio.solo_horas_exactas:
-                        if slot_start.minute == 0:
-                            slot_start = slot_start.replace(minute=30)
-                        else:
-                            slot_start = slot_start.replace(minute=0) + datetime.timedelta(hours=1)
-                    else:
-                        slot_start += delta
-                
+                    slot_start += delta
                 print(f"🔍 Slots encontrados en este período: {slots_encontrados_periodo}")
-                
                 if turnos_generados >= max_turnos:
                     break
         else:
             print(f"❌ No hay horarios definidos para {day_str}")
-            
         current_date += datetime.timedelta(days=1)
 
     print(f"🔍 Total de turnos disponibles encontrados para {servicio.nombre}: {len(available)}")
     return available
-
-def create_event(calendar_id, slot_dt, user_phone, service_account_info, duration_minutes, client_service):
-    service = build_service(service_account_info)
-    start_time = slot_dt.isoformat()
-    end_time = (slot_dt + datetime.timedelta(minutes=duration_minutes)).isoformat()
-
-    event = {
-        'summary': client_service,
-        'description': f'Reservado automáticamente para {user_phone}',
-        'start': {
-            'dateTime': start_time,
-            'timeZone': 'America/Montevideo',
-        },
-        'end': {
-            'dateTime': end_time,
-            'timeZone': 'America/Montevideo',
-        },
-    }
-
-    try:
-        created = service.events().insert(calendarId=calendar_id, body=event).execute()
-        print("✅ Evento creado:", created)
-        return created.get('id')
-    except Exception as e:
-        print("❌ Error al crear evento:", e)
-        raise
-
-def cancelar_evento_google(calendar_id, reserva_id, service_account_info):
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    try:
-        # Si service_account_info es string, conviértelo a dict
-        if isinstance(service_account_info, str):
-            import json
-            service_account_info = json.loads(service_account_info)
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_info,
-            scopes=["https://www.googleapis.com/auth/calendar"]
-        )
-        service = build("calendar", "v3", credentials=credentials)
-        service.events().delete(
-            calendarId=calendar_id,
-            eventId=reserva_id
-        ).execute()
-        return True
-    except Exception as e:
-        print("Error al cancelar evento:", e)
-        return False
-
-def create_event_for_service(servicio, slot_dt, user_phone, service_account_info, client_name):
-    """
-    Crea un evento específico para un servicio en Google Calendar
-    🔥 SOLUCIÓN: Remover la sección de attendees que causa el error 403
-    """
-    try:
-        # Crear credenciales
-        if isinstance(service_account_info, str):
-            credentials = service_account.Credentials.from_service_account_info(
-                json.loads(service_account_info),
-                scopes=['https://www.googleapis.com/auth/calendar']
-            )
-        else:
-            credentials = service_account.Credentials.from_service_account_info(
-                service_account_info,
-                scopes=['https://www.googleapis.com/auth/calendar']
-            )
-        
-        service = build('calendar', 'v3', credentials=credentials)
-        
-        # Configurar zona horaria
-        uruguay_tz = pytz.timezone('America/Montevideo')
-        
-        # Asegurar que slot_dt tenga zona horaria
-        if slot_dt.tzinfo is None:
-            slot_dt = uruguay_tz.localize(slot_dt)
-        
-        # Calcular fin del evento
-        end_time = slot_dt + timedelta(minutes=servicio["duracion"])
-        event = {
-            'summary': f'{servicio["nombre"]} - {client_name}',
-            'description': f'Cliente: {client_name}\nTeléfono: {user_phone}\nServicio: {servicio["nombre"]}\nDuración: {servicio["duracion"]} minutos\nPrecio: ${servicio.get("precio", "")}',
-            'start': {
-                'dateTime': slot_dt.isoformat(),
-                'timeZone': 'America/Montevideo',
-            },
-            'end': {
-                'dateTime': end_time.isoformat(),
-                'timeZone': 'America/Montevideo',
-            },
-        }
-        calendar_id = servicio["calendar_id"]
-        if not calendar_id:
-            raise Exception("No hay calendar_id configurado para este servicio")
-        event_result = service.events().insert(
-            calendarId=calendar_id,
-            body=event
-        ).execute()
-        print(f"✅ Evento creado para servicio: {event_result.get('id')} - {client_name} - {slot_dt.strftime('%d/%m %H:%M')}")
-        return event_result.get('id')
-        
-    except Exception as e:
-        print(f"❌ Error creando evento para servicio: {e}")
-        raise e

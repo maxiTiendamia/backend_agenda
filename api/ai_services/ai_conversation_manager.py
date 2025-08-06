@@ -25,19 +25,19 @@ class AIConversationManager:
         if name == "buscar_horarios_servicio":
             # Buscar horarios disponibles usando calendar_utils
             servicio_id = args["servicio_id"]
-            servicio = next((s for s in business_context["servicios"] if s["id"] == servicio_id), None)
+            servicio = db.query(Servicio).filter(Servicio.id == servicio_id).first()
             if not servicio:
                 return "❌ Servicio no encontrado."
             slots = calendar_utils.get_available_slots_for_service(
                 servicio,
-                intervalo_entre_turnos=servicio.get("intervalo_entre_turnos", 15),
+                intervalo_entre_turnos=getattr(servicio, "intervalo_entre_turnos", 15),
                 max_days=7,
                 max_turnos=10,
                 credentials_json=self.google_credentials
             )
             if not slots:
-                return f"😔 No hay horarios disponibles para {servicio['nombre']} esta semana."
-            respuesta = f"✨ Horarios disponibles para {servicio['nombre']}\n"
+                return f"😔 No hay horarios disponibles para {servicio.nombre} esta semana."
+            respuesta = f"✨ Horarios disponibles para {servicio.nombre}\n"
             for i, slot in enumerate(slots[:8], 1):
                 hora_str = slot['fecha'].strftime('%d/%m %H:%M')
                 respuesta += f"{i}. {hora_str}\n"
@@ -45,7 +45,7 @@ class AIConversationManager:
             return respuesta
         elif name == "crear_reserva":
             servicio_id = args["servicio_id"]
-            servicio = next((s for s in business_context["servicios"] if s["id"] == servicio_id), None)
+            servicio = db.query(Servicio).filter(Servicio.id == servicio_id).first()
             if not servicio:
                 return "❌ Servicio no encontrado."
             fecha_hora = args["fecha_hora"]
@@ -59,7 +59,7 @@ class AIConversationManager:
                     self.google_credentials,
                     nombre_cliente
                 )
-                return f"✅ Reserva confirmada para {servicio['nombre']} el {slot_dt.strftime('%d/%m %H:%M')} a nombre de {nombre_cliente}."
+                return f"✅ Reserva confirmada para {servicio.nombre} el {slot_dt.strftime('%d/%m %H:%M')} a nombre de {nombre_cliente}."
             except Exception as e:
                 return f"❌ Error al crear la reserva: {e}"
         elif name == "cancelar_reserva":
@@ -412,10 +412,13 @@ class AIConversationManager:
                 servicio_guardado_dict = next((s for s in business_context["servicios"] if s["id"] == servicio_guardado["id"]), None)
                 if not servicio_guardado_dict:
                     return "❌ Servicio no disponible. Intenta de nuevo."
-                # calendar_utils debe aceptar dicts, no modelos
+                # Buscar el modelo Servicio por ID y pasar el modelo, no un dict
+                servicio_modelo = db.query(Servicio).filter(Servicio.id == servicio_guardado["id"]).first()
+                if not servicio_modelo:
+                    return "❌ Servicio no disponible. Intenta de nuevo."
                 slots = calendar_utils.get_available_slots_for_service(
-                    servicio_guardado_dict,
-                    intervalo_entre_turnos=servicio_guardado_dict.get("intervalo_entre_turnos", 15),
+                    servicio_modelo,
+                    intervalo_entre_turnos=getattr(servicio_modelo, "intervalo_entre_turnos", 15),
                     max_days=7,
                     max_turnos=10,
                     credentials_json=self.google_credentials
@@ -649,30 +652,8 @@ class AIConversationManager:
         servicios = db.query(Servicio).filter(Servicio.tenant_id == tenant.id).all()
         empleados = db.query(Empleado).filter(Empleado.tenant_id == tenant.id).all()
         return {
-            "servicios": [
-                {
-                    "id": s.id,
-                    "nombre": s.nombre,
-                    "duracion": s.duracion,
-                    "precio": s.precio,
-                    "solo_horas_exactas": getattr(s, "solo_horas_exactas", False),
-                    "intervalo_entre_turnos": getattr(s, "intervalo_entre_turnos", 15),
-                    "calendar_id": getattr(s, "calendar_id", None),
-                    "es_informativo": getattr(s, "es_informativo", False),
-                    "mensaje_personalizado": getattr(s, "mensaje_personalizado", ""),
-                    "working_hours": _parse_working_hours(getattr(s, "working_hours", None))
-                }
-                for s in servicios
-            ],
-            "empleados": [
-                {
-                    "id": e.id,
-                    "nombre": e.nombre,
-                    "calendar_id": getattr(e, "calendar_id", None),
-                    "working_hours": _parse_working_hours(getattr(e, "working_hours", None))
-                }
-                for e in empleados
-            ],
+            "servicios": servicios,
+            "empleados": empleados,
             "tiene_empleados": len(empleados) > 0,
             "calendar_id_general": getattr(tenant, "calendar_id_general", None)
         }
