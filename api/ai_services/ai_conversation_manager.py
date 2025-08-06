@@ -508,25 +508,26 @@ class AIConversationManager:
 
     def _detectar_dia_mensaje(self, mensaje: str) -> str:
         """🔧 CORREGIDO: Detectar qué día quiere el usuario"""
-        mensaje = mensaje.lower().replace('para el ', '').replace('el ', '').strip()
+        mensaje_original = mensaje.lower().strip()
         
-        if any(word in mensaje for word in ['hoy', 'today']):
+        # 🔧 MEJOR LÓGICA: Buscar patrones específicos sin modificar el mensaje globalmente
+        if any(word in mensaje_original for word in ['hoy', 'today']):
             return 'hoy'
-        elif any(word in mensaje for word in ['mañana', 'tomorrow']):
+        elif any(word in mensaje_original for word in ['mañana', 'tomorrow']):
             return 'mañana'
-        elif any(word in mensaje for word in ['lunes', 'monday']):
+        elif any(word in mensaje_original for word in ['lunes', 'monday']):
             return 'lunes'
-        elif any(word in mensaje for word in ['martes', 'tuesday']):
+        elif any(word in mensaje_original for word in ['martes', 'tuesday']):
             return 'martes'
-        elif any(word in mensaje for word in ['miércoles', 'miercoles', 'wednesday']):
+        elif any(word in mensaje_original for word in ['miércoles', 'miercoles', 'wednesday']):
             return 'miercoles'
-        elif any(word in mensaje for word in ['jueves', 'thursday']):
+        elif any(word in mensaje_original for word in ['jueves', 'thursday']):
             return 'jueves'
-        elif any(word in mensaje for word in ['viernes', 'vienres', 'friday']):  # 🔧 CORREGIR typo común
+        elif any(word in mensaje_original for word in ['viernes', 'vienres', 'friday']):  # 🔧 CORREGIR typo común
             return 'viernes'
-        elif any(word in mensaje for word in ['sábado', 'sabado', 'saturday']):
+        elif any(word in mensaje_original for word in ['sábado', 'sabado', 'saturday']):
             return 'sabado'
-        elif any(word in mensaje for word in ['domingo', 'sunday']):
+        elif any(word in mensaje_original for word in ['domingo', 'sunday']):
             return 'domingo'
         
         return None
