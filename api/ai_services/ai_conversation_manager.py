@@ -387,11 +387,14 @@ class AIConversationManager:
                     nombre_cliente = mensaje.strip()
                     # Llamar a la función de calendar_utils para crear la reserva
                     from api.utils import calendar_utils
-                    servicio = servicio_guardado
+                    # Obtener el objeto modelo Servicio desde la base de datos
+                    servicio_modelo = db.query(Servicio).filter(Servicio.id == servicio_guardado['id']).first()
+                    if not servicio_modelo:
+                        return "❌ Servicio no disponible. Intenta de nuevo."
                     slot_dt = datetime.fromisoformat(slot_seleccionado['fecha_hora'])
                     try:
                         event_id = calendar_utils.create_event_for_service(
-                            servicio,
+                            servicio_modelo,
                             slot_dt,
                             telefono,
                             self.google_credentials,
@@ -399,10 +402,10 @@ class AIConversationManager:
                         )
                         # Limpiar selección en Redis
                         self.redis_client.delete(f"servicio_seleccionado:{telefono}")
-                        self.redis_client.delete(f"slots:{telefono}:{servicio['id']}")
+                        self.redis_client.delete(f"slots:{telefono}:{servicio_guardado['id']}")
                         self.redis_client.delete(f"slot_seleccionado:{telefono}")
                         return (
-                            f"✅ Reserva confirmada para *{servicio['nombre']}*"
+                            f"✅ Reserva confirmada para *{servicio_guardado['nombre']}*"
                             f"\n📅 {slot_dt.strftime('%A %d/%m %H:%M')}"
                             f"\n👤 A nombre de: {nombre_cliente}\n\n¡Gracias por reservar! 😊"
                         )
@@ -658,8 +661,31 @@ class AIConversationManager:
     def _get_business_context(self, tenant, db):
         """Obtener contexto del negocio: servicios y empleados desde models.py"""
         from api.app.models import Servicio, Empleado
-        servicios = db.query(Servicio).filter(Servicio.tenant_id == tenant.id).all()
-        empleados = db.query(Empleado).filter(Empleado.tenant_id == tenant.id).all()
+        servicios_db = db.query(Servicio).filter(Servicio.tenant_id == tenant.id).all()
+        empleados_db = db.query(Empleado).filter(Empleado.tenant_id == tenant.id).all()
+        
+        # Convertir objetos a diccionarios
+        servicios = []
+        for s in servicios_db:
+            servicios.append({
+                "id": s.id,
+                "nombre": s.nombre,
+                "precio": getattr(s, "precio", 0),
+                "duracion": getattr(s, "duracion", 60),
+                "es_informativo": getattr(s, "es_informativo", False),
+                "mensaje_personalizado": getattr(s, "mensaje_personalizado", ""),
+                "intervalo_entre_turnos": getattr(s, "intervalo_entre_turnos", 15)
+            })
+        
+        empleados = []
+        for e in empleados_db:
+            empleados.append({
+                "id": e.id,
+                "nombre": e.nombre,
+                "email": getattr(e, "email", ""),
+                "telefono": getattr(e, "telefono", "")
+            })
+        
         return {
             "servicios": servicios,
             "empleados": empleados,

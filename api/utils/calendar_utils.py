@@ -2,8 +2,6 @@ import datetime
 import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-# 🔥 CAMBIAR A IMPORT ABSOLUTO
-from app.models import Tenant
 from datetime import timedelta
 import pytz
 
@@ -269,7 +267,7 @@ def get_available_slots_for_service(
         end_date_only = e['end'].get('date')
         if start_datetime and end_datetime:
             start_dt = datetime.datetime.fromisoformat(start_datetime.replace('Z', '+00:00'))
-            end_dt = datetime.datetime.fromisoformat(endDatetime.replace('Z', '+00:00'))
+            end_dt = datetime.datetime.fromisoformat(end_datetime.replace('Z', '+00:00'))
             if start_dt.tzinfo is None:
                 start_dt = start_dt.replace(tzinfo=URUGUAY_TZ)
             else:
@@ -415,3 +413,54 @@ def get_available_slots_for_service(
 
     print(f"🔍 Total de turnos disponibles encontrados para {servicio.nombre}: {len(available)}")
     return available
+
+def create_event_for_service(servicio, fecha_hora, telefono, credentials_json, nombre_cliente):
+    """
+    Crear un evento en Google Calendar para un servicio específico
+    """
+    if not servicio.calendar_id:
+        raise Exception(f"Servicio {servicio.nombre} no tiene calendar_id configurado")
+    
+    service = build_service(credentials_json)
+    
+    # Calcular fecha de inicio y fin
+    start_time = fecha_hora
+    end_time = start_time + datetime.timedelta(minutes=servicio.duracion)
+    
+    # Crear el evento
+    event = {
+        'summary': f'{servicio.nombre} - {nombre_cliente}',
+        'description': f'Reserva para {nombre_cliente}\nTeléfono: {telefono}\nServicio: {servicio.nombre}',
+        'start': {
+            'dateTime': start_time.isoformat(),
+            'timeZone': 'America/Montevideo',
+        },
+        'end': {
+            'dateTime': end_time.isoformat(),
+            'timeZone': 'America/Montevideo',
+        },
+        'attendees': [
+            {'email': telefono + '@whatsapp.com', 'displayName': nombre_cliente}
+        ]
+    }
+    
+    try:
+        event_result = service.events().insert(calendarId=servicio.calendar_id, body=event).execute()
+        print(f"✅ Evento creado: {event_result.get('id')}")
+        return event_result.get('id')
+    except Exception as e:
+        print(f"❌ Error creando evento: {e}")
+        raise e
+
+def cancelar_evento_google(calendar_id, event_id, credentials_json):
+    """
+    Cancelar un evento en Google Calendar
+    """
+    try:
+        service = build_service(credentials_json)
+        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        print(f"✅ Evento {event_id} cancelado correctamente")
+        return True
+    except Exception as e:
+        print(f"❌ Error cancelando evento {event_id}: {e}")
+        return False
