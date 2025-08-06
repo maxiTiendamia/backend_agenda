@@ -399,9 +399,35 @@ class AIConversationManager:
                 respuesta += "\n💬 Para cancelar, envía el código (ej: `C2HHOH`) o escribe 'cancelar + código'."
                 return respuesta
 
+            # --- 🔒 SEGURIDAD: Detectar consultas sobre otros números de teléfono ---
+            import re
+            numero_pattern = r'\b(?:09[0-9]{8}|59[0-9]{8})\b'  # Patrones de números uruguayos
+            numeros_encontrados = re.findall(numero_pattern, mensaje)
+            if numeros_encontrados:
+                for numero in numeros_encontrados:
+                    if numero != telefono.replace('+', ''):  # Verificar que no sea el propio número
+                        return f"🔒 Por seguridad, solo puedo mostrar información de TUS reservas.\n\n💬 Si necesitas ayuda con tus propias reservas, puedo ayudarte. ¿Qué necesitas? 😊"
+
             # --- FLUJO DE CONSULTA DE SERVICIOS ---
             if mensaje_stripped in ["servicios", "ver servicios", "lista", "menu"]:
                 return self.mostrar_servicios(business_context)
+
+            # --- 🔧 DETECTAR CONFUSIÓN DEL USUARIO ---
+            frases_confusion = [
+                'no tengo', 'no se', 'no entiendo', 'que hago', 'ayuda',
+                'no encuentro', 'perdido', 'confundido'
+            ]
+            if any(frase in mensaje_stripped for frase in frases_confusion):
+                # Si acaba de preguntar por otro número o está en contexto de cancelación, aclarar
+                if any(palabra in mensaje_stripped for palabra in ['codigo', 'códigos', 'reserva', 'turno']):
+                    return (
+                        "🤗 ¡No te preocupes! Te ayudo:\n\n"
+                        "📞 Solo puedo ayudarte con TUS propias reservas\n"
+                        "📋 Si quieres ver tus reservas: escribe 'mis reservas'\n"
+                        "🆕 Si quieres hacer una nueva reserva: escribe 'quiero reservar'\n"
+                        "❌ Si quieres cancelar: envía el código de tu reserva\n\n"
+                        "💬 ¿Qué necesitas hacer? 😊"
+                    )
 
             # --- FLUJO PRINCIPAL CON IA ---
             respuesta = await self._ai_process_conversation_natural(
@@ -807,7 +833,17 @@ class AIConversationManager:
 9. 🚫 NO busques horarios cuando pregunten por sus reservas actuales o códigos de cancelación
 10. 💬 Si preguntan por turnos activos/reservas, indica que pueden cancelar enviando solo el código
 
-🛠️ FUNCIONES DISPONIBLES:
+� SEGURIDAD CRÍTICA:
+- ⚠️ NUNCA muestres información de reservas de otros números de teléfono
+- 🚫 Si preguntan por reservas de otro usuario, responde: "Por seguridad, solo puedo mostrar TUS reservas"
+- 🔐 Solo ayuda con reservas del número actual: {telefono}
+
+🧠 CONTEXTO INTELIGENTE:
+- 🔍 Si el usuario dice "no tengo los códigos" después de preguntar por otro número, NO asumas que quiere hacer una reserva nueva
+- 💬 Pregunta qué necesita específicamente: "¿Necesitas ayuda con TUS reservas o quieres hacer una nueva?"
+- 🎯 Mantén el contexto de la conversación anterior
+
+�🛠️ FUNCIONES DISPONIBLES:
 - 🔍 buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio y preferencia_fecha si el usuario especifica un día)
 - ❌ cancelar_reserva: Para cancelar reservas existentes
 
