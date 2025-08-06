@@ -413,11 +413,66 @@ class AIConversationManager:
     def _detectar_cambio_horario(self, mensaje: str) -> bool:
         """🔧 DETECTAR: Si el usuario quiere cambiar de horario"""
         mensaje = mensaje.lower()
+        
+        # ❌ EXCLUIR frases que NO son cambios de horario
+        exclusiones = [
+            'mi nombre es', 'me llamo', 'soy ', 'nombre:'
+        ]
+        if any(exclusion in mensaje for exclusion in exclusiones):
+            return False
+        
+        # ✅ DETECTAR palabras de cambio solo si contienen referencia horaria
         cambio_palabras = [
             'no', 'cambiar', 'otro', 'diferente', 'mejor', 'prefiero',
             'quiero', 'no me gusta', 'no me sirve', 'no puedo'
         ]
-        return any(palabra in mensaje for palabra in cambio_palabras)
+        
+        # Solo es cambio si menciona horario/tiempo Y tiene palabra de cambio
+        tiene_cambio = any(palabra in mensaje for palabra in cambio_palabras)
+        tiene_horario = any(palabra in mensaje for palabra in ['hora', 'las ', 'a las', 'de la', 'turno', 'horario'])
+        
+        return tiene_cambio and tiene_horario
+
+    def _es_nombre_valido(self, mensaje: str) -> bool:
+        """🔧 VALIDAR: Si el mensaje contiene un nombre válido"""
+        mensaje = mensaje.lower().strip()
+        
+        # Patrones de nombre válido
+        patrones_nombre = [
+            'mi nombre es', 'me llamo', 'soy ', 'nombre:'
+        ]
+        
+        # Si contiene patrón de presentación, es nombre válido
+        if any(patron in mensaje for patron in patrones_nombre):
+            return True
+        
+        # Si tiene 2+ palabras y NO contiene referencias de horario/cambio
+        palabras = mensaje.split()
+        if len(palabras) >= 2:
+            referencias_horario = ['hora', 'turno', 'horario', 'las ', 'a las', 'de la']
+            if not any(ref in mensaje for ref in referencias_horario):
+                return True
+        
+        return False
+
+    def _extraer_nombre(self, mensaje: str) -> str:
+        """🔧 EXTRAER: El nombre limpio del mensaje"""
+        mensaje = mensaje.strip()
+        mensaje_lower = mensaje.lower()
+        
+        # Remover patrones de presentación
+        patrones = [
+            'mi nombre es ', 'me llamo ', 'soy ', 'nombre: ', 'nombre '
+        ]
+        
+        for patron in patrones:
+            if patron in mensaje_lower:
+                # Encontrar la posición del patrón y extraer lo que sigue
+                idx = mensaje_lower.find(patron)
+                return mensaje[idx + len(patron):].strip()
+        
+        # Si no hay patrón, devolver el mensaje completo
+        return mensaje
 
     def _detectar_dia_mensaje(self, mensaje: str) -> str:
         """🔧 CORREGIDO: Detectar qué día quiere el usuario"""
@@ -514,9 +569,10 @@ class AIConversationManager:
                             return f"🔄 ¡Entendido! Te muestro los horarios disponibles otra vez:\n\n" + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)]) + "\n\n💬 Escribe el número o la hora que prefieres."
                     
                     # 🔧 CONFIRMACIÓN: Solo si parece un nombre (más de 2 palabras o no contiene cambios)
-                    elif len(mensaje_stripped.split()) >= 2 and not any(palabra in mensaje_stripped for palabra in ['hora', 'turno', 'horario']):
+                    elif self._es_nombre_valido(mensaje_stripped):
                         slot_seleccionado = json.loads(slot_seleccionado_str)
-                        nombre_cliente = mensaje.strip()
+                        # Extraer el nombre limpio
+                        nombre_cliente = self._extraer_nombre(mensaje.strip())
                         # Llamar a la función de calendar_utils para crear la reserva
                         from api.utils import calendar_utils
                         # Obtener el objeto modelo Servicio desde la base de datos
