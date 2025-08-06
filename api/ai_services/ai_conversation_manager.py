@@ -39,7 +39,7 @@ class AIConversationManager:
                 return f"😔 No hay horarios disponibles para {servicio.nombre} esta semana."
             respuesta = f"✨ Horarios disponibles para {servicio.nombre}\n"
             for i, slot in enumerate(slots[:8], 1):
-                hora_str = slot['fecha'].strftime('%d/%m %H:%M')
+                hora_str = slot.strftime('%d/%m %H:%M')
                 respuesta += f"{i}. {hora_str}\n"
             respuesta += "\n💬 Escribe el número o la hora que prefieres."
             return respuesta
@@ -249,6 +249,16 @@ class AIConversationManager:
     async def process_message(self, telefono: str, mensaje: str, cliente_id: int, db: Session):
         """Procesar mensaje con IA más natural y contextual"""
         try:
+            # Limpiar estado si es un saludo
+            mensaje_stripped = mensaje.strip().lower()
+            saludos = ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "hey", "holi", "holaa", "saludos"]
+            if any(mensaje_stripped.startswith(s) for s in saludos):
+                # Limpiar selección de servicio y slots
+                self.redis_client.delete(f"servicio_seleccionado:{telefono}")
+                for key in self.redis_client.scan_iter(f"slots:{telefono}:*"):
+                    self.redis_client.delete(key)
+                self.redis_client.delete(f"slot_seleccionado:{telefono}")
+
             # Verificar si está bloqueado
             if self._is_blocked_number(telefono, cliente_id, db):
                 return "❌ Este número está bloqueado."
@@ -268,7 +278,6 @@ class AIConversationManager:
             self._save_conversation_message(telefono, "user", mensaje)
 
             # --- FLUJO DE CANCELACIÓN ---
-            mensaje_stripped = mensaje.strip().lower()
             if "cancelar" in mensaje_stripped or "anular" in mensaje_stripped:
                 codigo_match = re.search(r'\b([A-Z0-9]{6,})\b', mensaje)
                 if codigo_match:
