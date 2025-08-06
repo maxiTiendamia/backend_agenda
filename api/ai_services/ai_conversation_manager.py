@@ -251,17 +251,20 @@ class AIConversationManager:
     
     def _get_user_history(self, telefono: str, db: Session) -> dict:
         """Obtener historial completo del usuario"""
+        now_aware = datetime.now(self.tz)
+        
+        # 🔒 SEGURIDAD: Solo reservas del teléfono específico
+        # 📅 FILTRADO: Solo reservas futuras (no pasadas)
         reservas_activas = db.query(Reserva).filter(
-            Reserva.cliente_telefono == telefono,
-            Reserva.estado == "activo"
-        ).all()
+            Reserva.cliente_telefono == telefono,  # 🔒 Filtro de seguridad por teléfono
+            Reserva.estado == "activo",
+            Reserva.fecha_reserva > now_aware  # 📅 Solo futuras
+        ).order_by(Reserva.fecha_reserva.asc()).all()
         
         reservas_pasadas = db.query(Reserva).filter(
-            Reserva.cliente_telefono == telefono,
+            Reserva.cliente_telefono == telefono,  # 🔒 Filtro de seguridad por teléfono
             Reserva.estado.in_(["completado", "cancelado"])
         ).order_by(Reserva.fecha_reserva.desc()).limit(5).all()
-        
-        now_aware = datetime.now(self.tz)
         
         return {
             "reservas_activas": [
@@ -344,13 +347,19 @@ class AIConversationManager:
                     codigo_reserva = codigo_match.group(1)
                     return await self.cancelar_reserva(codigo_reserva, telefono, db)
                 else:
+                    # 🔒 VERIFICAR: Solo reservas futuras del usuario específico
                     reservas_activas = user_history.get("reservas_activas", [])
                     if not reservas_activas:
-                        return "No tienes reservas activas para cancelar."
-                    respuesta = "🔄 Tus reservas activas:\n"
+                        return "😊 No tienes reservas próximas para cancelar."
+                    
+                    respuesta = "🔄 *Tus próximas reservas:*\n\n"
                     for r in reservas_activas:
-                        respuesta += f"- Código: {r['codigo']} | {r['servicio']} el {r['fecha']}\n"
+                        if r['puede_cancelar']:
+                            respuesta += f"✅ Código: `{r['codigo']}` | {r['servicio']} el {r['fecha']}\n"
+                        else:
+                            respuesta += f"❌ Código: `{r['codigo']}` | {r['servicio']} el {r['fecha']} _(muy próxima)_\n"
                     respuesta += "\n💬 Escribe el código de la reserva que deseas cancelar."
+                    respuesta += "\n\n_Solo puedes cancelar reservas con más de 1 hora de anticipación._"
                     return respuesta
 
             # --- FLUJO DE CONSULTA DE SERVICIOS ---
@@ -513,7 +522,7 @@ class AIConversationManager:
                     servicio_modelo,
                     intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                     max_days=7,
-                    max_turnos=10,
+                    max_turnos=25,  # 🔧 AUMENTAR para asegurar que llegue al día específico
                     credentials_json=self.google_credentials
                 )
                 # Filtrar slots por día
@@ -525,10 +534,19 @@ class AIConversationManager:
                     dia_objetivo = (now + timedelta(days=1)).date()
                 else:
                     dias_semana = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
-                    idx = dias_semana.index(dia_detectado)
-                    hoy_idx = now.weekday()
-                    dias_hasta = (idx - hoy_idx) % 7
-                    dia_objetivo = (now + timedelta(days=dias_hasta)).date()
+                    # Normalizar nombre del día (quitar acentos)
+                    dia_normalizado = dia_detectado.replace("é", "e").replace("á", "a")
+                    try:
+                        idx = dias_semana.index(dia_normalizado)
+                        hoy_idx = now.weekday()
+                        dias_hasta = (idx - hoy_idx) % 7
+                        if dias_hasta == 0:  # Si es hoy, tomar el próximo de esa semana
+                            dias_hasta = 7
+                        dia_objetivo = (now + timedelta(days=dias_hasta)).date()
+                        print(f"🔧 DEBUG: Día detectado: {dia_detectado}, Normalizado: {dia_normalizado}, Hoy: {now.strftime('%A %d/%m')}, Objetivo: {dia_objetivo.strftime('%A %d/%m')}")
+                    except ValueError:
+                        print(f"❌ Error: día '{dia_detectado}' no reconocido")
+                        return f"❌ No reconozco el día '{dia_detectado}'. Usa: hoy, mañana, lunes, martes, etc."
                 slots_dia = [s for s in slots if s.date() == dia_objetivo]
                 if not slots_dia:
                     return f"😔 No hay horarios disponibles para *{servicio_guardado_dict['nombre']}* el {dia_detectado}.\n¿Quieres elegir otro día?"
@@ -777,20 +795,28 @@ class AIConversationManager:
     async def cancelar_reserva(self, codigo_reserva: str, telefono: str, db: Session):
         """Cancelar una reserva por código"""
         try:
-            # Buscar la reserva en la base de datos
+            # 🔒 SEGURIDAD REFORZADA: Buscar la reserva con múltiples filtros de seguridad
+            now_aware = datetime.now(self.tz)
+            
             reserva = db.query(Reserva).filter(
-                Reserva.fake_id == codigo_reserva,
-                Reserva.cliente_telefono == telefono,
-                Reserva.estado == "activo"
+                Reserva.fake_id == codigo_reserva,  # Código específico
+                Reserva.cliente_telefono == telefono,  # 🔒 Solo del teléfono del usuario
+                Reserva.estado == "activo",  # Solo activas
+                Reserva.fecha_reserva > now_aware  # 📅 Solo futuras
             ).first()
             
             if not reserva:
-                return f"❌ No encontré la reserva con código {codigo_reserva} o ya fue cancelada."
+                return f"❌ No encontré la reserva con código `{codigo_reserva}` o no se puede cancelar.\n\n_Verifica que el código sea correcto y que la reserva sea futura._"
+            
+            # 🔒 VERIFICACIÓN ADICIONAL: Confirmar que es del mismo teléfono
+            if reserva.cliente_telefono != telefono:
+                print(f"🚨 INTENTO DE ACCESO NO AUTORIZADO: {telefono} intentó cancelar reserva de {reserva.cliente_telefono}")
+                return "❌ No tienes autorización para cancelar esta reserva."
             
             # Verificar si se puede cancelar (debe ser con al menos 1 hora de anticipación)
-            now_aware = datetime.now(self.tz)
             if not self._puede_cancelar_reserva(reserva.fecha_reserva, now_aware):
-                return "❌ No puedes cancelar reservas con menos de 1 hora de anticipación."
+                tiempo_restante = (self._normalize_datetime(reserva.fecha_reserva) - now_aware).total_seconds() / 60
+                return f"❌ No puedes cancelar reservas con menos de 1 hora de anticipación.\n\n_Tu reserva es en {int(tiempo_restante)} minutos._"
             
             # Intentar cancelar en Google Calendar si existe
             if reserva.event_id:
@@ -806,11 +832,11 @@ class AIConversationManager:
             reserva.estado = "cancelado"
             db.commit()
             
-            return f"✅ Reserva {codigo_reserva} cancelada correctamente.\n📅 {reserva.servicio} el {reserva.fecha_reserva.strftime('%d/%m %H:%M') if reserva.fecha_reserva else ''}"
+            return f"✅ *Reserva cancelada correctamente*\n\n📅 {reserva.servicio} el {reserva.fecha_reserva.strftime('%d/%m %H:%M') if reserva.fecha_reserva else ''}\n🔖 Código: `{codigo_reserva}`\n\n😊 ¡Esperamos verte pronto!"
             
         except Exception as e:
             print(f"❌ Error cancelando reserva: {e}")
-            return f"❌ Error al cancelar la reserva: {e}"
+            return f"❌ Error al cancelar la reserva: {str(e)}"
 
 def _parse_working_hours(wh):
     if wh is None:
