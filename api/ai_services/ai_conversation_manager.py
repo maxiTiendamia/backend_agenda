@@ -342,31 +342,46 @@ class AIConversationManager:
 
             # --- FLUJO DE CANCELACIÓN ---
             if "cancelar" in mensaje_stripped or "anular" in mensaje_stripped:
-                codigo_match = re.search(r'\b([A-Z0-9]{6,})\b', mensaje.upper())  # 🔧 Buscar en mayúsculas
+                codigo_match = re.search(r'\b([A-Z0-9]{6,8})\b', mensaje.upper())  # 🔧 Limitar rango
                 if codigo_match:
-                    codigo_reserva = codigo_match.group(1)
-                    return await self.cancelar_reserva(codigo_reserva, telefono, db)
-                else:
-                    # 🔒 VERIFICAR: Solo reservas futuras del usuario específico
-                    reservas_activas = user_history.get("reservas_activas", [])
-                    if not reservas_activas:
-                        return "😊 No tienes reservas próximas para cancelar."
+                    codigo_candidato = codigo_match.group(1)
+                    # 🔧 VERIFICAR: Que no sea una palabra común
+                    palabras_excluir = [
+                        'CANCELAR', 'ANULAR', 'QUIERO', 'HACER', 'RESERVA', 'TURNO'
+                    ]
+                    if codigo_candidato not in palabras_excluir and re.search(r'\d', codigo_candidato):
+                        return await self.cancelar_reserva(codigo_candidato, telefono, db)
                     
-                    respuesta = "🔄 *Tus próximas reservas:*\n\n"
-                    for r in reservas_activas:
-                        if r['puede_cancelar']:
-                            respuesta += f"✅ Código: `{r['codigo']}` | {r['servicio']} el {r['fecha']}\n"
-                        else:
-                            respuesta += f"❌ Código: `{r['codigo']}` | {r['servicio']} el {r['fecha']} _(muy próxima)_\n"
-                    respuesta += "\n💬 Escribe el código de la reserva que deseas cancelar."
-                    respuesta += "\n\n_Solo puedes cancelar reservas con más de 1 hora de anticipación._"
-                    return respuesta
+                # Si no hay código válido, mostrar reservas
+                reservas_activas = user_history.get("reservas_activas", [])
+                if not reservas_activas:
+                    return "😊 No tienes reservas próximas para cancelar."
+                
+                respuesta = "🔄 *Tus próximas reservas:*\n\n"
+                for r in reservas_activas:
+                    if r['puede_cancelar']:
+                        respuesta += f"✅ Código: `{r['codigo']}` | {r['servicio']} el {r['fecha']}\n"
+                    else:
+                        respuesta += f"❌ Código: `{r['codigo']}` | {r['servicio']} el {r['fecha']} _(muy próxima)_\n"
+                respuesta += "\n💬 Escribe el código de la reserva que deseas cancelar."
+                respuesta += "\n\n_Solo puedes cancelar reservas con más de 1 hora de anticipación._"
+                return respuesta
 
             # --- DETECTAR CÓDIGOS DE RESERVA (sin palabra "cancelar") ---
-            codigo_solo = re.search(r'\b([A-Z0-9]{6,})\b', mensaje.upper())  # 🔧 Buscar códigos en mayúsculas
+            # 🔧 MEJORAR: Solo detectar códigos reales, no palabras largas
+            codigo_solo = re.search(r'\b([A-Z0-9]{6,8})\b', mensaje.upper())  # Limitar a 6-8 caracteres
             if codigo_solo:
-                codigo_reserva = codigo_solo.group(1)
-                return await self.cancelar_reserva(codigo_reserva, telefono, db)
+                codigo_candidato = codigo_solo.group(1)
+                # 🔧 VERIFICAR: Que no sea una palabra común en español
+                palabras_excluir = [
+                    'QUIERO', 'HACER', 'RESERVA', 'TURNO', 'HORARIO', 'CANCELAR',
+                    'CODIGO', 'TENGO', 'ACTIVOS', 'DISPONIBLE', 'SERVICIO',
+                    'MAÑANA', 'TARDE', 'NOCHE', 'VIERNES', 'SABADO', 'DOMINGO'
+                ]
+                if codigo_candidato not in palabras_excluir:
+                    # Verificar que tenga al menos algunos números (códigos reales tienen números)
+                    if re.search(r'\d', codigo_candidato):
+                        return await self.cancelar_reserva(codigo_candidato, telefono, db)
 
             # --- CONSULTAR RESERVAS ACTIVAS ---
             if any(phrase in mensaje_stripped for phrase in [
