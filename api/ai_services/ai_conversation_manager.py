@@ -476,7 +476,7 @@ class AIConversationManager:
 
     def _detectar_dia_mensaje(self, mensaje: str) -> str:
         """🔧 CORREGIDO: Detectar qué día quiere el usuario"""
-        mensaje = mensaje.lower()
+        mensaje = mensaje.lower().replace('para el ', '').replace('el ', '').strip()
         
         if any(word in mensaje for word in ['hoy', 'today']):
             return 'hoy'
@@ -490,7 +490,7 @@ class AIConversationManager:
             return 'miercoles'
         elif any(word in mensaje for word in ['jueves', 'thursday']):
             return 'jueves'
-        elif any(word in mensaje for word in ['viernes', 'friday']):
+        elif any(word in mensaje for word in ['viernes', 'vienres', 'friday']):  # 🔧 CORREGIR typo común
             return 'viernes'
         elif any(word in mensaje for word in ['sábado', 'sabado', 'saturday']):
             return 'sabado'
@@ -759,8 +759,9 @@ class AIConversationManager:
 
 🛠️ FUNCIONES DISPONIBLES:
 - 🔍 buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio y preferencia_fecha si el usuario especifica un día)
-- ✅ crear_reserva: Para confirmar una reserva
 - ❌ cancelar_reserva: Para cancelar reservas existentes
+
+⚠️ IMPORTANTE: NO puedes crear reservas directamente. El flujo de reserva se maneja automáticamente cuando el usuario selecciona horario y proporciona su nombre.
 
 💡 IMPORTANTE: Este negocio {'tiene empleados' if business_context['tiene_empleados'] else 'NO tiene empleados (ej: canchas, padel)'}.
 """
@@ -779,7 +780,7 @@ class AIConversationManager:
         # Agregar mensaje actual
         messages.append({"role": "user", "content": mensaje})
         
-        # Definir funciones disponibles
+        # Definir funciones disponibles - SOLO buscar horarios, NO crear reservas
         functions = [
             {
                 "name": "buscar_horarios_servicio",
@@ -793,21 +794,6 @@ class AIConversationManager:
                         "cantidad": {"type": "integer", "description": "Cantidad de personas", "default": 1}
                     },
                     "required": ["servicio_id"]
-                }
-            },
-            {
-                "name": "crear_reserva",
-                "description": "Crear una nueva reserva",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "servicio_id": {"type": "integer", "description": "ID REAL del servicio"},
-                        "fecha_hora": {"type": "string", "description": "Fecha y hora en formato YYYY-MM-DD HH:MM"},
-                        "empleado_id": {"type": "integer", "description": "ID del empleado (opcional)"},
-                        "nombre_cliente": {"type": "string"},
-                        "cantidad": {"type": "integer", "default": 1}
-                    },
-                    "required": ["servicio_id", "fecha_hora", "nombre_cliente"]
                 }
             },
             {
