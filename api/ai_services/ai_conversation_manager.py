@@ -33,11 +33,37 @@ class AIConversationManager:
             
             # Si el usuario especificó un día específico, aumentar límite de turnos para asegurar que llegue a ese día
             max_turnos = 20 if preferencia_fecha != "cualquiera" else 10
+            max_days = 7  # Por defecto 7 días
+            
+            # 🔧 NUEVO: Para fechas específicas, calcular días hasta la fecha y ajustar límites
+            if preferencia_fecha and "/" in preferencia_fecha:
+                try:
+                    dia_str, mes_str = preferencia_fecha.split("/")
+                    dia_num = int(dia_str)
+                    mes_num = int(mes_str)
+                    
+                    now = datetime.now(self.tz)
+                    año_actual = now.year
+                    if mes_num < now.month or (mes_num == now.month and dia_num < now.day):
+                        año_objetivo = año_actual + 1
+                    else:
+                        año_objetivo = año_actual
+                    
+                    fecha_objetivo = datetime(año_objetivo, mes_num, dia_num).date()
+                    dias_hasta_fecha = (fecha_objetivo - now.date()).days
+                    
+                    # Ajustar límites para fechas más lejanas
+                    if dias_hasta_fecha > 7:
+                        max_days = min(dias_hasta_fecha + 1, 30)  # Máximo 30 días
+                        max_turnos = 50  # Más turnos para fechas lejanas
+                        print(f"🔧 DEBUG: Fecha {preferencia_fecha} está a {dias_hasta_fecha} días. max_days={max_days}, max_turnos={max_turnos}")
+                except:
+                    pass
             
             slots = calendar_utils.get_available_slots_for_service(
                 servicio,
                 intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
-                max_days=7,
+                max_days=max_days,
                 max_turnos=max_turnos,
                 credentials_json=self.google_credentials
             )
@@ -51,6 +77,24 @@ class AIConversationManager:
                     fecha_objetivo = hoy
                 elif preferencia_fecha == "mañana":
                     fecha_objetivo = hoy + timedelta(days=1)
+                elif "/" in preferencia_fecha:  # 🔧 NUEVO: Manejar fechas específicas DD/MM
+                    try:
+                        dia_str, mes_str = preferencia_fecha.split("/")
+                        dia_num = int(dia_str)
+                        mes_num = int(mes_str)
+                        
+                        # Determinar el año (si el mes es menor al actual, asumir próximo año)
+                        now = datetime.now(self.tz)
+                        año_actual = now.year
+                        if mes_num < now.month or (mes_num == now.month and dia_num < now.day):
+                            año_objetivo = año_actual + 1
+                        else:
+                            año_objetivo = año_actual
+                        
+                        fecha_objetivo = datetime(año_objetivo, mes_num, dia_num).date()
+                        print(f"🔧 DEBUG IA: Fecha específica {preferencia_fecha} -> {fecha_objetivo.strftime('%A %d/%m/%Y')}")
+                    except ValueError:
+                        fecha_objetivo = None
                 elif preferencia_fecha in ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]:
                     # Encontrar el próximo día de la semana especificado
                     dias_semana = {
@@ -548,6 +592,16 @@ class AIConversationManager:
         """🔧 CORREGIDO: Detectar qué día quiere el usuario"""
         mensaje_original = mensaje.lower().strip()
         
+        # 🔧 DETECTAR fechas específicas en formato DD/MM
+        
+        fecha_pattern = r'\b(\d{1,2})/(\d{1,2})\b'
+        fecha_match = re.search(fecha_pattern, mensaje_original)
+        if fecha_match:
+            dia = int(fecha_match.group(1))
+            mes = int(fecha_match.group(2))
+            # Devolver en formato que pueda ser procesado después
+            return f"{dia:02d}/{mes:02d}"
+        
         # 🔧 MEJOR LÓGICA: Buscar patrones específicos sin modificar el mensaje globalmente
         if any(word in mensaje_original for word in ['hoy', 'today']):
             return 'hoy'
@@ -722,6 +776,24 @@ class AIConversationManager:
                     dia_objetivo = now.date()
                 elif dia_detectado == "mañana":
                     dia_objetivo = (now + timedelta(days=1)).date()
+                elif "/" in dia_detectado:  # 🔧 NUEVO: Manejar fechas específicas DD/MM
+                    try:
+                        dia_str, mes_str = dia_detectado.split("/")
+                        dia_num = int(dia_str)
+                        mes_num = int(mes_str)
+                        
+                        # Determinar el año (si el mes es menor al actual, asumir próximo año)
+                        año_actual = now.year
+                        if mes_num < now.month or (mes_num == now.month and dia_num < now.day):
+                            año_objetivo = año_actual + 1
+                        else:
+                            año_objetivo = año_actual
+                        
+                        dia_objetivo = datetime(año_objetivo, mes_num, dia_num).date()
+                        print(f"🔧 DEBUG: Fecha específica detectada: {dia_detectado} -> {dia_objetivo.strftime('%A %d/%m/%Y')}")
+                    except ValueError:
+                        print(f"❌ Error: fecha '{dia_detectado}' no válida")
+                        return f"❌ No reconozco la fecha '{dia_detectado}'. Usa formato DD/MM o nombres de días."
                 else:
                     dias_semana = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
                     # Normalizar nombre del día (quitar acentos)
@@ -826,7 +898,7 @@ class AIConversationManager:
 {self._format_servicios_with_real_ids(business_context['servicios'])}
 6. 🧠 Recuerda conversaciones anteriores
 7. ❓ Puedes responder preguntas generales sobre el negocio
-8. 📅 IMPORTANTE: Si el usuario menciona un día específico (hoy, mañana, lunes, martes, etc.), usa ese día exacto en el parámetro preferencia_fecha
+8. 📅 IMPORTANTE: Si el usuario menciona un día específico (hoy, mañana, lunes, martes, etc.) o una fecha específica (14/08, 25/12, etc.), usa ese día exacto en el parámetro preferencia_fecha
 9. 🚫 NO busques horarios cuando pregunten por sus reservas actuales o códigos de cancelación
 10. 💬 Si preguntan por turnos activos/reservas, indica que pueden cancelar enviando solo el código
 
@@ -873,7 +945,7 @@ class AIConversationManager:
                     "properties": {
                         "servicio_id": {"type": "integer", "description": "ID REAL del servicio en la base de datos"},
                         "preferencia_horario": {"type": "string", "description": "mañana, tarde, noche o cualquiera"},
-                        "preferencia_fecha": {"type": "string", "description": "hoy, mañana, lunes, martes, miércoles, jueves, viernes, sábado, domingo, esta_semana o cualquiera"},
+                        "preferencia_fecha": {"type": "string", "description": "hoy, mañana, lunes, martes, miércoles, jueves, viernes, sábado, domingo, fecha específica (DD/MM), esta_semana o cualquiera"},
                         "cantidad": {"type": "integer", "description": "Cantidad de personas", "default": 1}
                     },
                     "required": ["servicio_id"]
