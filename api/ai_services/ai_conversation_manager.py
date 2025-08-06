@@ -25,23 +25,64 @@ class AIConversationManager:
         if name == "buscar_horarios_servicio":
             # Buscar horarios disponibles usando calendar_utils
             servicio_id = args["servicio_id"]
+            preferencia_fecha = args.get("preferencia_fecha", "cualquiera")
+            
             servicio = db.query(Servicio).filter(Servicio.id == servicio_id).first()
             if not servicio:
                 return "❌ Servicio no encontrado."
+            
+            # Si el usuario especificó un día específico, aumentar límite de turnos para asegurar que llegue a ese día
+            max_turnos = 20 if preferencia_fecha != "cualquiera" else 10
+            
             slots = calendar_utils.get_available_slots_for_service(
                 servicio,
                 intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                 max_days=7,
-                max_turnos=10,
+                max_turnos=max_turnos,
                 credentials_json=self.google_credentials
             )
+            
+            # Filtrar slots por día específico si se especificó
+            if preferencia_fecha and preferencia_fecha != "cualquiera":
+                slots_filtrados = []
+                hoy = datetime.now(self.tz).date()
+                
+                if preferencia_fecha == "hoy":
+                    fecha_objetivo = hoy
+                elif preferencia_fecha == "mañana":
+                    fecha_objetivo = hoy + timedelta(days=1)
+                elif preferencia_fecha in ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]:
+                    # Encontrar el próximo día de la semana especificado
+                    dias_semana = {
+                        "lunes": 0, "martes": 1, "miércoles": 2, "jueves": 3,
+                        "viernes": 4, "sábado": 5, "domingo": 6
+                    }
+                    dia_objetivo = dias_semana[preferencia_fecha]
+                    dias_hasta_objetivo = (dia_objetivo - hoy.weekday()) % 7
+                    if dias_hasta_objetivo == 0:  # Si es hoy, tomar el próximo
+                        dias_hasta_objetivo = 7
+                    fecha_objetivo = hoy + timedelta(days=dias_hasta_objetivo)
+                else:
+                    fecha_objetivo = None
+                
+                if fecha_objetivo:
+                    slots_filtrados = [slot for slot in slots if slot.date() == fecha_objetivo]
+                    slots = slots_filtrados
+                    
             if not slots:
-                return f"😔 No hay horarios disponibles para {servicio.nombre} esta semana."
-            respuesta = f"✨ Horarios disponibles para {servicio.nombre}\n"
+                dia_texto = preferencia_fecha if preferencia_fecha != "cualquiera" else "esta semana"
+                return f"😔 No hay horarios disponibles para *{servicio.nombre}* {dia_texto}.\n¿Quieres elegir otro día?"
+                
+            respuesta = f"✨ Horarios disponibles para *{servicio.nombre}*"
+            if preferencia_fecha and preferencia_fecha != "cualquiera":
+                respuesta += f" el {preferencia_fecha}"
+            respuesta += ":\n\n"
+            
             for i, slot in enumerate(slots[:8], 1):
+                dia_nombre = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][slot.weekday()]
                 hora_str = slot.strftime('%d/%m %H:%M')
-                respuesta += f"{i}. {hora_str}\n"
-            respuesta += "\n💬 Escribe el número o la hora que prefieres."
+                respuesta += f"{i}. {dia_nombre.title()} {hora_str}\n"
+            respuesta += "\n💬 Escribe el número que prefieres para confirmar."
             return respuesta
         elif name == "crear_reserva":
             servicio_id = args["servicio_id"]
@@ -577,9 +618,10 @@ class AIConversationManager:
 {self._format_servicios_with_real_ids(business_context['servicios'])}
 6. 🧠 Recuerda conversaciones anteriores
 7. ❓ Puedes responder preguntas generales sobre el negocio
+8. 📅 IMPORTANTE: Si el usuario menciona un día específico (hoy, mañana, lunes, martes, etc.), usa ese día exacto en el parámetro preferencia_fecha
 
 🛠️ FUNCIONES DISPONIBLES:
-- 🔍 buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio)
+- 🔍 buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio y preferencia_fecha si el usuario especifica un día)
 - ✅ crear_reserva: Para confirmar una reserva
 - ❌ cancelar_reserva: Para cancelar reservas existentes
 
@@ -610,7 +652,7 @@ class AIConversationManager:
                     "properties": {
                         "servicio_id": {"type": "integer", "description": "ID REAL del servicio en la base de datos"},
                         "preferencia_horario": {"type": "string", "description": "mañana, tarde, noche o cualquiera"},
-                        "preferencia_fecha": {"type": "string", "description": "hoy, mañana, esta_semana o cualquiera"},
+                        "preferencia_fecha": {"type": "string", "description": "hoy, mañana, lunes, martes, miércoles, jueves, viernes, sábado, domingo, esta_semana o cualquiera"},
                         "cantidad": {"type": "integer", "description": "Cantidad de personas", "default": 1}
                     },
                     "required": ["servicio_id"]
