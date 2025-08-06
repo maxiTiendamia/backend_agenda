@@ -427,7 +427,7 @@ def create_event_for_service(servicio, fecha_hora, telefono, credentials_json, n
     start_time = fecha_hora
     end_time = start_time + datetime.timedelta(minutes=servicio.duracion)
     
-    # Crear el evento
+    # Crear el evento (sin attendees para evitar error de service account)
     event = {
         'summary': f'{servicio.nombre} - {nombre_cliente}',
         'description': f'Reserva para {nombre_cliente}\nTeléfono: {telefono}\nServicio: {servicio.nombre}',
@@ -438,10 +438,7 @@ def create_event_for_service(servicio, fecha_hora, telefono, credentials_json, n
         'end': {
             'dateTime': end_time.isoformat(),
             'timeZone': 'America/Montevideo',
-        },
-        'attendees': [
-            {'email': telefono + '@whatsapp.com', 'displayName': nombre_cliente}
-        ]
+        }
     }
     
     try:
