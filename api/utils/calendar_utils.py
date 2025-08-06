@@ -230,9 +230,9 @@ def get_available_slots(
 
 def get_available_slots_for_service(
     servicio,  # Objeto Servicio completo
-    intervalo_entre_turnos=20,
-    max_days=14,
-    max_turnos=25,
+    intervalo_entre_turnos=15,
+    max_days=7,
+    max_turnos=10,
     credentials_json=None
 ):
     """

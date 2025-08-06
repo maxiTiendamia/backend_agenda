@@ -30,7 +30,7 @@ class AIConversationManager:
                 return "❌ Servicio no encontrado."
             slots = calendar_utils.get_available_slots_for_service(
                 servicio,
-                intervalo_entre_turnos=getattr(servicio, "intervalo_entre_turnos", 15),
+                intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                 max_days=7,
                 max_turnos=10,
                 credentials_json=self.google_credentials
@@ -59,7 +59,26 @@ class AIConversationManager:
                     self.google_credentials,
                     nombre_cliente
                 )
-                return f"✅ Reserva confirmada para {servicio.nombre} el {slot_dt.strftime('%d/%m %H:%M')} a nombre de {nombre_cliente}."
+                
+                # Crear reserva en la base de datos
+                nueva_reserva = Reserva(
+                    fake_id=generar_fake_id(),
+                    event_id=event_id,
+                    empresa=servicio.tenant.comercio,
+                    empleado_id=None,
+                    empleado_nombre="Sistema",
+                    empleado_calendar_id=servicio.calendar_id,
+                    cliente_nombre=nombre_cliente,
+                    cliente_telefono=telefono,
+                    fecha_reserva=slot_dt,
+                    servicio=servicio.nombre,
+                    estado="activo",
+                    cantidad=args.get("cantidad", 1)
+                )
+                db.add(nueva_reserva)
+                db.commit()
+                
+                return f"✅ Reserva confirmada para {servicio.nombre} el {slot_dt.strftime('%d/%m %H:%M')} a nombre de {nombre_cliente}.\n🔖 Código: {nueva_reserva.fake_id}"
             except Exception as e:
                 return f"❌ Error al crear la reserva: {e}"
         elif name == "cancelar_reserva":
@@ -89,11 +108,11 @@ class AIConversationManager:
         self.webconnect_url = os.getenv("webconnect_url", "http://195.26.250.62:3000")  
         self.google_credentials = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
-    def _get_time_increment(self, servicio):
+    def _get_time_increment(self, tenant):
         """
-        Devuelve el incremento de minutos entre turnos según la configuración del servicio o Tenant.
+        Devuelve el incremento de minutos entre turnos según la configuración del Tenant.
         """
-        intervalo = getattr(servicio, 'intervalo_entre_turnos', None)
+        intervalo = getattr(tenant, 'intervalo_entre_turnos', None)
         if intervalo:
             return int(intervalo)
         return 15
@@ -400,6 +419,25 @@ class AIConversationManager:
                             self.google_credentials,
                             nombre_cliente
                         )
+                        
+                        # Crear reserva en la base de datos
+                        nueva_reserva = Reserva(
+                            fake_id=generar_fake_id(),
+                            event_id=event_id,
+                            empresa=servicio_modelo.tenant.comercio,
+                            empleado_id=None,
+                            empleado_nombre="Sistema",
+                            empleado_calendar_id=servicio_modelo.calendar_id,
+                            cliente_nombre=nombre_cliente,
+                            cliente_telefono=telefono,
+                            fecha_reserva=slot_dt,
+                            servicio=servicio_modelo.nombre,
+                            estado="activo",
+                            cantidad=1
+                        )
+                        db.add(nueva_reserva)
+                        db.commit()
+                        
                         # Limpiar selección en Redis
                         self.redis_client.delete(f"servicio_seleccionado:{telefono}")
                         self.redis_client.delete(f"slots:{telefono}:{servicio_guardado['id']}")
@@ -407,7 +445,9 @@ class AIConversationManager:
                         return (
                             f"✅ Reserva confirmada para *{servicio_guardado['nombre']}*"
                             f"\n📅 {slot_dt.strftime('%A %d/%m %H:%M')}"
-                            f"\n👤 A nombre de: {nombre_cliente}\n\n¡Gracias por reservar! 😊"
+                            f"\n👤 A nombre de: {nombre_cliente}"
+                            f"\n🔖 Código: {nueva_reserva.fake_id}"
+                            f"\n\n¡Gracias por reservar! 😊"
                         )
                     except Exception as e:
                         return f"❌ Error al crear la reserva: {e}"
@@ -430,7 +470,7 @@ class AIConversationManager:
                     return "❌ Servicio no disponible. Intenta de nuevo."
                 slots = calendar_utils.get_available_slots_for_service(
                     servicio_modelo,
-                    intervalo_entre_turnos=getattr(servicio_modelo, "intervalo_entre_turnos", 15),
+                    intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                     max_days=7,
                     max_turnos=10,
                     credentials_json=self.google_credentials
@@ -448,7 +488,7 @@ class AIConversationManager:
                     hoy_idx = now.weekday()
                     dias_hasta = (idx - hoy_idx) % 7
                     dia_objetivo = (now + timedelta(days=dias_hasta)).date()
-                slots_dia = [s for s in slots if s['fecha'].date() == dia_objetivo]
+                slots_dia = [s for s in slots if s.date() == dia_objetivo]
                 if not slots_dia:
                     return f"😔 No hay horarios disponibles para *{servicio_guardado_dict['nombre']}* el {dia_detectado}.\n¿Quieres elegir otro día?"
                 # Guardar slots en Redis
@@ -456,7 +496,7 @@ class AIConversationManager:
                 slots_data = [
                     {
                         "numero": i,
-                        "fecha_hora": slot['fecha'].isoformat(),
+                        "fecha_hora": slot.isoformat(),
                         "empleado_id": None,
                         "empleado_nombre": "Sistema"
                     }
@@ -673,8 +713,7 @@ class AIConversationManager:
                 "precio": getattr(s, "precio", 0),
                 "duracion": getattr(s, "duracion", 60),
                 "es_informativo": getattr(s, "es_informativo", False),
-                "mensaje_personalizado": getattr(s, "mensaje_personalizado", ""),
-                "intervalo_entre_turnos": getattr(s, "intervalo_entre_turnos", 15)
+                "mensaje_personalizado": getattr(s, "mensaje_personalizado", "")
             })
         
         empleados = []
@@ -692,6 +731,44 @@ class AIConversationManager:
             "tiene_empleados": len(empleados) > 0,
             "calendar_id_general": getattr(tenant, "calendar_id_general", None)
         }
+
+    async def cancelar_reserva(self, codigo_reserva: str, telefono: str, db: Session):
+        """Cancelar una reserva por código"""
+        try:
+            # Buscar la reserva en la base de datos
+            reserva = db.query(Reserva).filter(
+                Reserva.fake_id == codigo_reserva,
+                Reserva.cliente_telefono == telefono,
+                Reserva.estado == "activo"
+            ).first()
+            
+            if not reserva:
+                return f"❌ No encontré la reserva con código {codigo_reserva} o ya fue cancelada."
+            
+            # Verificar si se puede cancelar (debe ser con al menos 1 hora de anticipación)
+            now_aware = datetime.now(self.tz)
+            if not self._puede_cancelar_reserva(reserva.fecha_reserva, now_aware):
+                return "❌ No puedes cancelar reservas con menos de 1 hora de anticipación."
+            
+            # Intentar cancelar en Google Calendar si existe
+            if reserva.event_id:
+                from api.utils import calendar_utils
+                # Usar el empleado_calendar_id que ya está guardado en la reserva
+                calendar_utils.cancelar_evento_google(
+                    reserva.empleado_calendar_id,
+                    reserva.event_id,
+                    self.google_credentials
+                )
+            
+            # Actualizar estado en la base de datos
+            reserva.estado = "cancelado"
+            db.commit()
+            
+            return f"✅ Reserva {codigo_reserva} cancelada correctamente.\n📅 {reserva.servicio} el {reserva.fecha_reserva.strftime('%d/%m %H:%M') if reserva.fecha_reserva else ''}"
+            
+        except Exception as e:
+            print(f"❌ Error cancelando reserva: {e}")
+            return f"❌ Error al cancelar la reserva: {e}"
 
 def _parse_working_hours(wh):
     if wh is None:
