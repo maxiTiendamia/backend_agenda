@@ -377,6 +377,48 @@ class AIConversationManager:
             print(f"❌ Error en AI manager: {e}")
             return self._generar_respuesta_fallback(mensaje, None, None)
 
+    def _detectar_hora_mensaje(self, mensaje: str) -> str:
+        """🔧 DETECTAR: Hora en diferentes formatos"""
+        mensaje = mensaje.lower().strip()
+        
+        # Patrones de hora más flexibles
+        import re
+        
+        # Formato HH:MM exacto
+        time_pattern = r'\b(\d{1,2}):(\d{2})\b'
+        time_match = re.search(time_pattern, mensaje)
+        if time_match:
+            return f"{time_match.group(1).zfill(2)}:{time_match.group(2)}"
+        
+        # Formato "a las X" o "las X"
+        hour_pattern = r'(?:a\s+las\s+|las\s+)(\d{1,2})(?:\s*h|:00|$|\s)'
+        hour_match = re.search(hour_pattern, mensaje)
+        if hour_match:
+            hora = int(hour_match.group(1))
+            return f"{hora:02d}:00"
+        
+        # Formato simple "X de la mañana/tarde"
+        simple_pattern = r'\b(\d{1,2})\s*(?:de\s*la\s*)?(?:mañana|tarde|noche)?\b'
+        simple_match = re.search(simple_pattern, mensaje)
+        if simple_match:
+            hora = int(simple_match.group(1))
+            # Convertir a formato 24h si es necesario
+            if hora <= 12 and ('tarde' in mensaje or 'noche' in mensaje):
+                if hora != 12:
+                    hora += 12
+            return f"{hora:02d}:00"
+        
+        return None
+
+    def _detectar_cambio_horario(self, mensaje: str) -> bool:
+        """🔧 DETECTAR: Si el usuario quiere cambiar de horario"""
+        mensaje = mensaje.lower()
+        cambio_palabras = [
+            'no', 'cambiar', 'otro', 'diferente', 'mejor', 'prefiero',
+            'quiero', 'no me gusta', 'no me sirve', 'no puedo'
+        ]
+        return any(palabra in mensaje for palabra in cambio_palabras)
+
     def _detectar_dia_mensaje(self, mensaje: str) -> str:
         """🔧 CORREGIDO: Detectar qué día quiere el usuario"""
         mensaje = mensaje.lower()
@@ -434,73 +476,94 @@ class AIConversationManager:
                             return f"❌ Elige un número entre 1 y {len(slots_data)}."
                     except ValueError:
                         return "❌ No entendí el número. Intenta de nuevo."
-                # 2. Selección de horario por hora (ej: "19:00")
-                time_pattern = r'\b(\d{1,2}):(\d{2})\b'
-                time_match = re.search(time_pattern, mensaje_stripped)
-                if time_match:
-                    hora_buscada = f"{time_match.group(1).zfill(2)}:{time_match.group(2)}"
+                # 2. Selección de horario por hora (formatos flexibles)
+                hora_detectada = self._detectar_hora_mensaje(mensaje_stripped)
+                if hora_detectada:
                     for slot in slots_data:
                         slot_hora = datetime.fromisoformat(slot['fecha_hora']).strftime('%H:%M')
-                        if slot_hora == hora_buscada:
+                        if slot_hora == hora_detectada:
                             self.redis_client.set(f"slot_seleccionado:{telefono}", json.dumps(slot), ex=600)
                             return (
                                 f"✅ Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*"
                                 f"\n📅 {datetime.fromisoformat(slot['fecha_hora']).strftime('%A %d/%m a las %H:%M')}"
                                 "\n\n👤 Para confirmar, por favor escribe tu *nombre completo*."
                             )
-                    return f"❌ No encontré el horario {hora_buscada}. Elige uno de los horarios numerados."
-                # 3. Confirmación de reserva (nombre completo)
+                    return f"❌ No encontré el horario {hora_detectada}. Elige uno de los horarios numerados."
+                # 3. Confirmación de reserva O cambio de horario
                 slot_seleccionado_str = self.redis_client.get(f"slot_seleccionado:{telefono}")
-                if slot_seleccionado_str and len(mensaje_stripped.split()) >= 2:
-                    slot_seleccionado = json.loads(slot_seleccionado_str)
-                    nombre_cliente = mensaje.strip()
-                    # Llamar a la función de calendar_utils para crear la reserva
-                    from api.utils import calendar_utils
-                    # Obtener el objeto modelo Servicio desde la base de datos
-                    servicio_modelo = db.query(Servicio).filter(Servicio.id == servicio_guardado['id']).first()
-                    if not servicio_modelo:
-                        return "❌ Servicio no disponible. Intenta de nuevo."
-                    slot_dt = datetime.fromisoformat(slot_seleccionado['fecha_hora'])
-                    try:
-                        event_id = calendar_utils.create_event_for_service(
-                            servicio_modelo,
-                            slot_dt,
-                            telefono,
-                            self.google_credentials,
-                            nombre_cliente
-                        )
-                        
-                        # Crear reserva en la base de datos
-                        nueva_reserva = Reserva(
-                            fake_id=generar_fake_id(),
-                            event_id=event_id,
-                            empresa=servicio_modelo.tenant.comercio,
-                            empleado_id=None,
-                            empleado_nombre="Sistema",
-                            empleado_calendar_id=servicio_modelo.calendar_id,
-                            cliente_nombre=nombre_cliente,
-                            cliente_telefono=telefono,
-                            fecha_reserva=slot_dt,
-                            servicio=servicio_modelo.nombre,
-                            estado="activo",
-                            cantidad=1
-                        )
-                        db.add(nueva_reserva)
-                        db.commit()
-                        
-                        # Limpiar selección en Redis
-                        self.redis_client.delete(f"servicio_seleccionado:{telefono}")
-                        self.redis_client.delete(f"slots:{telefono}:{servicio_guardado['id']}")
-                        self.redis_client.delete(f"slot_seleccionado:{telefono}")
-                        return (
-                            f"✅ Reserva confirmada para *{servicio_guardado['nombre']}*"
-                            f"\n📅 {slot_dt.strftime('%A %d/%m %H:%M')}"
-                            f"\n👤 A nombre de: {nombre_cliente}"
-                            f"\n🔖 Código: {nueva_reserva.fake_id}"
-                            f"\n\n¡Gracias por reservar! 😊"
-                        )
-                    except Exception as e:
-                        return f"❌ Error al crear la reserva: {e}"
+                if slot_seleccionado_str:
+                    # 🔧 DETECTAR si quiere cambiar de horario
+                    if self._detectar_cambio_horario(mensaje_stripped):
+                        # El usuario quiere cambiar, buscar nueva hora
+                        hora_nueva = self._detectar_hora_mensaje(mensaje_stripped)
+                        if hora_nueva:
+                            # Buscar el nuevo horario
+                            for slot in slots_data:
+                                slot_hora = datetime.fromisoformat(slot['fecha_hora']).strftime('%H:%M')
+                                if slot_hora == hora_nueva:
+                                    self.redis_client.set(f"slot_seleccionado:{telefono}", json.dumps(slot), ex=600)
+                                    return (
+                                        f"✅ ¡Perfecto! Cambié tu selección:\n\n🎾 *{servicio_guardado['nombre']}*"
+                                        f"\n📅 {datetime.fromisoformat(slot['fecha_hora']).strftime('%A %d/%m a las %H:%M')}"
+                                        "\n\n👤 Para confirmar, por favor escribe tu *nombre completo*."
+                                    )
+                            return f"❌ No encontré el horario {hora_nueva}. Los horarios disponibles son:\n" + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
+                        else:
+                            # Quiere cambiar pero no especificó hora nueva
+                            self.redis_client.delete(f"slot_seleccionado:{telefono}")
+                            return f"🔄 ¡Entendido! Te muestro los horarios disponibles otra vez:\n\n" + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)]) + "\n\n💬 Escribe el número o la hora que prefieres."
+                    
+                    # 🔧 CONFIRMACIÓN: Solo si parece un nombre (más de 2 palabras o no contiene cambios)
+                    elif len(mensaje_stripped.split()) >= 2 and not any(palabra in mensaje_stripped for palabra in ['hora', 'turno', 'horario']):
+                        slot_seleccionado = json.loads(slot_seleccionado_str)
+                        nombre_cliente = mensaje.strip()
+                        # Llamar a la función de calendar_utils para crear la reserva
+                        from api.utils import calendar_utils
+                        # Obtener el objeto modelo Servicio desde la base de datos
+                        servicio_modelo = db.query(Servicio).filter(Servicio.id == servicio_guardado['id']).first()
+                        if not servicio_modelo:
+                            return "❌ Servicio no disponible. Intenta de nuevo."
+                        slot_dt = datetime.fromisoformat(slot_seleccionado['fecha_hora'])
+                        try:
+                            event_id = calendar_utils.create_event_for_service(
+                                servicio_modelo,
+                                slot_dt,
+                                telefono,
+                                self.google_credentials,
+                                nombre_cliente
+                            )
+                            
+                            # Crear reserva en la base de datos
+                            nueva_reserva = Reserva(
+                                fake_id=generar_fake_id(),
+                                event_id=event_id,
+                                empresa=servicio_modelo.tenant.comercio,
+                                empleado_id=None,
+                                empleado_nombre="Sistema",
+                                empleado_calendar_id=servicio_modelo.calendar_id,
+                                cliente_nombre=nombre_cliente,
+                                cliente_telefono=telefono,
+                                fecha_reserva=slot_dt,
+                                servicio=servicio_modelo.nombre,
+                                estado="activo",
+                                cantidad=1
+                            )
+                            db.add(nueva_reserva)
+                            db.commit()
+                            
+                            # Limpiar selección en Redis
+                            self.redis_client.delete(f"servicio_seleccionado:{telefono}")
+                            self.redis_client.delete(f"slots:{telefono}:{servicio_guardado['id']}")
+                            self.redis_client.delete(f"slot_seleccionado:{telefono}")
+                            return (
+                                f"✅ Reserva confirmada para *{servicio_guardado['nombre']}*"
+                                f"\n📅 {slot_dt.strftime('%A %d/%m %H:%M')}"
+                                f"\n👤 A nombre de: {nombre_cliente}"
+                                f"\n🔖 Código: {nueva_reserva.fake_id}"
+                                f"\n\n¡Gracias por reservar! 😊"
+                            )
+                        except Exception as e:
+                            return f"❌ Error al crear la reserva: {e}"
                 # Si no se reconoce el mensaje, pedir nombre completo
                 if slot_seleccionado_str:
                     return "👤 Por favor, escribe tu *nombre completo* para confirmar la reserva."
