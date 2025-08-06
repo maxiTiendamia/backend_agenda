@@ -342,7 +342,7 @@ class AIConversationManager:
 
             # --- FLUJO DE CANCELACIÓN ---
             if "cancelar" in mensaje_stripped or "anular" in mensaje_stripped:
-                codigo_match = re.search(r'\b([A-Z0-9]{6,})\b', mensaje)
+                codigo_match = re.search(r'\b([A-Z0-9]{6,})\b', mensaje.upper())  # 🔧 Buscar en mayúsculas
                 if codigo_match:
                     codigo_reserva = codigo_match.group(1)
                     return await self.cancelar_reserva(codigo_reserva, telefono, db)
@@ -361,6 +361,28 @@ class AIConversationManager:
                     respuesta += "\n💬 Escribe el código de la reserva que deseas cancelar."
                     respuesta += "\n\n_Solo puedes cancelar reservas con más de 1 hora de anticipación._"
                     return respuesta
+
+            # --- DETECTAR CÓDIGOS DE RESERVA (sin palabra "cancelar") ---
+            codigo_solo = re.search(r'\b([A-Z0-9]{6,})\b', mensaje.upper())  # 🔧 Buscar códigos en mayúsculas
+            if codigo_solo:
+                codigo_reserva = codigo_solo.group(1)
+                return await self.cancelar_reserva(codigo_reserva, telefono, db)
+
+            # --- CONSULTAR RESERVAS ACTIVAS ---
+            if any(phrase in mensaje_stripped for phrase in [
+                'turnos activos', 'reservas activas', 'que turnos tengo', 'cuales tengo',
+                'mis reservas', 'mis turnos', 'reservas pendientes'
+            ]):
+                reservas_activas = user_history.get("reservas_activas", [])
+                if not reservas_activas:
+                    return "😊 No tienes reservas próximas."
+                
+                respuesta = "📅 *Tus próximas reservas:*\n\n"
+                for r in reservas_activas:
+                    estado_icono = "✅" if r['puede_cancelar'] else "❌"
+                    respuesta += f"{estado_icono} `{r['codigo']}` | {r['servicio']} el {r['fecha']}\n"
+                respuesta += "\n💬 Para cancelar, envía el código (ej: `C2HHOH`) o escribe 'cancelar + código'."
+                return respuesta
 
             # --- FLUJO DE CONSULTA DE SERVICIOS ---
             if mensaje_stripped in ["servicios", "ver servicios", "lista", "menu"]:
@@ -446,12 +468,22 @@ class AIConversationManager:
         if any(patron in mensaje for patron in patrones_nombre):
             return True
         
-        # Si tiene 2+ palabras y NO contiene referencias de horario/cambio
+        # Si tiene 2+ palabras Y son palabras reales (no solo una palabra)
         palabras = mensaje.split()
         if len(palabras) >= 2:
+            # Verificar que no sean referencias de horario/cambio
             referencias_horario = ['hora', 'turno', 'horario', 'las ', 'a las', 'de la']
             if not any(ref in mensaje for ref in referencias_horario):
-                return True
+                # Verificar que cada palabra tenga al menos 2 caracteres
+                if all(len(palabra) >= 2 for palabra in palabras):
+                    return True
+        
+        # Si es una sola palabra, debe tener al menos 4 caracteres para ser nombre válido
+        if len(palabras) == 1 and len(palabras[0]) >= 4:
+            # Verificar que no sea una referencia técnica
+            referencias_no_nombre = ['cancelar', 'reservar', 'turno', 'codigo']
+            if not any(ref in mensaje for ref in referencias_no_nombre):
+                return False  # 🔧 Forzar nombres de 2+ palabras por seguridad
         
         return False
 
@@ -756,6 +788,8 @@ class AIConversationManager:
 6. 🧠 Recuerda conversaciones anteriores
 7. ❓ Puedes responder preguntas generales sobre el negocio
 8. 📅 IMPORTANTE: Si el usuario menciona un día específico (hoy, mañana, lunes, martes, etc.), usa ese día exacto en el parámetro preferencia_fecha
+9. 🚫 NO busques horarios cuando pregunten por sus reservas actuales o códigos de cancelación
+10. 💬 Si preguntan por turnos activos/reservas, indica que pueden cancelar enviando solo el código
 
 🛠️ FUNCIONES DISPONIBLES:
 - 🔍 buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio y preferencia_fecha si el usuario especifica un día)
