@@ -400,7 +400,6 @@ class AIConversationManager:
                 return respuesta
 
             # --- 🔒 SEGURIDAD: Detectar consultas sobre otros números de teléfono ---
-            import re
             numero_pattern = r'\b(?:09[0-9]{8}|59[0-9]{8})\b'  # Patrones de números uruguayos
             numeros_encontrados = re.findall(numero_pattern, mensaje)
             if numeros_encontrados:
@@ -445,8 +444,6 @@ class AIConversationManager:
         mensaje = mensaje.lower().strip()
         
         # Patrones de hora más flexibles
-        import re
-        
         # Formato HH:MM exacto
         time_pattern = r'\b(\d{1,2}):(\d{2})\b'
         time_match = re.search(time_pattern, mensaje)
