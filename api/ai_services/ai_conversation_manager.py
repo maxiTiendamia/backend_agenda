@@ -185,7 +185,7 @@ class AIConversationManager:
 
     def _generar_respuesta_fallback(self, mensaje, user_history, business_context):
         """Respuesta fallback si falla la IA"""
-        return "Disculpa, tuve un problema procesando tu mensaje. ¿Podrías intentar de nuevo?"
+        return self._add_help_footer("Disculpa, tuve un problema procesando tu mensaje. ¿Podrías intentar de nuevo?")
     def __init__(self, api_key, redis_client):
         self.client = openai.OpenAI(api_key=api_key)
         self.redis_client = redis_client
@@ -285,6 +285,29 @@ class AIConversationManager:
         except:
             return False
     
+    def _activate_human_mode(self, telefono: str) -> bool:
+        """Activar modo humano para un número"""
+        try:
+            human_mode_key = f"human_mode:{telefono}"
+            self.redis_client.set(human_mode_key, "true", ex=3600)  # 1 hora
+            return True
+        except:
+            return False
+    
+    def _deactivate_human_mode(self, telefono: str) -> bool:
+        """Desactivar modo humano (restaurar bot)"""
+        try:
+            human_mode_key = f"human_mode:{telefono}"
+            self.redis_client.delete(human_mode_key)
+            return True
+        except:
+            return False
+    
+    def _add_help_footer(self, mensaje: str) -> str:
+        """Agregar pie de mensaje con opción de ayuda personalizada"""
+        footer = "\n\n💬 _¿Necesitas ayuda personalizada? Escribe 'ayuda persona' para hablar con nuestro equipo._"
+        return mensaje + footer
+    
     async def _notify_human_support(self, cliente_id: int, telefono: str, mensaje: str):
         """Notificar a soporte humano"""
         try:
@@ -371,12 +394,22 @@ class AIConversationManager:
                 return "❌ Este número está bloqueado."
             # Verificar modo humano
             if self._is_human_mode(telefono):
+                # Comando para SALIR del modo humano (restaurar bot)
+                if mensaje_stripped in ['bot', 'chatbot', 'automatico', 'volver bot', 'salir']:
+                    if self._deactivate_human_mode(telefono):
+                        return self._add_help_footer("🤖 ¡Hola de nuevo! Volví para ayudarte con tus reservas.\n\n¿En qué puedo ayudarte?")
+                # Si está en modo humano, enviar a soporte
                 await self._notify_human_support(cliente_id, telefono, mensaje)
                 return "👥 Tu mensaje fue enviado a nuestro equipo humano. Te responderemos pronto."
+            
+            # Comando para ACTIVAR modo humano  
+            if any(keyword in mensaje_stripped for keyword in ['ayuda persona', 'persona real', 'hablar con persona', 'soporte humano', 'operador', 'atencion personalizada']):
+                if self._activate_human_mode(telefono):
+                    return "👥 Te conecté con nuestro equipo humano. Escribe tu consulta y te responderemos pronto.\n\n💡 Para volver al bot automático, escribe 'bot'"
             # Obtener contexto del negocio
             tenant = db.query(Tenant).filter(Tenant.id == cliente_id).first()
             if not tenant:
-                return "❌ No encontré información del negocio."
+                return self._add_help_footer("❌ No encontré información del negocio.")
             # Obtener historial del usuario
             user_history = self._get_user_history(telefono, db)
             business_context = self._get_business_context(tenant, db)
@@ -399,7 +432,7 @@ class AIConversationManager:
                 # Si no hay código válido, mostrar reservas
                 reservas_activas = user_history.get("reservas_activas", [])
                 if not reservas_activas:
-                    return "😊 No tienes reservas próximas para cancelar."
+                    return self._add_help_footer("😊 No tienes reservas próximas para cancelar.")
                 
                 respuesta = "🔄 *Tus próximas reservas:*\n\n"
                 for r in reservas_activas:
@@ -409,7 +442,7 @@ class AIConversationManager:
                         respuesta += f"❌ Código: `{r['codigo']}` | {r['servicio']} el {r['fecha']} _(muy próxima)_\n"
                 respuesta += "\n💬 Escribe el código de la reserva que deseas cancelar."
                 respuesta += "\n\n_Solo puedes cancelar reservas con más de 1 hora de anticipación._"
-                return respuesta
+                return self._add_help_footer(respuesta)
 
             # --- DETECTAR CÓDIGOS DE RESERVA (sin palabra "cancelar") ---
             # 🔧 MEJORAR: Solo detectar códigos reales, no palabras largas
@@ -434,14 +467,14 @@ class AIConversationManager:
             ]):
                 reservas_activas = user_history.get("reservas_activas", [])
                 if not reservas_activas:
-                    return "😊 No tienes reservas próximas."
+                    return self._add_help_footer("😊 No tienes reservas próximas.")
                 
                 respuesta = "📅 *Tus próximas reservas:*\n\n"
                 for r in reservas_activas:
                     estado_icono = "✅" if r['puede_cancelar'] else "❌"
                     respuesta += f"{estado_icono} `{r['codigo']}` | {r['servicio']} el {r['fecha']}\n"
                 respuesta += "\n💬 Para cancelar, envía el código (ej: `C2HHOH`) o escribe 'cancelar + código'."
-                return respuesta
+                return self._add_help_footer(respuesta)
 
             # --- 🔒 SEGURIDAD: Detectar consultas sobre otros números de teléfono ---
             numero_pattern = r'\b(?:09[0-9]{8}|59[0-9]{8})\b'  # Patrones de números uruguayos
@@ -449,11 +482,11 @@ class AIConversationManager:
             if numeros_encontrados:
                 for numero in numeros_encontrados:
                     if numero != telefono.replace('+', ''):  # Verificar que no sea el propio número
-                        return f"🔒 Por seguridad, solo puedo mostrar información de TUS reservas.\n\n💬 Si necesitas ayuda con tus propias reservas, puedo ayudarte. ¿Qué necesitas? 😊"
+                        return self._add_help_footer(f"🔒 Por seguridad, solo puedo mostrar información de TUS reservas.\n\n💬 Si necesitas ayuda con tus propias reservas, puedo ayudarte. ¿Qué necesitas? 😊")
 
             # --- FLUJO DE CONSULTA DE SERVICIOS ---
             if mensaje_stripped in ["servicios", "ver servicios", "lista", "menu"]:
-                return self.mostrar_servicios(business_context)
+                return self._add_help_footer(self.mostrar_servicios(business_context))
 
             # --- 🔧 DETECTAR CONFUSIÓN DEL USUARIO ---
             frases_confusion = [
@@ -469,7 +502,7 @@ class AIConversationManager:
                         "📋 Si quieres ver tus reservas: escribe 'mis reservas'\n"
                         "🆕 Si quieres hacer una nueva reserva: escribe 'quiero reservar'\n"
                         "❌ Si quieres cancelar: envía el código de tu reserva\n\n"
-                        "💬 ¿Qué necesitas hacer? 😊"
+                        "💬 ¿Qué necesitas hacer? 😊\n\n💬 _¿Necesitas ayuda personalizada? Escribe 'ayuda persona' para hablar con nuestro equipo._"
                     )
 
             # --- FLUJO PRINCIPAL CON IA ---
@@ -477,7 +510,7 @@ class AIConversationManager:
                 mensaje, telefono, conversation_history, user_history, business_context, tenant, db
             )
             self._save_conversation_message(telefono, "assistant", respuesta)
-            return respuesta
+            return self._add_help_footer(respuesta)
 
         except Exception as e:
             print(f"❌ Error en AI manager: {e}")
@@ -1066,17 +1099,17 @@ class AIConversationManager:
             ).first()
             
             if not reserva:
-                return f"❌ No encontré la reserva con código `{codigo_reserva}` o no se puede cancelar.\n\n_Verifica que el código sea correcto y que la reserva sea futura._"
+                return self._add_help_footer(f"❌ No encontré la reserva con código `{codigo_reserva}` o no se puede cancelar.\n\n_Verifica que el código sea correcto y que la reserva sea futura._")
             
             # 🔒 VERIFICACIÓN ADICIONAL: Confirmar que es del mismo teléfono
             if reserva.cliente_telefono != telefono:
                 print(f"🚨 INTENTO DE ACCESO NO AUTORIZADO: {telefono} intentó cancelar reserva de {reserva.cliente_telefono}")
-                return "❌ No tienes autorización para cancelar esta reserva."
+                return self._add_help_footer("❌ No tienes autorización para cancelar esta reserva.")
             
             # Verificar si se puede cancelar (debe ser con al menos 1 hora de anticipación)
             if not self._puede_cancelar_reserva(reserva.fecha_reserva, now_aware):
                 tiempo_restante = (self._normalize_datetime(reserva.fecha_reserva) - now_aware).total_seconds() / 60
-                return f"❌ No puedes cancelar reservas con menos de 1 hora de anticipación.\n\n_Tu reserva es en {int(tiempo_restante)} minutos._"
+                return self._add_help_footer(f"❌ No puedes cancelar reservas con menos de 1 hora de anticipación.\n\n_Tu reserva es en {int(tiempo_restante)} minutos._")
             
             # Intentar cancelar en Google Calendar si existe
             if reserva.event_id:
@@ -1092,11 +1125,11 @@ class AIConversationManager:
             reserva.estado = "cancelado"
             db.commit()
             
-            return f"✅ *Reserva cancelada correctamente*\n\n📅 {reserva.servicio} el {reserva.fecha_reserva.strftime('%d/%m %H:%M') if reserva.fecha_reserva else ''}\n🔖 Código: `{codigo_reserva}`\n\n😊 ¡Esperamos verte pronto!"
+            return f"✅ *Reserva cancelada correctamente*\n\n📅 {reserva.servicio} el {reserva.fecha_reserva.strftime('%d/%m %H:%M') if reserva.fecha_reserva else ''}\n🔖 Código: `{codigo_reserva}`\n\n😊 ¡Esperamos verte pronto!\n\n💬 _¿Necesitas ayuda personalizada? Escribe 'ayuda persona' para hablar con nuestro equipo._"
             
         except Exception as e:
             print(f"❌ Error cancelando reserva: {e}")
-            return f"❌ Error al cancelar la reserva: {str(e)}"
+            return self._add_help_footer(f"❌ Error al cancelar la reserva: {str(e)}")
 
 def _parse_working_hours(wh):
     if wh is None:
