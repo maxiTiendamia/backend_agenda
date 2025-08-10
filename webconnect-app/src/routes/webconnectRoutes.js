@@ -9,6 +9,8 @@ const { getSessionFolder, ensureSessionFolder, limpiarSingletonLock, getSession 
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { limpiarSesionCompleta } = require('../app/sessionUtils');
+
 
 // NUEVA FUNCIÓN: Enviar mensaje por WhatsApp usando la sesión correspondiente
 async function sendMessageToClient(sessionId, telefono, mensaje) {
@@ -748,6 +750,20 @@ router.post('/limpiar-sesiones-huerfanas', async (req, res) => {
       error: 'Error durante la limpieza de sesiones huérfanas',
       details: error.message
     });
+  }
+});
+// NUEVA RUTA: Limpiar sesión completa
+router.post('/limpiar-sesion/:sessionId', async (req, res) => {
+  const sessionId = req.params.sessionId;
+  try {
+    const resultado = await limpiarSesionCompleta(sessionId);
+    if (resultado) {
+      return res.json({ ok: true, mensaje: `Sesión ${sessionId} limpiada correctamente.` });
+    } else {
+      return res.status(500).json({ ok: false, mensaje: `No se pudo limpiar la sesión ${sessionId}.` });
+    }
+  } catch (e) {
+    return res.status(500).json({ ok: false, mensaje: `Error limpiando sesión: ${e.message}` });
   }
 });
 
