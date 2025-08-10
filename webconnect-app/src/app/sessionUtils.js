@@ -45,19 +45,22 @@ async function limpiarSingletonLock(sessionId) {
 async function limpiarSesionCompleta(sessionId) {
   try {
     console.log(`[WEBCONNECT] 🧹 Limpieza completa de sesión ${sessionId}...`);
-    
+
     // 1. Cerrar sesión en memoria si existe
     const { sessions } = require('./wppconnect');
     if (sessions && sessions[sessionId]) {
-      try {
-        await sessions[sessionId].close();
-        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
-      } catch (e) {
-        console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, e.message);
+      if (typeof sessions[sessionId].close === "function") {
+        try {
+          await sessions[sessionId].close();
+          console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
+        } catch (e) {
+          console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, e.message);
+        }
+      } else {
+        console.warn(`[WEBCONNECT] ⚠️ No se puede cerrar sesión ${sessionId}: método close no disponible`);
       }
       delete sessions[sessionId];
-    }
-    
+    }    
     // 2. Esperar a que se liberen recursos
     await new Promise(resolve => setTimeout(resolve, 1500));
     
