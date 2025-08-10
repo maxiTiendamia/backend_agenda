@@ -271,19 +271,9 @@ async function verificarIntegridadSesiones() {
       const archivos = fs.readdirSync(sessionDir);
       console.log(`[INIT] 📂 Archivos en session_${sessionId}: [${archivos.join(', ')}]`);
       
-      // Buscar cualquier archivo que indique una sesión válida
-      const archivosImportantes = archivos.filter(archivo => {
-        return archivo === 'Default' || 
-               archivo === 'SingletonCookie' ||
-               archivo === 'session.json' ||
-               archivo.includes('Local Storage') ||
-               archivo.includes('Session Storage') ||
-               archivo.includes('IndexedDB') ||
-               archivo.includes('Web Data') ||
-               archivo.includes('Cookies');
-      });
+      // 🔧 CRITERIOS MÁS FLEXIBLES para detectar sesiones válidas
       
-      // Verificar si Default es un directorio con contenido
+      // 1. Verificar si Default es un directorio con contenido
       const defaultDir = path.join(sessionDir, 'Default');
       if (fs.existsSync(defaultDir) && fs.statSync(defaultDir).isDirectory()) {
         const defaultFiles = fs.readdirSync(defaultDir);
@@ -293,17 +283,53 @@ async function verificarIntegridadSesiones() {
         }
       }
       
-      // O si tiene otros archivos importantes
+      // 2. Buscar archivos importantes específicos
+      const archivosImportantes = archivos.filter(archivo => {
+        return archivo === 'Default' || 
+               archivo === 'SingletonCookie' ||
+               archivo === 'session.json' ||
+               archivo.includes('Local Storage') ||
+               archivo.includes('Session Storage') ||
+               archivo.includes('IndexedDB') ||
+               archivo.includes('Web Data') ||
+               archivo.includes('Cookies') ||
+               archivo.includes('.db') ||
+               archivo.includes('Cache');
+      });
+      
       if (archivosImportantes.length > 0) {
         tieneArchivosImportantes = true;
         console.log(`[INIT] ✅ Sesión ${sessionId} tiene archivos importantes: [${archivosImportantes.join(', ')}]`);
       }
       
-      // Si el directorio tiene contenido pero no archivos críticos específicos,
-      // aún podría ser una sesión válida
+      // 3. 🔧 CRITERIO MÁS PERMISIVO: Si el directorio tiene contenido, conservarlo
       if (!tieneArchivosImportantes && archivos.length > 0) {
-        tieneArchivosImportantes = true;
-        console.log(`[INIT] ⚠️ Sesión ${sessionId} tiene archivos (${archivos.length}) - Considerando como válida`);
+        // Verificar que no sea solo archivos temporales
+        const archivosNoTemporales = archivos.filter(archivo => 
+          !archivo.startsWith('.') && 
+          !archivo.includes('temp') && 
+          !archivo.includes('tmp') &&
+          archivo !== 'SingletonLock'
+        );
+        
+        if (archivosNoTemporales.length > 0) {
+          tieneArchivosImportantes = true;
+          console.log(`[INIT] ⚠️ Sesión ${sessionId} tiene ${archivosNoTemporales.length} archivos no temporales - Considerando como válida`);
+          console.log(`[INIT] 📋 Archivos no temporales: [${archivosNoTemporales.join(', ')}]`);
+        }
+      }
+      
+      // 4. 🔧 ÚLTIMO RECURSO: Si es reciente (menos de 1 hora), conservar
+      if (!tieneArchivosImportantes) {
+        const sessionStats = fs.statSync(sessionDir);
+        const horaActual = new Date();
+        const diferenciaTiempo = horaActual - sessionStats.mtime;
+        const unaHoraEnMs = 60 * 60 * 1000;
+        
+        if (diferenciaTiempo < unaHoraEnMs) {
+          tieneArchivosImportantes = true;
+          console.log(`[INIT] 🕐 Sesión ${sessionId} es reciente (${Math.round(diferenciaTiempo / 60000)} min) - Conservando`);
+        }
       }
       
     } catch (readError) {
@@ -315,13 +341,15 @@ async function verificarIntegridadSesiones() {
       console.log(`[INIT] ✅ Sesión ${sessionId} marcada como válida`);
     } else {
       sesionesCorruptas.push(sessionId);
-      console.log(`[INIT] 🗑️ Sesión ${sessionId} considerada vacía/corrupta - Eliminando...`);
-      try {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-        console.log(`[INIT] ✅ Directorio session_${sessionId} eliminado`);
-      } catch (error) {
-        console.error(`[INIT] ❌ Error eliminando sesión ${sessionId}:`, error.message);
-      }
+      console.log(`[INIT] ⚠️ Sesión ${sessionId} considerada vacía/corrupta - PERO NO ELIMINANDO automáticamente`);
+      console.log(`[INIT] 💡 Para eliminar manualmente: rm -rf tokens/session_${sessionId}`);
+      // 🔧 NO ELIMINAR AUTOMÁTICAMENTE - Solo reportar
+      // try {
+      //   fs.rmSync(sessionDir, { recursive: true, force: true });
+      //   console.log(`[INIT] ✅ Directorio session_${sessionId} eliminado`);
+      // } catch (error) {
+      //   console.error(`[INIT] ❌ Error eliminando sesión ${sessionId}:`, error.message);
+      // }
     }
   }
   
@@ -344,14 +372,44 @@ async function obtenerTenantsConSesionesValidas() {
     // Verificar integridad de sesiones en disco
     const sesionesValidas = await verificarIntegridadSesiones();
     
-    // Solo incluir tenants que estén activos Y tengan sesión válida
+    // 🔧 NUEVO: Intentar restaurar desde backup si no hay sesiones válidas pero hay tenants activos
     const tenantsConSesionValida = tenantsActivos.filter(tenantId => 
       sesionesValidas.includes(tenantId)
+    );
+    
+    const tenantsSinSesion = tenantsActivos.filter(tenantId => 
+      !sesionesValidas.includes(tenantId)
     );
     
     console.log(`[INIT] 📋 Tenants activos en BD: [${tenantsActivos.join(', ')}]`);
     console.log(`[INIT] 💾 Sesiones válidas en disco: [${sesionesValidas.join(', ')}]`);
     console.log(`[INIT] 🔗 Tenants con sesión válida: [${tenantsConSesionValida.join(', ')}]`);
+    console.log(`[INIT] ⚠️ Tenants sin sesión: [${tenantsSinSesion.join(', ')}]`);
+    
+    // 🔧 INTENTAR RESTAURAR DESDE BACKUP para tenants sin sesión
+    if (tenantsSinSesion.length > 0) {
+      console.log(`[INIT] 🔄 Intentando restaurar ${tenantsSinSesion.length} sesiones desde backup...`);
+      
+      const { restoreFromBackup } = require('./app/wppconnect');
+      
+      for (const tenantId of tenantsSinSesion) {
+        try {
+          console.log(`[INIT] 📂 Intentando restaurar backup para tenant ${tenantId}...`);
+          const restored = await restoreFromBackup(tenantId);
+          
+          if (restored) {
+            console.log(`[INIT] ✅ Backup restaurado para tenant ${tenantId}`);
+            tenantsConSesionValida.push(tenantId);
+          } else {
+            console.log(`[INIT] ⚠️ No hay backup disponible para tenant ${tenantId}`);
+          }
+        } catch (restoreError) {
+          console.error(`[INIT] ❌ Error restaurando backup para ${tenantId}:`, restoreError.message);
+        }
+      }
+      
+      console.log(`[INIT] 📊 Después de restaurar backups - Tenants con sesión: [${tenantsConSesionValida.join(', ')}]`);
+    }
     
     return tenantsConSesionValida;
     
