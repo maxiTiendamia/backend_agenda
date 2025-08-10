@@ -2,7 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const { limpiarQR } = require('./qrUtils');
-const pool = require('../database'); // Ajusta si tu pool está en otro archivo
+const pool = require('./database'); // Ajusta si tu pool está en otro archivo
 const { createSession } = require('./wppconnect'); // Ajusta según dónde esté tu createSession
 
 // Pool de sesiones activas (importar desde wppconnect.js)
