@@ -1044,7 +1044,23 @@ async function restoreFromBackup(sessionId) {
     
     // Leer metadata del backup
     const metadata = JSON.parse(fs.readFileSync(metadataFile, 'utf8'));
-    console.log(`[WEBCONNECT] 📂 Restaurando backup de ${sessionId} (${metadata.timestamp})`);
+    console.log(`[WEBCONNECT] 📂 Evaluando backup de ${sessionId} (${metadata.timestamp})`);
+    
+    // 🔧 VERIFICAR ANTIGÜEDAD DEL BACKUP
+    const backupDate = new Date(metadata.timestamp);
+    const now = new Date();
+    const horasTranscurridas = (now - backupDate) / (1000 * 60 * 60);
+    
+    console.log(`[WEBCONNECT] ⏰ Backup tiene ${horasTranscurridas.toFixed(1)} horas de antigüedad`);
+    
+    // Si el backup es muy antiguo (más de 24 horas), no restaurar
+    if (horasTranscurridas > 24) {
+      console.log(`[WEBCONNECT] ⚠️ Backup demasiado antiguo (>${horasTranscurridas.toFixed(1)}h) - Saltando restauración`);
+      console.log(`[WEBCONNECT] 💡 Se generará QR nuevo en su lugar`);
+      return false;
+    }
+    
+    console.log(`[WEBCONNECT] ✅ Backup válido (${horasTranscurridas.toFixed(1)}h) - Restaurando...`);
     
     // Obtener lista de archivos en backup
     const backupFiles = fs.readdirSync(backupDir).filter(file => file !== 'backup-metadata.json');
