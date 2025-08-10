@@ -3,7 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const { limpiarQR } = require('./qrUtils');
 const pool = require('../db'); // Ajusta si tu pool está en otro archivo
-const { estaSesionMuerta } = require('./sessionUtils');
 const { createSession } = require('./wppconnect'); // Ajusta según dónde esté tu createSession
 
 // Pool de sesiones activas (importar desde wppconnect.js)
