@@ -980,9 +980,20 @@ async function saveSessionBackup(sessionId) {
 async function reconnectSession(sessionId) {
   try {
     console.log(`[WEBCONNECT] 🔄 Iniciando reconexión inteligente para ${sessionId}...`);
+    // Evitar reconexiones concurrentes
+    if (sessions[sessionId] && sessions[sessionId]._reconnecting) {
+      console.log(`[WEBCONNECT] ⏳ Reconexión ya en curso para ${sessionId} - evitando duplicado`);
+      return false;
+    }
+    if (!sessions[sessionId]) {
+      // Crear contenedor temporal de flags si no existe cliente aún
+      sessions[sessionId] = { _temp: true };
+    }
+    sessions[sessionId]._reconnecting = true;
+    sessions[sessionId]._reconnectingSince = Date.now();
     
     // PASO 1: Limpiar sesión anterior
-    if (sessions[sessionId]) {
+  if (sessions[sessionId]) {
       console.log(`[WEBCONNECT] 🧹 Limpiando sesión anterior para ${sessionId}`);
       
       // Limpiar intervals de keep-alive
@@ -1001,21 +1012,37 @@ async function reconnectSession(sessionId) {
         console.log(`[WEBCONNECT] ⚠️ Error cerrando cliente ${sessionId}:`, closeError.message);
       }
       
-      // Eliminar de memoria
+      // Eliminar de memoria (manteniendo flags mínimas hasta finalizar)
+      const prevFlags = {
+        _attemptedRestoreOnNotLogged: sessions[sessionId]?._attemptedRestoreOnNotLogged,
+        _qrFailed: sessions[sessionId]?._qrFailed
+      };
       delete sessions[sessionId];
+      // Conservar un objeto de control para flags de reconexión
+      sessions[sessionId] = { ...prevFlags, _reconnecting: true, _reconnectingSince: Date.now() };
     }
     
     // PASO 2: Esperar a que se liberen recursos
     console.log(`[WEBCONNECT] ⏳ Esperando liberación de recursos para ${sessionId}...`);
     await new Promise(resolve => setTimeout(resolve, 3000));
     
-    // PASO 3: Intentar restaurar desde backup si existe
+    // PASO 3: Limpieza de locks del perfil y preparar carpeta
+    try {
+      const { limpiarSingletonLock, ensureSessionFolder } = require('./sessionUtils');
+      await ensureSessionFolder(sessionId);
+      await limpiarSingletonLock(sessionId);
+      console.log(`[WEBCONNECT] 🧽 Locks limpiados para ${sessionId}`);
+    } catch (lockErr) {
+      console.log(`[WEBCONNECT] ⚠️ No se pudieron limpiar locks para ${sessionId}: ${lockErr.message}`);
+    }
+
+    // PASO 4: Intentar restaurar desde backup si existe
     const backupRestored = await restoreFromBackup(sessionId);
     if (backupRestored) {
       console.log(`[WEBCONNECT] 📂 Backup restaurado para ${sessionId}`);
     }
     
-    // PASO 4: Crear nueva sesión
+    // PASO 5: Crear nueva sesión
     console.log(`[WEBCONNECT] 🚀 Creando nueva sesión para ${sessionId}...`);
     await createSession(sessionId, null); // Sin callback de QR, debería usar sesión guardada
     
@@ -1044,6 +1071,17 @@ async function reconnectSession(sessionId) {
     }, 120000); // 2 minutos
     
     return false;
+  } finally {
+    // Liberar bandera de reconexión si el cliente quedó creado; si no, mantener para evitar tormenta
+    if (sessions[sessionId]) {
+      if (sessions[sessionId]._temp && !sessions[sessionId].isConnected) {
+        // No hay cliente real, dejar bandera para el reintento programado
+      } else {
+        delete sessions[sessionId]._reconnecting;
+        delete sessions[sessionId]._reconnectingSince;
+      }
+      delete sessions[sessionId]._temp;
+    }
   }
 }
 
