@@ -1,0 +1,30 @@
+{
+  "name": "webconnect-agenda",
+  "script": "src/app.js",
+  "instances": 1,
+  "autorestart": true,
+  "watch": false,
+  "max_memory_restart": "1G",
+  "env": {
+    "NODE_ENV": "production",
+    "PORT": 3000
+  },
+  "log_date_format": "YYYY-MM-DD HH:mm:ss Z",
+  "out_file": "./logs/out.log",
+  "error_file": "./logs/error.log",
+  "merge_logs": true,
+  "min_uptime": "10s",
+  "max_restarts": 5,
+  "restart_delay": 5000,
+  "post_start": [
+    "sleep 30",
+    "curl -X POST http://localhost:3000/force-reconnect-all || echo 'Reconexión forzada falló'"
+  ],
+  "post_restart": [
+    "sleep 30", 
+    "curl -X POST http://localhost:3000/force-reconnect-all || echo 'Reconexión forzada falló'"
+  ],
+  "kill_timeout": 30000,
+  "listen_timeout": 10000,
+  "shutdown_with_message": true
+}

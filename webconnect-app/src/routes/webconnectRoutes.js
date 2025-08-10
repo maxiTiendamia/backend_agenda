@@ -214,6 +214,144 @@ router.post('/restore-sessions', async (req, res) => {
   }
 });
 
+// 🔧 NUEVO ENDPOINT: Reconexión forzada después de reinicio VPS
+router.post('/force-reconnect-all', async (req, res) => {
+  try {
+    console.log('[WEBCONNECT] 🚀 Iniciando reconexión forzada de todas las sesiones...');
+    
+    const { getAllSessionsStatus, reconnectSession, sessions, verificarClienteExisteEnBD } = require('../app/wppconnect');
+    
+    // Obtener todas las sesiones activas
+    const sessionIds = Object.keys(sessions);
+    console.log(`[WEBCONNECT] 📋 Sesiones encontradas en memoria: [${sessionIds.join(', ')}]`);
+    
+    let reconectadas = 0;
+    let errores = 0;
+    const resultados = {};
+    
+    for (const sessionId of sessionIds) {
+      try {
+        console.log(`[WEBCONNECT] 🔄 Forzando reconexión de sesión ${sessionId}...`);
+        
+        // Verificar que el cliente existe en BD
+        const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+        if (!clienteExiste) {
+          console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} no existe en BD - Omitiendo`);
+          resultados[sessionId] = { success: false, error: 'Cliente no existe en BD' };
+          continue;
+        }
+        
+        // Forzar reconexión
+        await reconnectSession(sessionId);
+        reconectadas++;
+        resultados[sessionId] = { success: true, message: 'Reconectado exitosamente' };
+        
+        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} reconectada exitosamente`);
+        
+        // Pausa entre reconexiones
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+      } catch (error) {
+        console.error(`[WEBCONNECT] ❌ Error reconectando sesión ${sessionId}:`, error.message);
+        errores++;
+        resultados[sessionId] = { success: false, error: error.message };
+      }
+    }
+    
+    console.log(`[WEBCONNECT] 📊 Reconexión forzada completada: ${reconectadas} exitosas, ${errores} errores`);
+    
+    res.json({ 
+      ok: true, 
+      reconectadas,
+      errores,
+      total: sessionIds.length,
+      resultados,
+      message: `Reconexión forzada completada: ${reconectadas}/${sessionIds.length} sesiones reconectadas`
+    });
+    
+  } catch (err) {
+    console.error('[WEBCONNECT] ❌ Error en reconexión forzada:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// 🔧 NUEVO ENDPOINT: Verificar estado después de reconexión
+router.get('/health-check', async (req, res) => {
+  try {
+    const { getAllSessionsStatus, sessions, verificarClienteExisteEnBD } = require('../app/wppconnect');
+    
+    const sessionIds = Object.keys(sessions);
+    const estadoGeneral = {
+      totalSesiones: sessionIds.length,
+      sesionesConectadas: 0,
+      sesionesDesconectadas: 0,
+      sesionesConError: 0,
+      detalles: {}
+    };
+    
+    for (const sessionId of sessionIds) {
+      try {
+        const session = sessions[sessionId];
+        if (!session) {
+          estadoGeneral.detalles[sessionId] = { estado: 'NO_ENCONTRADA', conectado: false };
+          estadoGeneral.sesionesConError++;
+          continue;
+        }
+        
+        // Verificar existencia en BD
+        const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+        if (!clienteExiste) {
+          estadoGeneral.detalles[sessionId] = { estado: 'NO_EXISTE_BD', conectado: false };
+          estadoGeneral.sesionesConError++;
+          continue;
+        }
+        
+        // Verificar conexión con timeout
+        let isConnected, connectionState;
+        try {
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout')), 5000)
+          );
+          
+          isConnected = await Promise.race([session.isConnected(), timeoutPromise]);
+          connectionState = await Promise.race([session.getConnectionState(), timeoutPromise]);
+        } catch (timeoutError) {
+          isConnected = false;
+          connectionState = 'TIMEOUT';
+        }
+        
+        estadoGeneral.detalles[sessionId] = {
+          estado: connectionState,
+          conectado: isConnected,
+          timestamp: new Date().toISOString()
+        };
+        
+        if (isConnected) {
+          estadoGeneral.sesionesConectadas++;
+        } else {
+          estadoGeneral.sesionesDesconectadas++;
+        }
+        
+      } catch (error) {
+        estadoGeneral.detalles[sessionId] = { estado: 'ERROR', conectado: false, error: error.message };
+        estadoGeneral.sesionesConError++;
+      }
+    }
+    
+    res.json({
+      ok: true,
+      estadoGeneral,
+      timestamp: new Date().toISOString(),
+      recomendacion: estadoGeneral.sesionesDesconectadas > 0 ? 
+        'Hay sesiones desconectadas - Considera ejecutar /force-reconnect-all' : 
+        'Todas las sesiones funcionan correctamente'
+    });
+    
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Endpoint mejorado para restart-qr
 router.post('/restart-qr/:sessionId', async (req, res) => {
   const { sessionId } = req.params;

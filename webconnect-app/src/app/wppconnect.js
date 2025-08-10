@@ -516,17 +516,35 @@ async function initializeExistingSessions(specificTenants = null) {
           continue;
         }
         
+        // 🔧 VALIDAR INTEGRIDAD DEL DIRECTORIO DE SESIÓN
+        const archivos = fs.readdirSync(sessionDir);
+        if (archivos.length === 0) {
+          console.log(`[WEBCONNECT] ⚠️ Directorio vacío para sesión ${tenantId} - Omitiendo`);
+          continue;
+        }
+        
         // Crear sesión sin callback de QR (debería usar sesión guardada)
         const client = await createSession(tenantId, null);
         
         if (client) {
           console.log(`[WEBCONNECT] ✅ Sesión ${tenantId} restaurada exitosamente`);
+          
+          // 🔧 SETUP KEEP-ALIVE INMEDIATAMENTE DESPUÉS DE RESTAURAR
+          setTimeout(async () => {
+            try {
+              await setupKeepAlive(tenantId);
+              console.log(`[WEBCONNECT] 💓 Keep-alive activado para sesión ${tenantId}`);
+            } catch (keepAliveError) {
+              console.error(`[WEBCONNECT] ❌ Error configurando keep-alive para ${tenantId}:`, keepAliveError.message);
+            }
+          }, 5000);
+          
         } else {
           console.log(`[WEBCONNECT] ⚠️ Sesión ${tenantId} no pudo ser restaurada`);
         }
         
         // Pausa entre restauraciones para evitar sobrecarga
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Aumentado a 3 segundos
         
       } catch (error) {
         console.error(`[WEBCONNECT] ❌ Error restaurando sesión ${tenantId}:`, error.message);
@@ -536,6 +554,55 @@ async function initializeExistingSessions(specificTenants = null) {
     // Resumen final
     const sesionesActivas = Object.keys(sessions);
     console.log(`[WEBCONNECT] 📊 Restauración completada. Sesiones activas: [${sesionesActivas.join(', ')}]`);
+    
+    // 🔧 VERIFICACIÓN POST-RESTAURACIÓN (Crucial para VPS restart)
+    if (sesionesActivas.length > 0) {
+      console.log('[WEBCONNECT] 🔍 Programando verificación post-restauración en 30 segundos...');
+      setTimeout(async () => {
+        console.log('[WEBCONNECT] 🔍 Ejecutando verificación post-restauración...');
+        
+        for (const sessionId of sesionesActivas) {
+          try {
+            const session = sessions[sessionId];
+            if (!session) {
+              console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} no encontrada en memoria durante verificación`);
+              continue;
+            }
+            
+            // Verificar estado de conexión
+            const isConnected = await session.isConnected();
+            const connectionState = await session.getConnectionState();
+            
+            console.log(`[WEBCONNECT] 📊 Post-restauración ${sessionId}: conectado=${isConnected}, estado=${connectionState}`);
+            
+            // Si no está conectada, intentar reconexión
+            if (!isConnected || connectionState === 'DISCONNECTED') {
+              console.log(`[WEBCONNECT] 🔄 Reconectando sesión ${sessionId} después de verificación...`);
+              await reconnectSession(sessionId);
+            }
+            
+          } catch (error) {
+            console.error(`[WEBCONNECT] ❌ Error en verificación post-restauración ${sessionId}:`, error.message);
+            
+            // Si hay error, intentar reconexión
+            try {
+              const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+              if (clienteExiste) {
+                console.log(`[WEBCONNECT] 🔄 Reconectando ${sessionId} por error en verificación...`);
+                await reconnectSession(sessionId);
+              }
+            } catch (reconnectError) {
+              console.error(`[WEBCONNECT] ❌ Error en reconexión de verificación para ${sessionId}:`, reconnectError.message);
+            }
+          }
+          
+          // Pausa entre verificaciones
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        
+        console.log('[WEBCONNECT] ✅ Verificación post-restauración completada');
+      }, 30000);
+    }
     
   } catch (error) {
     console.error('[WEBCONNECT] ❌ Error en initializeExistingSessions:', error);
@@ -548,89 +615,142 @@ async function initializeExistingSessions(specificTenants = null) {
 async function monitorearSesiones() {
   console.log('[WEBCONNECT] 🔍 Iniciando monitoreo optimizado de sesiones...');
   
+  // 🔧 PRIMERA EJECUCIÓN INMEDIATA DESPUÉS DE 1 MINUTO (para VPS restart)
+  setTimeout(async () => {
+    console.log('[WEBCONNECT] 🔍 Primera verificación de monitoreo (1 minuto después del inicio)...');
+    await ejecutarMonitoreo();
+  }, 60000);
+  
+  // 🔧 MONITOREO REGULAR CADA 3 MINUTOS
   setInterval(async () => {
-    try {
-      const sesionesActivas = Object.keys(sessions);
-      
-      if (sesionesActivas.length === 0) {
-        console.log('[WEBCONNECT] 📊 No hay sesiones activas para monitorear');
-        return;
-      }
-      
-      console.log(`[WEBCONNECT] 📊 Monitoreando ${sesionesActivas.length} sesiones: [${sesionesActivas.join(', ')}]`);
-      
-      for (const sessionId of sesionesActivas) {
+    await ejecutarMonitoreo();
+  }, 180000); // Cada 3 minutos
+  
+  console.log('[WEBCONNECT] ⏰ Monitoreo programado - Primera verificación en 1 minuto, luego cada 3 minutos');
+}
+
+/**
+ * Función auxiliar que ejecuta el monitoreo real
+ */
+async function ejecutarMonitoreo() {
+  try {
+    const sesionesActivas = Object.keys(sessions);
+    
+    if (sesionesActivas.length === 0) {
+      console.log('[WEBCONNECT] 📊 No hay sesiones activas para monitorear');
+      return;
+    }
+    
+    console.log(`[WEBCONNECT] 📊 Monitoreando ${sesionesActivas.length} sesiones: [${sesionesActivas.join(', ')}]`);
+    
+    for (const sessionId of sesionesActivas) {
+      try {
+        // 🔍 VALIDACIÓN CRÍTICA: Verificar existencia en BD primero
+        const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+        if (!clienteExiste) {
+          console.log(`[WEBCONNECT] 🗑️ Monitoreo: Cliente ${sessionId} ya no existe en BD - Eliminando...`);
+          await eliminarSesionInexistente(sessionId);
+          continue;
+        }
+        
+        const client = sessions[sessionId];
+        if (!client) {
+          console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} sin cliente en memoria`);
+          continue;
+        }
+        
+        // Verificar estado de conexión con timeout
+        let isConnected, connectionState;
+        
         try {
-          // 🔍 VALIDACIÓN CRÍTICA: Verificar existencia en BD primero
-          const clienteExiste = await verificarClienteExisteEnBD(sessionId);
-          if (!clienteExiste) {
-            console.log(`[WEBCONNECT] 🗑️ Monitoreo: Cliente ${sessionId} ya no existe en BD - Eliminando...`);
-            await eliminarSesionInexistente(sessionId);
-            continue;
-          }
+          // 🔧 TIMEOUT PARA EVITAR COLGARSE
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout verificando estado')), 10000)
+          );
           
-          const client = sessions[sessionId];
-          if (!client) {
-            console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} sin cliente en memoria`);
-            continue;
-          }
+          isConnected = await Promise.race([
+            client.isConnected(),
+            timeoutPromise
+          ]);
           
-          // Verificar estado de conexión
-          const isConnected = await client.isConnected();
-          const connectionState = await client.getConnectionState();
+          connectionState = await Promise.race([
+            client.getConnectionState(),
+            timeoutPromise
+          ]);
           
-          console.log(`[WEBCONNECT] 📡 Sesión ${sessionId}: conectado=${isConnected}, estado=${connectionState}`);
+        } catch (stateError) {
+          console.log(`[WEBCONNECT] ⚠️ Error obteniendo estado de ${sessionId}: ${stateError.message}`);
+          isConnected = false;
+          connectionState = 'ERROR';
+        }
+        
+        console.log(`[WEBCONNECT] 📡 Sesión ${sessionId}: conectado=${isConnected}, estado=${connectionState}`);
+        
+        // 🔧 CRITERIOS MÁS AGRESIVOS PARA RECONEXIÓN
+        const needsReconnection = !isConnected || 
+                                 connectionState === 'DISCONNECTED' || 
+                                 connectionState === 'TIMEOUT' ||
+                                 connectionState === 'UNPAIRED' ||
+                                 connectionState === 'ERROR' ||
+                                 connectionState === 'PAIRING' ||
+                                 connectionState === 'SCAN_QR_CODE';
+        
+        if (needsReconnection) {
+          console.log(`[WEBCONNECT] 🔄 Monitoreo: Sesión ${sessionId} necesita reconexión (${connectionState})`);
           
-          // Determinar si necesita reconexión
-          const needsReconnection = !isConnected || 
-                                   connectionState === 'DISCONNECTED' || 
-                                   connectionState === 'TIMEOUT' ||
-                                   connectionState === 'UNPAIRED';
-          
-          if (needsReconnection) {
-            console.log(`[WEBCONNECT] 🔄 Monitoreo: Sesión ${sessionId} necesita reconexión (${connectionState})`);
-            
-            // Doble verificación antes de reconectar
-            const clienteExisteAntesReconexion = await verificarClienteExisteEnBD(sessionId);
-            if (clienteExisteAntesReconexion) {
-              await reconnectSession(sessionId);
-            } else {
-              console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} eliminado durante verificación`);
-              await eliminarSesionInexistente(sessionId);
-            }
+          // Doble verificación antes de reconectar
+          const clienteExisteAntesReconexion = await verificarClienteExisteEnBD(sessionId);
+          if (clienteExisteAntesReconexion) {
+            console.log(`[WEBCONNECT] 🚀 Iniciando reconexión para ${sessionId}...`);
+            await reconnectSession(sessionId);
           } else {
-            console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} está funcionando correctamente`);
+            console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} eliminado durante verificación`);
+            await eliminarSesionInexistente(sessionId);
           }
+        } else {
+          console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} está funcionando correctamente`);
           
-        } catch (sessionError) {
-          console.error(`[WEBCONNECT] ❌ Error monitoreando sesión ${sessionId}:`, sessionError.message);
-          
-          // Si hay error persistente, intentar reconectar
+          // 🔧 VERIFICACIÓN ADICIONAL: Intentar una operación simple
           try {
-            const clienteExiste = await verificarClienteExisteEnBD(sessionId);
-            if (clienteExiste) {
-              console.log(`[WEBCONNECT] 🔄 Monitoreo: Reconectando ${sessionId} debido a error`);
-              await reconnectSession(sessionId);
-            } else {
-              await eliminarSesionInexistente(sessionId);
-            }
-          } catch (reconnectError) {
-            console.error(`[WEBCONNECT] ❌ Error en reconexión de monitoreo para ${sessionId}:`, reconnectError.message);
+            await client.getConnectionState();
+            console.log(`[WEBCONNECT] 💚 Sesión ${sessionId} responde correctamente`);
+          } catch (testError) {
+            console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} no responde - Programando reconexión`);
+            setTimeout(async () => {
+              const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+              if (clienteExiste) {
+                await reconnectSession(sessionId);
+              }
+            }, 5000);
           }
         }
         
-        // Pequeña pausa entre verificaciones para no sobrecargar
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (sessionError) {
+        console.error(`[WEBCONNECT] ❌ Error monitoreando sesión ${sessionId}:`, sessionError.message);
+        
+        // Si hay error persistente, intentar reconectar
+        try {
+          const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+          if (clienteExiste) {
+            console.log(`[WEBCONNECT] 🔄 Monitoreo: Reconectando ${sessionId} debido a error`);
+            await reconnectSession(sessionId);
+          } else {
+            await eliminarSesionInexistente(sessionId);
+          }
+        } catch (reconnectError) {
+          console.error(`[WEBCONNECT] ❌ Error en reconexión de monitoreo para ${sessionId}:`, reconnectError.message);
+        }
       }
       
-      console.log(`[WEBCONNECT] ✅ Monitoreo completado para ${sesionesActivas.length} sesiones`);
-      
-    } catch (error) {
-      console.error('[WEBCONNECT] ❌ Error general en monitoreo de sesiones:', error);
+      // Pequeña pausa entre verificaciones para no sobrecargar
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Aumentado a 2 segundos
     }
-  }, 180000); // Cada 3 minutos (más frecuente que antes)
-  
-  console.log('[WEBCONNECT] ⏰ Monitoreo programado cada 3 minutos');
+    
+    console.log(`[WEBCONNECT] ✅ Monitoreo completado para ${sesionesActivas.length} sesiones`);
+    
+  } catch (error) {
+    console.error('[WEBCONNECT] ❌ Error general en monitoreo de sesiones:', error);
+  }
 }
 
 /**
@@ -1071,7 +1191,7 @@ async function getAllSessionsStatus() {
 
 module.exports = { 
   createSession, 
-  clearSession, 
+  clearSession,
   getSession,  // ✅ Ahora está implementada
   isSessionActive, // ✅ Nueva función auxiliar
   getAllSessionsStatus, // ✅ Nueva función para debug
@@ -1079,6 +1199,7 @@ module.exports = {
   testAPIConnection,
   initializeExistingSessions,
   monitorearSesiones,
+  ejecutarMonitoreo, // ✅ Nueva función auxiliar
   verificarNumeroBloqueado,
   verificarClienteExisteEnBD,
   eliminarSesionInexistente,
