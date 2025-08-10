@@ -94,9 +94,10 @@ async function limpiarDatosObsoletos() {
     }
     
     // 4. NUEVO: Limpiar directorios de tokens obsoletos
-    const fs = require('fs');
-    const path = require('path');
-    const tokensDir = path.join(__dirname, 'tokens');
+  const fs = require('fs');
+  const path = require('path');
+  // Unificar ruta con wppconnect.js -> tokens está en webconnect-app/tokens
+  const tokensDir = path.join(__dirname, '../tokens');
     
     // 🔧 INICIALIZAR VARIABLE AQUÍ
     let directoriosObsoletos = [];
@@ -237,7 +238,8 @@ const { createSession, testAPIConnection, initializeExistingSessions, monitorear
 async function verificarIntegridadSesiones() {
   const fs = require('fs');
   const path = require('path');
-  const tokensDir = path.join(__dirname, 'tokens');
+  // Unificar ruta con wppconnect.js -> tokens está en webconnect-app/tokens
+  const tokensDir = path.join(__dirname, '../tokens');
   
   console.log('[INIT] 🔍 Verificando integridad de sesiones...');
   

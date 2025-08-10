@@ -311,7 +311,7 @@ async function createSession(sessionId, onQR) {
         }
       },
 
-      statusFind: async (statusSession, session) => {
+  statusFind: async (statusSession, session) => {
         console.log(`[WEBCONNECT] 🔄 Estado de sesión ${sessionId}: ${statusSession}`);
         
         // 🔥 NUEVA VERIFICACIÓN: Si la sesión fue marcada como fallida, no continuar
@@ -381,6 +381,28 @@ async function createSession(sessionId, onQR) {
           
         } else if (statusSession === 'notLogged') {
           console.log(`[WEBCONNECT] 🔒 Sesión ${sessionId} no está logueada`);
+          // Intento automático único de restaurar desde backup si existe
+          try {
+            if (sessions[sessionId] && !sessions[sessionId]._attemptedRestoreOnNotLogged) {
+              sessions[sessionId]._attemptedRestoreOnNotLogged = true;
+              console.log(`[WEBCONNECT] ♻️ Intentando restaurar desde backup para ${sessionId} (notLogged)`);
+              const restored = await restoreFromBackup(sessionId);
+              if (restored) {
+                console.log(`[WEBCONNECT] 🔁 Backup restaurado. Reiniciando sesión ${sessionId} sin QR...`);
+                setTimeout(async () => {
+                  try {
+                    await reconnectSession(sessionId);
+                  } catch (reErr) {
+                    console.error(`[WEBCONNECT] Error reiniciando ${sessionId} tras notLogged:`, reErr.message);
+                  }
+                }, 1000);
+              } else {
+                console.log(`[WEBCONNECT] ℹ️ No hay backup utilizable para ${sessionId}. Se mantendrá el flujo de QR`);
+              }
+            }
+          } catch (e) {
+            console.log(`[WEBCONNECT] ⚠️ Error en intento de restauración automática notLogged: ${e.message}`);
+          }
           
         } else if (statusSession === 'qrReadFail') {
           console.log(`[WEBCONNECT] ❌ Fallo al leer QR para sesión ${sessionId}`);
@@ -895,13 +917,9 @@ async function saveSessionBackup(sessionId) {
       fs.mkdirSync(backupDir, { recursive: true });
     }
     
-    // Archivos críticos para backup (los más importantes para mantener sesión)
+    // Preferimos copiar el perfil completo 'Default' para preservar cookies y storage
     const criticalFiles = [
-      'Default/Local Storage',
-      'Default/Session Storage', 
-      'Default/IndexedDB',
-      'Default/Web Data',
-      'Default/Cookies',
+      'Default',
       'session.json'
     ];
     
@@ -949,7 +967,7 @@ async function saveSessionBackup(sessionId) {
       JSON.stringify(backupMetadata, null, 2)
     );
     
-    console.log(`[WEBCONNECT] ✅ Backup completado para sesión ${sessionId} (${archivosSalvados} archivos)`);
+  console.log(`[WEBCONNECT] ✅ Backup completado para sesión ${sessionId} (${archivosSalvados} item(s))`);
     return true;
     
   } catch (error) {
@@ -1062,8 +1080,14 @@ async function restoreFromBackup(sessionId) {
     
     console.log(`[WEBCONNECT] ✅ Backup válido (${horasTranscurridas.toFixed(1)}h) - Restaurando...`);
     
-    // Obtener lista de archivos en backup
-    const backupFiles = fs.readdirSync(backupDir).filter(file => file !== 'backup-metadata.json');
+    // Preferimos restaurar 'Default' completo y 'session.json' si existen
+    const preferidos = ['Default', 'session.json'];
+    const backupEntries = fs.readdirSync(backupDir).filter(file => file !== 'backup-metadata.json');
+    const backupFiles = preferidos.filter(f => backupEntries.includes(f));
+    // Completar con otros archivos si existieran
+    for (const f of backupEntries) {
+      if (!backupFiles.includes(f)) backupFiles.push(f);
+    }
     
     let archivosRestaurados = 0;
     
