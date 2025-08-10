@@ -224,92 +224,93 @@ async function createSession(sessionId, onQR) {
         ]
       },
       
-      catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
-        console.log(`[WEBCONNECT] 📱 QR generado para sesión ${sessionId}, intento ${attempts}/10`);
-        
-        // 🔧 VERIFICAR SI LA SESIÓN YA ESTÁ CONECTADA - NO GENERAR MÁS QRs
-        if (sessions[sessionId]) {
-          // Verificar flags de conexión
-          if (sessions[sessionId]._qrConnected || sessions[sessionId]._fullyConnected) {
-            console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} ya conectada via QR - Ignorando intento ${attempts}`);
-            return; // NO generar más QRs
-          }
-          
-          // Verificar estado de conexión
-          try {
-            const currentState = await sessions[sessionId].getConnectionState();
-            if (currentState === 'CONNECTED' || currentState === 'MAIN') {
-              console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} ya está conectada (${currentState}) - Ignorando QR ${attempts}`);
-              sessions[sessionId]._fullyConnected = true; // Marcar como conectada
-              return; // NO generar más QRs si ya está conectada
-            }
-          } catch (stateError) {
-            // Si hay error obteniendo estado, continuar con QR
-            console.log(`[WEBCONNECT] ⚠️ Error verificando estado de ${sessionId}, continuando con QR...`);
-          }
-        }
-        
-        if (attempts <= 10) {
-          // Enviar QR normalmente
-          if (onQR) {
-            await onQR(qrCode);
-          }
-        } else {
-          // 🔥 CRÍTICO: Detener la sesión cuando supera 10 intentos
-          console.log(`[WEBCONNECT] ❌ Máximo de intentos QR alcanzado para sesión ${sessionId} - CERRANDO SESIÓN`);
-          
-          try {
-            // 1. Marcar la sesión como fallida
-            if (sessions[sessionId]) {
-              sessions[sessionId]._qrFailed = true;
-            }
-            
-            // 2. Cerrar la sesión inmediatamente
-            if (sessions[sessionId]) {
-              console.log(`[WEBCONNECT] 🛑 Cerrando sesión ${sessionId} por exceso de intentos QR...`);
-              
-              // Cerrar la instancia del cliente
-              await sessions[sessionId].close();
-              
-              // 3. Eliminar de memoria
-              delete sessions[sessionId];
-              
-              console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada y eliminada por exceso de intentos QR`);
-            }
-            
-            // 4. Limpiar QR en base de datos
-            try {
-              const { Pool } = require('pg');
-              const pool = new Pool({
-                connectionString: process.env.DATABASE_URL,
-                ssl: { rejectUnauthorized: false }
-              });
-              
-              const client = await pool.connect();
-              await client.query('UPDATE tenants SET qr_code = NULL WHERE id = $1', [sessionId]);
-              client.release();
-              await pool.end();
-              
-              console.log(`[WEBCONNECT] 🗑️ QR limpiado en BD para sesión ${sessionId}`);
-            } catch (dbError) {
-              console.error(`[WEBCONNECT] Error limpiando QR en BD:`, dbError.message);
-            }
-            
-            // 5. Limpiar archivos de sesión para forzar nuevo QR
-            const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
-            if (fs.existsSync(sessionDir)) {
-              fs.rmSync(sessionDir, { recursive: true, force: true });
-              console.log(`[WEBCONNECT] 🗑️ Directorio de tokens eliminado para sesión ${sessionId}`);
-            }
-            
-          } catch (closeError) {
-            console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, closeError.message);
-          }
-          
-          // 6. NO procesar más QRs
-          return false; // Esto detiene el procesamiento
-        }
-      },
+catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
+  console.log(`[WEBCONNECT] 📱 QR generado para sesión ${sessionId}, intento ${attempts}/10`);
+
+  // 🔧 VERIFICAR SI LA SESIÓN YA ESTÁ CONECTADA - NO GENERAR MÁS QRs
+  if (sessions[sessionId]) {
+    // Verificar flags de conexión
+    if (sessions[sessionId]._qrConnected || sessions[sessionId]._fullyConnected) {
+      console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} ya conectada via QR - Ignorando intento ${attempts}`);
+      return; // NO generar más QRs
+    }
+
+    // Verificar estado de conexión
+    try {
+      const currentState = await sessions[sessionId].getConnectionState();
+      if (currentState === 'CONNECTED' || currentState === 'MAIN') {
+        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} ya está conectada (${currentState}) - Ignorando QR ${attempts}`);
+        sessions[sessionId]._fullyConnected = true; // Marcar como conectada
+        return; // NO generar más QRs si ya está conectada
+      }
+    } catch (stateError) {
+      // Si hay error obteniendo estado, continuar con QR
+      console.log(`[WEBCONNECT] ⚠️ Error verificando estado de ${sessionId}, continuando con QR...`);
+    }
+  }
+
+  // ==== MODIFICACIÓN CLAVE: DETENER CICLO SI SE SUPERA EL MÁXIMO ====
+  if (attempts > 10) {
+    console.log(`[WEBCONNECT] ❌ Máximo de intentos QR alcanzado para sesión ${sessionId} - CERRANDO SESIÓN`);
+
+    // 1. Marcar la sesión como fallida
+    if (sessions[sessionId]) {
+      sessions[sessionId]._qrFailed = true;
+    }
+
+    // 2. Intentar cerrar la sesión SIEMPRE, pero aunque falle, seguir limpiando
+    try {
+      if (sessions[sessionId] && typeof sessions[sessionId].close === "function") {
+        await sessions[sessionId].close();
+        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
+      } else {
+        console.warn(`[WEBCONNECT] ⚠️ No se puede cerrar sesión ${sessionId}: método close no disponible`);
+      }
+    } catch (e) {
+      console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, e.message);
+    }
+
+    // 3. SIEMPRE elimina la referencia de memoria
+    delete sessions[sessionId];
+
+    // 4. Limpia QR en base de datos y archivos (usa tus utilidades)
+    try {
+      const { limpiarQR } = require("./qrUtils");
+      await limpiarQR(pool, sessionId);
+      console.log(`[WEBCONNECT] 🗑️ QR limpiado en BD para sesión ${sessionId}`);
+    } catch (dbError) {
+      console.error(`[WEBCONNECT] Error limpiando QR en BD:`, dbError.message);
+    }
+    // Limpiar archivos de sesión para forzar nuevo QR (ejemplo)
+    const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
+    if (fs.existsSync(sessionDir)) {
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        console.log(`[WEBCONNECT] 🗑️ Directorio ${sessionDir} eliminado`);
+      } catch (fileError) {
+        console.error(`[WEBCONNECT] Error eliminando archivos de sesión:`, fileError.message);
+      }
+    }
+
+    // 5. Marca el estado como "muerta" en tu store/memoria (opcional, para el panel)
+    // Ejemplo: estados[sessionId] = "MUERTA";
+    if (typeof marcarSesionComoMuerta === "function") {
+      await marcarSesionComoMuerta(sessionId);
+    }
+
+    // 6. Opcional: notifica al admin (mail, webhook, etc)
+
+    // 7. IMPORTANTE: CORTA EL FLUJO, NO REINTENTES MÁS
+    return;
+  }
+
+  // ==== FIN DE MODIFICACIÓN ====
+
+  // Si no superó el máximo de intentos, envía el QR normalmente
+  if (onQR) {
+    await onQR(qrCode);
+  }
+},
 
   statusFind: async (statusSession, session) => {
         console.log(`[WEBCONNECT] 🔄 Estado de sesión ${sessionId}: ${statusSession}`);
