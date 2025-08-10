@@ -50,6 +50,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         
         if respuesta:
             print(f"🤖 [IA] Respuesta: {respuesta[:100]}...")
+        else:
+            print(f"🔇 [MODO HUMANO] Sin respuesta automática para {telefono}")
         
         return JSONResponse(content={"mensaje": respuesta})
         

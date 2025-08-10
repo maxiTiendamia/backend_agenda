@@ -398,14 +398,14 @@ class AIConversationManager:
                 if mensaje_stripped in ['bot', 'chatbot', 'automatico', 'volver bot', 'salir']:
                     if self._deactivate_human_mode(telefono):
                         return self._add_help_footer("🤖 ¡Hola de nuevo! Volví para ayudarte con tus reservas.\n\n¿En qué puedo ayudarte?")
-                # Si está en modo humano, enviar a soporte
+                # Si está en modo humano, solo notificar internamente y NO responder
                 await self._notify_human_support(cliente_id, telefono, mensaje)
-                return "👥 Tu mensaje fue enviado a nuestro equipo humano. Te responderemos pronto."
+                return ""  # Respuesta vacía - el bot no responde nada
             
             # Comando para ACTIVAR modo humano  
             if any(keyword in mensaje_stripped for keyword in ['ayuda persona', 'persona real', 'hablar con persona', 'soporte humano', 'operador', 'atencion personalizada']):
                 if self._activate_human_mode(telefono):
-                    return "👥 Te conecté con nuestro equipo humano. Escribe tu consulta y te responderemos pronto.\n\n💡 Para volver al bot automático, escribe 'bot'"
+                    return "👥 Te conecté con nuestro equipo humano. A partir de ahora no recibirás respuestas automáticas hasta que escribas 'bot' para volver al chatbot.\n\n💡 Para restaurar el bot automático, escribe 'bot'"
             # Obtener contexto del negocio
             tenant = db.query(Tenant).filter(Tenant.id == cliente_id).first()
             if not tenant:
@@ -907,11 +907,43 @@ class AIConversationManager:
             
             return self._preguntar_dia_disponible(servicio_seleccionado, telefono)
         
-        # 🔧 RESTO DEL PROCESAMIENTO CON IA
+        # � FILTRO PREVIO: Detectar consultas claramente ajenas al negocio
+        palabras_ajenas = [
+            'receta', 'cocina', 'comida', 'guiso', 'ingredientes', 'cocinar',
+            'amor', 'vida', 'consejo', 'salud', 'medicina', 'doctor',
+            'clima', 'tiempo', 'lluvia', 'sol', 'temperatura',
+            'deportes', 'futbol', 'partido', 'juego',
+            'politica', 'presidente', 'gobierno', 'elecciones',
+            'matematicas', 'fisica', 'quimica', 'estudio', 'tarea',
+            'musica', 'cancion', 'banda', 'artista',
+            'pelicula', 'serie', 'actor', 'actriz'
+        ]
+        
+        if any(palabra in mensaje_stripped for palabra in palabras_ajenas):
+            return self._add_help_footer(f"Lo siento, solo puedo ayudarte con reservas y servicios de {tenant.comercio}. ¿Necesitas hacer una reserva o consultar nuestros servicios?")
+        
+        # �🔧 RESTO DEL PROCESAMIENTO CON IA
         # Construir contexto para la IA
-        system_prompt = f"""🤖 Eres la IA asistente de {tenant.comercio}. 
+        system_prompt = f"""🤖 Eres la IA asistente de {tenant.comercio} EXCLUSIVAMENTE para reservas y servicios. 
 
-📊 INFORMACIÓN DEL NEGOCIO:
+⚠️ RESTRICCIÓN CRÍTICA: SOLO responde sobre:
+- Reservas de turnos/citas
+- Servicios disponibles ({', '.join([s['nombre'] for s in business_context['servicios']])})
+- Cancelaciones de reservas
+- Consultas sobre horarios disponibles
+- Información sobre el negocio {tenant.comercio}
+
+� NO RESPONDAS NUNCA A:
+- Recetas de cocina
+- Consejos de vida
+- Preguntas generales no relacionadas con el negocio
+- Temas ajenos a reservas y servicios
+- Consultas sobre otros temas
+
+Si te preguntan algo no relacionado con reservas/servicios, responde:
+"Lo siento, solo puedo ayudarte con reservas y servicios de {tenant.comercio}. ¿Necesitas hacer una reserva o consultar nuestros servicios?"
+
+�📊 INFORMACIÓN DEL NEGOCIO:
 - 🏢 Nombre: {tenant.comercio}
 - ✨ Servicios disponibles: {', '.join([s['nombre'] for s in business_context['servicios']])}
 - 👥 Empleados: {', '.join([e['nombre'] for e in business_context['empleados']]) if business_context['empleados'] else 'Sin empleados (servicios directos)'}
@@ -930,12 +962,12 @@ class AIConversationManager:
 5. 🏆 SERVICIOS CON SUS IDs REALES:
 {self._format_servicios_with_real_ids(business_context['servicios'])}
 6. 🧠 Recuerda conversaciones anteriores
-7. ❓ Puedes responder preguntas generales sobre el negocio
+7. ❓ SOLO responde preguntas sobre el negocio y servicios
 8. 📅 IMPORTANTE: Si el usuario menciona un día específico (hoy, mañana, lunes, martes, etc.) o una fecha específica (14/08, 25/12, etc.), usa ese día exacto en el parámetro preferencia_fecha
 9. 🚫 NO busques horarios cuando pregunten por sus reservas actuales o códigos de cancelación
 10. 💬 Si preguntan por turnos activos/reservas, indica que pueden cancelar enviando solo el código
 
-� SEGURIDAD CRÍTICA:
+🛡️ SEGURIDAD CRÍTICA:
 - ⚠️ NUNCA muestres información de reservas de otros números de teléfono
 - 🚫 Si preguntan por reservas de otro usuario, responde: "Por seguridad, solo puedo mostrar TUS reservas"
 - 🔐 Solo ayuda con reservas del número actual: {telefono}
@@ -945,7 +977,7 @@ class AIConversationManager:
 - 💬 Pregunta qué necesita específicamente: "¿Necesitas ayuda con TUS reservas o quieres hacer una nueva?"
 - 🎯 Mantén el contexto de la conversación anterior
 
-�🛠️ FUNCIONES DISPONIBLES:
+🛠️ FUNCIONES DISPONIBLES:
 - 🔍 buscar_horarios_servicio: Para mostrar horarios disponibles (usa el ID real del servicio y preferencia_fecha si el usuario especifica un día)
 - ❌ cancelar_reserva: Para cancelar reservas existentes
 
