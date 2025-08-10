@@ -227,6 +227,28 @@ async function createSession(sessionId, onQR) {
       catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
         console.log(`[WEBCONNECT] 📱 QR generado para sesión ${sessionId}, intento ${attempts}/10`);
         
+        // 🔧 VERIFICAR SI LA SESIÓN YA ESTÁ CONECTADA - NO GENERAR MÁS QRs
+        if (sessions[sessionId]) {
+          // Verificar flags de conexión
+          if (sessions[sessionId]._qrConnected || sessions[sessionId]._fullyConnected) {
+            console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} ya conectada via QR - Ignorando intento ${attempts}`);
+            return; // NO generar más QRs
+          }
+          
+          // Verificar estado de conexión
+          try {
+            const currentState = await sessions[sessionId].getConnectionState();
+            if (currentState === 'CONNECTED' || currentState === 'MAIN') {
+              console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} ya está conectada (${currentState}) - Ignorando QR ${attempts}`);
+              sessions[sessionId]._fullyConnected = true; // Marcar como conectada
+              return; // NO generar más QRs si ya está conectada
+            }
+          } catch (stateError) {
+            // Si hay error obteniendo estado, continuar con QR
+            console.log(`[WEBCONNECT] ⚠️ Error verificando estado de ${sessionId}, continuando con QR...`);
+          }
+        }
+        
         if (attempts <= 10) {
           // Enviar QR normalmente
           if (onQR) {
@@ -301,9 +323,11 @@ async function createSession(sessionId, onQR) {
         if (statusSession === 'qrReadSuccess') {
           console.log(`[WEBCONNECT] ✅ QR escaneado exitosamente para sesión ${sessionId}`);
           
-          // Limpiar flag de fallo si existía
+          // 🔧 MARCAR SESIÓN COMO CONECTADA EXITOSAMENTE
           if (sessions[sessionId]) {
             delete sessions[sessionId]._qrFailed;
+            sessions[sessionId]._qrConnected = true; // Flag para indicar QR exitoso
+            sessions[sessionId]._qrFailCount = 0; // Reset contador de fallos
           }
           
           // 🔥 GUARDAR BACKUP INMEDIATAMENTE
@@ -314,12 +338,19 @@ async function createSession(sessionId, onQR) {
         } else if (statusSession === 'isLogged') {
           console.log(`[WEBCONNECT] 📱 Sesión ${sessionId} ya está logueada - Restaurando...`);
           
+          // 🔧 MARCAR COMO CONECTADA
+          if (sessions[sessionId]) {
+            sessions[sessionId]._qrConnected = true;
+          }
+          
         } else if (statusSession === 'connectSuccess') {
           console.log(`[WEBCONNECT] 🚀 Cliente ${sessionId} conectado y listo`);
           
-          // Limpiar flag de fallo si existía
+          // 🔧 MARCAR COMO COMPLETAMENTE CONECTADA
           if (sessions[sessionId]) {
             delete sessions[sessionId]._qrFailed;
+            sessions[sessionId]._qrConnected = true;
+            sessions[sessionId]._fullyConnected = true; // Flag para conexión completa
           }
           
           // ✨ INICIAR KEEP-ALIVE INMEDIATAMENTE
