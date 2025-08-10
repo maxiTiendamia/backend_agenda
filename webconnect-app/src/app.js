@@ -495,3 +495,7 @@ process.on('SIGINT', async () => {
   await pool.end();
   process.exit(0);
 });
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[WEBCONNECT] ⚠️ Unhandled Rejection capturada:', reason && reason.message ? reason.message : reason);
+});

@@ -2,7 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const { limpiarQR } = require('./qrUtils');
-const pool = require('./database'); // Ajusta si tu pool está en otro archivo
+const { pool } = require('./database'); // Ajuste: exporta { pool }
 const { createSession } = require('./wppconnect'); // Ajusta según dónde esté tu createSession
 
 // Pool de sesiones activas (importar desde wppconnect.js)
@@ -44,20 +44,45 @@ async function limpiarSingletonLock(sessionId) {
   }
 }
 
+// Esperar hasta que desaparezca el archivo SingletonLock (con intentos y timeout)
+async function waitForNoSingletonLock(sessionId, timeoutMs = 15000, intervalMs = 300) {
+  const start = Date.now();
+  const folder = getSessionFolder(sessionId);
+  const lockFile = path.join(folder, 'SingletonLock');
+  
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (fs.existsSync(lockFile)) {
+        // Reintenta eliminación por si el proceso anterior ya terminó
+        try { fs.unlinkSync(lockFile); } catch (_) {}
+        await new Promise(r => setTimeout(r, intervalMs));
+        continue;
+      }
+      return true;
+    } catch (_) {
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+  }
+  // Última verificación
+  return !fs.existsSync(lockFile);
+}
+
 // Nueva función para limpiar completamente una sesión
 async function limpiarSesionCompleta(sessionId, sessions) {
   try {
-    if (sessions[sessionId] && typeof sessions[sessionId].close === "function") {
+    if (sessions && sessions[sessionId] && typeof sessions[sessionId].close === "function") {
       await sessions[sessionId].close();
       console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
-    } else {
+    } else if (sessions && sessions[sessionId]) {
       console.warn(`[WEBCONNECT] ⚠️ No se puede cerrar sesión ${sessionId}: método close no disponible`);
     }
   } catch (e) {
     console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, e.message);
   }
-  // Eliminar referencia de memoria
-  delete sessions[sessionId];
+  // Eliminar referencia de memoria si existe
+  if (sessions) {
+    delete sessions[sessionId];
+  }
 
   // Limpiar QR en DB
   try {
@@ -165,6 +190,7 @@ module.exports = {
   getSessionFolder, 
   ensureSessionFolder, 
   limpiarSingletonLock,
+  waitForNoSingletonLock,
   limpiarSesionCompleta,
   getSession,
   verificarEstadoSesion,

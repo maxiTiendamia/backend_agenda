@@ -49,8 +49,12 @@ async function eliminarSesionInexistente(sessionId) {
     // 1. Cerrar y eliminar de memoria
     if (sessions[sessionId]) {
       try {
-        await sessions[sessionId].close();
-        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
+        if (typeof sessions[sessionId].close === 'function') {
+          await sessions[sessionId].close();
+          console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
+        } else {
+          console.warn(`[WEBCONNECT] ⚠️ No se puede cerrar sesión ${sessionId}: método close no disponible`);
+        }
       } catch (e) {
         console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, e.message);
       }
@@ -59,7 +63,7 @@ async function eliminarSesionInexistente(sessionId) {
     
     // 2. Limpiar directorio de tokens
     const { limpiarSesionCompleta } = require('./sessionUtils');
-    await limpiarSesionCompleta(sessionId);
+    await limpiarSesionCompleta(sessionId, sessions);
     
     console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} eliminada completamente (cliente no existe en BD)`);
     return true;
@@ -424,7 +428,9 @@ catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
             sessions[sessionId]._qrFailed = true;
             
             try {
-              await sessions[sessionId].close();
+              if (typeof sessions[sessionId].close === 'function') {
+                await sessions[sessionId].close();
+              }
               delete sessions[sessionId];
               console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada por fallos QR consecutivos`);
             } catch (closeError) {
@@ -1007,8 +1013,12 @@ async function reconnectSession(sessionId) {
       
       // Cerrar cliente
       try {
-        await sessions[sessionId].close();
-        console.log(`[WEBCONNECT] 🔐 Cliente ${sessionId} cerrado correctamente`);
+        if (typeof sessions[sessionId].close === 'function') {
+          await sessions[sessionId].close();
+          console.log(`[WEBCONNECT] 🔐 Cliente ${sessionId} cerrado correctamente`);
+        } else {
+          console.log(`[WEBCONNECT] ⚠️ Error cerrando cliente ${sessionId}: método close no disponible`);
+        }
       } catch (closeError) {
         console.log(`[WEBCONNECT] ⚠️ Error cerrando cliente ${sessionId}:`, closeError.message);
       }
@@ -1026,6 +1036,19 @@ async function reconnectSession(sessionId) {
     // PASO 2: Esperar a que se liberen recursos
     console.log(`[WEBCONNECT] ⏳ Esperando liberación de recursos para ${sessionId}...`);
     await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // NUEVO: Espera activa a que desaparezca SingletonLock
+    try {
+      const { waitForNoSingletonLock } = require('./sessionUtils');
+      const ok = await waitForNoSingletonLock(sessionId, 20000, 500);
+      if (!ok) {
+        console.log(`[WEBCONNECT] ⚠️ SingletonLock persiste para ${sessionId}, se intentará continuar igualmente`);
+      } else {
+        console.log(`[WEBCONNECT] ✅ SingletonLock liberado para ${sessionId}`);
+      }
+    } catch (e) {
+      console.log(`[WEBCONNECT] ⚠️ Error esperando liberación de SingletonLock: ${e.message}`);
+    }
     
     // PASO 3: Limpieza de locks del perfil y preparar carpeta
     try {
@@ -1186,8 +1209,12 @@ async function clearSession(sessionId) {
     // Cerrar cliente si existe
     if (sessions[sessionId]) {
       try {
-        await sessions[sessionId].close();
-        console.log(`[WEBCONNECT] ✅ Cliente ${sessionId} cerrado`);
+        if (typeof sessions[sessionId].close === 'function') {
+          await sessions[sessionId].close();
+          console.log(`[WEBCONNECT] ✅ Cliente ${sessionId} cerrado`);
+        } else {
+          console.warn(`[WEBCONNECT] ⚠️ No se puede cerrar cliente ${sessionId}: método close no disponible`);
+        }
       } catch (closeError) {
         console.error(`[WEBCONNECT] Error cerrando cliente ${sessionId}:`, closeError);
       }
