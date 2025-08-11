@@ -345,6 +345,42 @@ class AIConversationManager:
         partes.append("\n💬 ¿Te gustaría reservar o ver los servicios disponibles? Escribe 'servicios' o pedime un día (hoy/mañana).")
         return "\n\n".join([p for p in partes if p])
 
+    def _respuesta_info_servicio(self, servicio: dict, business_context: dict, full: bool = False, add_footer: bool = True) -> str:
+        """Formatea una respuesta informativa de un servicio, breve o completa según 'full'.
+        Si add_footer=False, devuelve solo la tarjeta sin el pie de ayuda.
+        """
+        nombre = servicio.get("nombre", "Servicio")
+        desc = (servicio.get("mensaje_personalizado") or "").strip()
+        if not desc:
+            # Intentar enriquecer desde informacion_local si existe
+            desc = self._extract_service_info_from_tenant_info(nombre, business_context.get("informacion_local") or "") or ""
+
+        # Breve siempre primero; completo sólo si piden más info
+        cuerpo = desc if (full and desc) else self._first_paragraphs(desc, max_paragraphs=2, max_chars=420)
+
+        bullets = []
+        dur = servicio.get("duracion")
+        if dur:
+            bullets.append(f"⏱️ Duración: {dur} min")
+        precio = servicio.get("precio")
+        if isinstance(precio, (int, float)) and precio > 0:
+            bullets.append(f"💲 Precio: {precio}")
+
+        partes = [f"✨ *{nombre}*"]
+        if cuerpo:
+            partes.append(cuerpo)
+        if bullets:
+            partes.append(" · ".join(bullets))
+
+        # Cerrar con CTA útil
+        if full:
+            partes.append("\n📅 ¿Queres ver horarios disponibles para este servicio?")
+        else:
+            partes.append(f"\n👉 Si querés más detalles, decime “más info de {nombre}”, o pedime horarios con “ver turnos de {nombre}”.")
+
+        cuerpo_msg = "\n".join(p for p in partes if p).strip()
+        return self._add_help_footer(cuerpo_msg) if add_footer else cuerpo_msg
+
     def _preguntar_dia_disponible(self, servicio_seleccionado, telefono):
         """Pregunta al usuario por el día que desea para el servicio seleccionado e incluye detalles del servicio si existen."""
         tipo_servicio = self._emoji_for_service(servicio_seleccionado['nombre'])
@@ -369,7 +405,7 @@ class AIConversationManager:
         respuesta += "\n📅 ¿Para qué día te gustaría reservar?\n"
         respuesta += "Puedes responder con 'hoy', 'mañana', o el nombre de un día (ejemplo: 'viernes').\n"
         respuesta += "\n💬 Escribe el día que prefieres."
-        return respuesta
+        return self._add_help_footer(respuesta)
     
     def _get_conversation_history(self, telefono: str) -> list:
         """Obtener historial de conversación desde Redis"""
@@ -615,6 +651,45 @@ class AIConversationManager:
             # --- FLUJO DE CONSULTA DE SERVICIOS ---
             if mensaje_stripped in ["servicios", "ver servicios", "lista", "menu"]:
                 return self._add_help_footer(self.mostrar_servicios(business_context))
+
+            # --- INTENCIÓN: INFO DE UN SERVICIO (prioritario sobre info del negocio) ---
+            def _norm(s: str) -> str:
+                import unicodedata
+                s = (s or "").lower().strip()
+                return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+
+            nmsg = _norm(mensaje)
+            servicio_mencionado = None
+
+            # 1) Si ya hay servicio en sesión (Redis) y el usuario pide "más info" o "detalles"
+            if self._wants_more_info(mensaje_stripped):
+                servicio_guardado_json = self.redis_client.get(f"servicio_seleccionado:{telefono}")
+                if servicio_guardado_json:
+                    guardado = json.loads(servicio_guardado_json)
+                    servicio_mencionado = next((s for s in business_context["servicios"] if s["id"] == guardado["id"]), None)
+                    if servicio_mencionado:
+                        return self._respuesta_info_servicio(servicio_mencionado, business_context, full=True)
+
+            # 2) Intentar detectar servicio por nombre/alias dentro del mensaje
+            if not servicio_mencionado:
+                for s in business_context["servicios"]:
+                    nname = _norm(s["nombre"]) if s.get("nombre") else ""
+                    # tolera variantes (e.g. "tre", "t.r.e")
+                    aliases = {nname, nname.replace("®", "").strip(), nname.replace(" ", ""), nname.replace(".", "")}
+                    if any(a and a in nmsg for a in aliases):
+                        servicio_mencionado = s
+                        break
+                    # matching por tokens: al menos 2 tokens del servicio presentes en el mensaje
+                    tokens = [t for t in re.split(r"\s+", nname) if len(t) > 2]
+                    if tokens:
+                        overlap = sum(1 for t in tokens if t in nmsg)
+                        if overlap >= min(2, len(tokens)):
+                            servicio_mencionado = s
+                            break
+
+            # 3) Si pidió "info" y además se detectó servicio -> responder info de servicio
+            if servicio_mencionado and any(k in nmsg for k in ["info", "informacion", "información", "detalle", "detalles", "más", "mas"]):
+                return self._respuesta_info_servicio(servicio_mencionado, business_context, full=self._wants_more_info(mensaje_stripped))
 
             # --- FLUJO DE INFORMACIÓN DEL NEGOCIO / BIO / CONTACTO ---
             info_keywords = [
@@ -1029,31 +1104,55 @@ class AIConversationManager:
                     servicio_seleccionado = servicio
                     print(f"🔧 DEBUG: Servicio seleccionado por nombre: {servicio_seleccionado['nombre']} (ID: {servicio_seleccionado['id']})")
                     break
+                # Coincidencia por tokens (normalizada)
+                try:
+                    import unicodedata
+                    def _norm(s: str) -> str:
+                        s = (s or "").lower().strip()
+                        return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+                    nmsg = _norm(mensaje_stripped)
+                    nname = _norm(nombre_servicio)
+                    tokens = [t for t in re.split(r"\s+", nname) if len(t) > 2]
+                    if tokens:
+                        overlap = sum(1 for t in tokens if t in nmsg)
+                        if overlap >= min(2, len(tokens)):
+                            servicio_seleccionado = servicio
+                            print(f"🔧 DEBUG: Servicio seleccionado por tokens: {servicio_seleccionado['nombre']} (ID: {servicio_seleccionado['id']})")
+                            break
+                except Exception:
+                    pass
 
         # Si encontró un servicio
         if servicio_seleccionado:
             # 🔧 VERIFICAR SI ES INFORMATIVO
             es_informativo = servicio_seleccionado.get('es_informativo', False)
             print(f"🔧 DEBUG: Servicio {servicio_seleccionado['nombre']} - Es informativo: {es_informativo}")
-            
+
             if es_informativo:
-                mensaje_personalizado = servicio_seleccionado.get('mensaje_personalizado', '')
+                mensaje_personalizado = (servicio_seleccionado.get('mensaje_personalizado') or '').strip()
                 if mensaje_personalizado:
-                    return f"ℹ️ *{servicio_seleccionado['nombre']}*\n\n{mensaje_personalizado}\n\n💬 ¿Necesitas más información? 🤔"
+                    if self._wants_more_info(mensaje_stripped):
+                        return self._add_help_footer(f"ℹ️ *{servicio_seleccionado['nombre']}*\n\n{mensaje_personalizado}\n\n📅 ¿Querés ver horarios?")
+                    else:
+                        breve = self._first_paragraphs(mensaje_personalizado, max_paragraphs=2, max_chars=420)
+                        return self._add_help_footer(f"ℹ️ *{servicio_seleccionado['nombre']}*\n\n{breve}\n\n👉 Decime “más info” si querés el detalle completo, o pedime horarios.")
                 else:
-                    return f"ℹ️ *{servicio_seleccionado['nombre']}*\n\nEste es un servicio informativo.\n\n💬 ¿En qué más puedo ayudarte? 🤔"
-            
+                    return self._add_help_footer(f"ℹ️ *{servicio_seleccionado['nombre']}* es un servicio informativo.\n\n💬 ¿En qué más puedo ayudarte?")
+
             # 🔧 ENRIQUECER DESCRIPCIÓN DESDE informacion_local SI FALTA
             if not (servicio_seleccionado.get('mensaje_personalizado') or '').strip():
                 extra = self._extract_service_info_from_tenant_info(servicio_seleccionado['nombre'], business_context.get('informacion_local') or '')
                 if extra:
                     servicio_seleccionado['mensaje_personalizado'] = extra
-            
+
             # 🔧 GUARDAR SERVICIO SELECCIONADO Y PREGUNTAR DÍA
             servicio_key = f"servicio_seleccionado:{telefono}"
             self.redis_client.set(servicio_key, json.dumps(servicio_seleccionado), ex=1800)  # 30 min
-            
-            return self._preguntar_dia_disponible(servicio_seleccionado, telefono)
+
+            # Tarjeta informativa breve antes de pedir el día
+            tarjeta = self._respuesta_info_servicio(servicio_seleccionado, business_context, full=False, add_footer=False)
+            pregunta = self._preguntar_dia_disponible(servicio_seleccionado, telefono)
+            return f"{tarjeta}\n\n{pregunta}"
         
         # � FILTRO PREVIO: Detectar consultas claramente ajenas al negocio
         palabras_ajenas = [
