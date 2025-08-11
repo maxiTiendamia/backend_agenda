@@ -240,6 +240,29 @@ async function createSession(sessionId, onQR, options = {}) {
   
   try {
     console.log(`[WEBCONNECT] 🚀 Creando nueva sesión ${sessionId}`);
+
+    // Evitar creaciones concurrentes para la misma sesión
+    if (sessions[sessionId] && sessions[sessionId]._creating) {
+      console.log(`[WEBCONNECT] ⏳ Creación ya en curso para ${sessionId}, se omite llamada duplicada`);
+      return sessions[sessionId];
+    }
+    if (!sessions[sessionId]) sessions[sessionId] = {};
+    sessions[sessionId]._creating = true;
+
+    // Preflight: asegurar carpeta y limpiar locks de Chrome
+    try {
+      const { ensureSessionFolder, limpiarSingletonLock, waitForNoSingletonLock } = require('./sessionUtils');
+      await ensureSessionFolder(sessionId);
+      await limpiarSingletonLock(sessionId);
+      const freed = await waitForNoSingletonLock(sessionId, 20000, 500);
+      if (!freed) {
+        console.warn(`[WEBCONNECT] ⚠️ SingletonLock persiste antes de crear sesión ${sessionId}, se continúa con precaución`);
+      } else {
+        console.log(`[WEBCONNECT] ✅ Locks liberados antes de crear sesión ${sessionId}`);
+      }
+    } catch (preErr) {
+      console.warn(`[WEBCONNECT] ⚠️ Error en preflight de locks para ${sessionId}: ${preErr.message}`);
+    }
     
     const client = await wppconnect.create({
       session: `session_${sessionId}`,
@@ -253,7 +276,7 @@ async function createSession(sessionId, onQR, options = {}) {
       autoClose: 0, // ¡CRÍTICO! Evita que se cierre automáticamente
       logQR: false,
       
-      puppeteerOptions: {
+  puppeteerOptions: {
         userDataDir: sessionDir,
         timeout: 120000, // 2 minutos para inicialización
         args: [
@@ -289,6 +312,14 @@ catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
       if (sessions[sessionId] && typeof sessions[sessionId].close === 'function') {
         await sessions[sessionId].close();
       }
+    } catch (_) {}
+    if (sessions[sessionId]) {
+      sessions[sessionId]._qrFailed = true;
+    }
+    // Intentar limpiar locks para permitir futuros intentos
+    try {
+      const { limpiarSingletonLock } = require('./sessionUtils');
+      await limpiarSingletonLock(sessionId);
     } catch (_) {}
     delete sessions[sessionId];
     return; // no reintentar
@@ -368,6 +399,11 @@ catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
           
         } else if (statusSession === 'browserClose') {
           console.log(`[WEBCONNECT] 🔴 Browser cerrado para sesión ${sessionId}`);
+          // Limpiar posibles locks del perfil para próximos intentos
+          try {
+            const { limpiarSingletonLock } = require('./sessionUtils');
+            await limpiarSingletonLock(sessionId);
+          } catch (_) {}
           
           // 🔥 RECONEXIÓN INTELIGENTE solo si no falló por QR
           if (!sessions[sessionId] || !sessions[sessionId]._qrFailed) {
@@ -388,6 +424,26 @@ catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
           } else {
             console.log(`[WEBCONNECT] 🚫 No reconectando sesión ${sessionId} - Falló por exceso de intentos QR`);
           }
+          
+        } else if (statusSession === 'qrReadError') {
+          console.log(`[WEBCONNECT] ❌ Error de lectura de QR para sesión ${sessionId}`);
+          if (sessions[sessionId]) {
+            sessions[sessionId]._qrFailCount = (sessions[sessionId]._qrFailCount || 0) + 1;
+            if (sessions[sessionId]._qrFailCount >= 2) {
+              sessions[sessionId]._qrFailed = true;
+            }
+          }
+          try {
+            const { limpiarSingletonLock } = require('./sessionUtils');
+            await limpiarSingletonLock(sessionId);
+          } catch (_) {}
+          
+        } else if (statusSession === 'autocloseCalled') {
+          console.log(`[WEBCONNECT] 🔄 autocloseCalled para sesión ${sessionId} - limpiando locks`);
+          try {
+            const { limpiarSingletonLock } = require('./sessionUtils');
+            await limpiarSingletonLock(sessionId);
+          } catch (_) {}
           
         } else if (statusSession === 'notLogged') {
           console.log(`[WEBCONNECT] 🔒 Sesión ${sessionId} no está logueada`);
@@ -536,6 +592,8 @@ catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
   } catch (error) {
     console.error(`[WEBCONNECT] ❌ Error creando sesión ${sessionId}:`, error);
     throw error;
+  } finally {
+    if (sessions[sessionId]) delete sessions[sessionId]._creating;
   }
 }
 /**
@@ -1115,6 +1173,22 @@ async function reconnectSession(sessionId) {
     
   } catch (error) {
     console.error(`[WEBCONNECT] ❌ Error en reconexión para ${sessionId}:`, error.message);
+    // Si el error es por ProcessSingleton / SingletonLock, intentar limpieza más agresiva
+    try {
+      const msg = String(error && error.message ? error.message : '');
+      if (msg.includes('ProcessSingleton') || msg.includes('SingletonLock') || msg.includes('Failed to launch the browser process')) {
+        const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
+        const defaultDir = path.join(sessionDir, 'Default');
+        const candidates = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+        for (const f of candidates) {
+          const p1 = path.join(sessionDir, f);
+          const p2 = path.join(defaultDir, f);
+          try { if (fs.existsSync(p1)) fs.rmSync(p1, { force: true }); } catch (_) {}
+          try { if (fs.existsSync(p2)) fs.rmSync(p2, { force: true }); } catch (_) {}
+        }
+        console.log(`[WEBCONNECT] 🧽 Limpieza agresiva de locks aplicada para sesión ${sessionId}`);
+      }
+    } catch (_) {}
     
     // Si falla, programar otro intento en 2 minutos
     console.log(`[WEBCONNECT] ⏰ Programando reintento de reconexión para ${sessionId} en 2 minutos...`);
@@ -1264,14 +1338,27 @@ async function clearSession(sessionId) {
     delete sessions[sessionId];
 
     // Limpiar archivos de sesión
-    const lockFile = path.join(sessionDir, 'SingletonLock');
     try {
-      if (fs.existsSync(lockFile)) {
-        fs.rmSync(lockFile, { force: true });
-        console.log(`[WEBCONNECT] 🗑️ SingletonLock eliminado para sesión ${sessionId}`);
+      const candidates = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+      const defaultDir = path.join(sessionDir, 'Default');
+      for (const f of candidates) {
+        const p1 = path.join(sessionDir, f);
+        const p2 = path.join(defaultDir, f);
+        try {
+          if (fs.existsSync(p1)) {
+            fs.rmSync(p1, { force: true });
+            console.log(`[WEBCONNECT] 🗑️ ${f} eliminado para sesión ${sessionId}`);
+          }
+        } catch (_) {}
+        try {
+          if (fs.existsSync(p2)) {
+            fs.rmSync(p2, { force: true });
+            console.log(`[WEBCONNECT] 🗑️ ${f} eliminado en Default para sesión ${sessionId}`);
+          }
+        } catch (_) {}
       }
     } catch (err) {
-      console.error(`[WEBCONNECT] Error eliminando SingletonLock:`, err);
+      console.error(`[WEBCONNECT] Error eliminando locks:`, err);
     }
     
     console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} limpiada completamente`);

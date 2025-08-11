@@ -38,6 +38,22 @@ async function limpiarSingletonLock(sessionId) {
         console.log(`[WEBCONNECT] ✅ ${pattern} eliminado para sesión ${sessionId}`);
       }
     }
+
+    // Limpieza adicional en el perfil 'Default' (algunos Chrome crean locks ahí)
+    const defaultDir = path.join(folder, 'Default');
+    if (fs.existsSync(defaultDir) && fs.statSync(defaultDir).isDirectory()) {
+      for (const pattern of lockPatterns) {
+        const lockPath = path.join(defaultDir, pattern);
+        if (fs.existsSync(lockPath)) {
+          try {
+            fs.unlinkSync(lockPath);
+            console.log(`[WEBCONNECT] ✅ ${pattern} eliminado en Default para sesión ${sessionId}`);
+          } catch (e) {
+            console.warn(`[WEBCONNECT] ⚠️ No se pudo eliminar ${pattern} en Default para sesión ${sessionId}:`, e.message);
+          }
+        }
+      }
+    }
     
   } catch (error) {
     console.error(`[WEBCONNECT] Error eliminando locks para sesión ${sessionId}:`, error);
