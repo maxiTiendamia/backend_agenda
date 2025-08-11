@@ -117,7 +117,29 @@ class AIConversationManager:
                 dia_texto = preferencia_fecha if preferencia_fecha != "cualquiera" else "esta semana"
                 return f"😔 No hay horarios disponibles para *{servicio.nombre}* {dia_texto}.\n¿Quieres elegir otro día?"
                 
-            respuesta = f"✨ Horarios disponibles para *{servicio.nombre}*"
+            # Guardar servicio y slots en Redis para habilitar selección por número
+            try:
+                self.redis_client.set(
+                    f"servicio_seleccionado:{telefono}",
+                    json.dumps({"id": servicio.id, "nombre": servicio.nombre}),
+                    ex=1800
+                )
+                slots_key = f"slots:{telefono}:{servicio.id}"
+                slots_data = [
+                    {
+                        "numero": i,
+                        "fecha_hora": slot.isoformat(),
+                        "empleado_id": None,
+                        "empleado_nombre": "Sistema"
+                    }
+                    for i, slot in enumerate(slots[:8], 1)
+                ]
+                self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
+            except Exception as e:
+                print(f"❌ Error guardando slots en Redis: {e}")
+            
+            emoji_srv = self._emoji_for_service(servicio.nombre)
+            respuesta = f"{emoji_srv} Horarios disponibles para *{servicio.nombre}*"
             if preferencia_fecha and preferencia_fecha != "cualquiera":
                 respuesta += f" el {preferencia_fecha}"
             respuesta += ":\n\n"
@@ -224,20 +246,33 @@ class AIConversationManager:
         }
         return dias.get(dia_en.lower(), dia_en)
     
-    def _normalize_datetime(self, dt):
-        """🔧 NORMALIZAR datetime para que siempre tenga timezone"""
-        if dt is None:
-            return None
-        
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        
-        return dt.astimezone(self.tz)
+    def _emoji_for_service(self, nombre_servicio: str) -> str:
+        """Devolver un emoji acorde al nombre del servicio (fallback: ✨)."""
+        if not nombre_servicio:
+            return "✨"
+        n = nombre_servicio.lower()
+        mapping = [
+            ("padel", "🎾"),
+            ("tre", "🧘"),
+            ("somatica", "🧘"),
+            ("somática", "🧘"),
+            ("masaje", "💆"),
+            ("terapia", "🧠"),
+            ("grupal", "👥"),
+            ("equipos", "🧑‍🤝‍🧑"),
+            ("taller", "🧑‍🏫"),
+            ("charla", "🗣️"),
+            ("jornada", "🧑‍🏫"),
+            ("uno a uno", "👤"),
+        ]
+        for kw, emoji in mapping:
+            if kw in n:
+                return emoji
+        return "✨"
     
     def _preguntar_dia_disponible(self, servicio_seleccionado, telefono):
         """Pregunta al usuario por el día que desea para el servicio seleccionado."""
-        # Eliminado sesgo a 'padel': usar un emoji genérico
-        tipo_servicio = "✨"
+        tipo_servicio = self._emoji_for_service(servicio_seleccionado['nombre'])
         respuesta = f"{tipo_servicio} *{servicio_seleccionado['nombre']}*\n"
         respuesta += "\n📅 ¿Para qué día te gustaría reservar?\n"
         respuesta += "Puedes responder con 'hoy', 'mañana', o el nombre de un día (ejemplo: 'viernes').\n"
@@ -682,7 +717,7 @@ class AIConversationManager:
                             # Guardar slot seleccionado en Redis para el paso siguiente
                             self.redis_client.set(f"slot_seleccionado:{telefono}", json.dumps(slot_seleccionado), ex=600)
                             return (
-                                f"✅ Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*"
+                                f"✅ Elegiste:\n\n{self._emoji_for_service(servicio_guardado['nombre'])} *{servicio_guardado['nombre']}*"
                                 f"\n📅 {datetime.fromisoformat(slot_seleccionado['fecha_hora']).strftime('%A %d/%m a las %H:%M')}"
                                 "\n\n👤 Para confirmar, por favor escribe tu *nombre completo*."
                             )
@@ -698,7 +733,7 @@ class AIConversationManager:
                         if slot_hora == hora_detectada:
                             self.redis_client.set(f"slot_seleccionado:{telefono}", json.dumps(slot), ex=600)
                             return (
-                                f"✅ Elegiste:\n\n🎾 *{servicio_guardado['nombre']}*"
+                                f"✅ Elegiste:\n\n{self._emoji_for_service(servicio_guardado['nombre'])} *{servicio_guardado['nombre']}*"
                                 f"\n📅 {datetime.fromisoformat(slot['fecha_hora']).strftime('%A %d/%m a las %H:%M')}"
                                 "\n\n👤 Para confirmar, por favor escribe tu *nombre completo*."
                             )
@@ -706,7 +741,6 @@ class AIConversationManager:
                 # 3. Confirmación de reserva O cambio de horario
                 slot_seleccionado_str = self.redis_client.get(f"slot_seleccionado:{telefono}")
                 if slot_seleccionado_str:
-                    # 🔧 DETECTAR si quiere cambiar de horario
                     if self._detectar_cambio_horario(mensaje_stripped):
                         # El usuario quiere cambiar, buscar nueva hora
                         hora_nueva = self._detectar_hora_mensaje(mensaje_stripped)
@@ -717,7 +751,7 @@ class AIConversationManager:
                                 if slot_hora == hora_nueva:
                                     self.redis_client.set(f"slot_seleccionado:{telefono}", json.dumps(slot), ex=600)
                                     return (
-                                        f"✅ ¡Perfecto! Cambié tu selección:\n\n🎾 *{servicio_guardado['nombre']}*"
+                                        f"✅ ¡Perfecto! Cambié tu selección:\n\n{self._emoji_for_service(servicio_guardado['nombre'])} *{servicio_guardado['nombre']}*"
                                         f"\n📅 {datetime.fromisoformat(slot['fecha_hora']).strftime('%A %d/%m a las %H:%M')}"
                                         "\n\n👤 Para confirmar, por favor escribe tu *nombre completo*."
                                     )
@@ -858,7 +892,7 @@ class AIConversationManager:
                     for i, slot in enumerate(slots_dia[:8], 1)
                 ]
                 self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
-                return (f"🎾 *Horarios para {servicio_guardado_dict['nombre']}* el {dia_detectado}:\n"
+                return (f"{self._emoji_for_service(servicio_guardado_dict['nombre'])} *Horarios para {servicio_guardado_dict['nombre']}* el {dia_detectado}:\n"
                         + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
                         + "\n\n💬 Escribe el número o la hora que prefieres.")
         
