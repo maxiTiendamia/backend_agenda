@@ -246,13 +246,21 @@ class AIConversationManager:
         }
         return dias.get(dia_en.lower(), dia_en)
     
+    def _normalize_datetime(self, dt):
+        """Normaliza un datetime para que siempre tenga timezone y se convierta a self.tz."""
+        if dt is None:
+            return None
+        # Si no tiene tz, asumir UTC y convertir a la zona horaria configurada
+        if getattr(dt, 'tzinfo', None) is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(self.tz)
+    
     def _emoji_for_service(self, nombre_servicio: str) -> str:
         """Devolver un emoji acorde al nombre del servicio (fallback: ✨)."""
         if not nombre_servicio:
             return "✨"
         n = nombre_servicio.lower()
         mapping = [
-            ("padel", "🎾"),
             ("tre", "🧘"),
             ("somatica", "🧘"),
             ("somática", "🧘"),
@@ -1001,7 +1009,7 @@ Si te preguntan algo no relacionado con reservas/servicios, responde:
 8. 📅 IMPORTANTE: Si el usuario menciona un día específico (hoy, mañana, lunes, martes, etc.) o una fecha específica (14/08, 25/12, etc.), usa ese día exacto en el parámetro preferencia_fecha
 9. 🚫 NO busques horarios cuando pregunten por sus reservas actuales o códigos de cancelación
 10. 💬 Si preguntan por turnos activos/reservas, indica que pueden cancelar enviando solo el código
-11. 🚫 No inventes servicios ni menciones "padel" a menos que aparezca explícitamente en la lista de servicios disponible.
+11. 🚫 No inventes servicios ni menciones servicios que no estén en la lista disponible.
 
 🛡️ SEGURIDAD CRÍTICA:
 - ⚠️ NUNCA muestres información de reservas de otros números de teléfono
