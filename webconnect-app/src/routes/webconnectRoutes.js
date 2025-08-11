@@ -206,24 +206,49 @@ router.post('/restore-sessions', async (req, res) => {
   try {
     const keys = await redis.keys('session:*');
     let restauradas = 0;
+    let errores = 0;
+
     for (const key of keys) {
-      const sessionData = await redis.get(key);
-      if (sessionData) {
+      // Ignorar metadatos
+      if (key.endsWith(':meta')) continue;
+
+      try {
+        const sessionData = await redis.get(key);
+        if (!sessionData) continue;
+
         const sessionId = key.replace('session:', '');
+        const files = JSON.parse(sessionData);
+
         // Restaurar archivos de sesión en disco
         const folder = getSessionFolder(sessionId);
         if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-        const files = JSON.parse(sessionData);
+
         for (const file of files) {
           const filePath = path.join(folder, file.name);
           fs.writeFileSync(filePath, Buffer.from(file.data, 'base64'));
         }
+
         // Intentar reconectar sesión SIN generar QR automáticamente
-        await createSession(sessionId, undefined, { allowQR: false });
-        restauradas++;
+        try {
+          await createSession(sessionId, undefined, { allowQR: false });
+          restauradas++;
+          console.log(`[RESTORE] ✅ Sesión ${sessionId} restaurada sin QR`);
+        } catch (e) {
+          const msg = e?.message || String(e);
+          if (msg.includes('QR bloqueado')) {
+            console.log(`[RESTORE] ⚠️ Sesión ${sessionId} requiere re-login. Usa /restart-qr/${sessionId}`);
+          } else {
+            console.error(`[RESTORE] ❌ Error creando sesión ${sessionId}:`, msg);
+          }
+          errores++;
+        }
+      } catch (e) {
+        errores++;
+        console.error(`[RESTORE] ❌ Error procesando clave ${key}:`, e.message);
       }
     }
-    res.json({ ok: true, restauradas });
+
+    res.json({ ok: true, restauradas, errores, totalClaves: keys.length });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -461,24 +486,23 @@ router.post('/restart-qr/:sessionId', async (req, res) => {
 });
 
 // Middleware para guardar archivos de sesión en Redis al conectarse un cliente
-async function saveSessionToRedis(sessionId) {
+async function saveSessionToRedis(sessionId, ttlSeconds = 3600) {
   try {
     const fs = require('fs');
     const path = require('path');
-    
-    const sessionFolder = path.join(__dirname, '../../tokens', `session_${sessionId}`);
-    
-    // Verificar que la carpeta existe
+
+    // Usar utilitario centralizado
+    const sessionFolder = getSessionFolder(String(sessionId));
+
     if (!fs.existsSync(sessionFolder)) {
       console.log(`[REDIS] No hay carpeta de tokens para sesión ${sessionId}`);
       return;
     }
 
-    // Obtener lista de archivos (NO directorios)
     const files = fs.readdirSync(sessionFolder).filter(file => {
       const filePath = path.join(sessionFolder, file);
       const stats = fs.statSync(filePath);
-      return stats.isFile(); // Solo archivos, no directorios
+      return stats.isFile();
     });
 
     if (files.length === 0) {
@@ -486,45 +510,24 @@ async function saveSessionToRedis(sessionId) {
       return;
     }
 
-    console.log(`[REDIS] Guardando ${files.length} archivos de sesión ${sessionId} en Redis...`);
+    // Leer archivos como binario y convertir a base64
+    const payload = files.map(file => {
+      const filePath = path.join(sessionFolder, file);
+      const content = fs.readFileSync(filePath); // Buffer
+      return { name: file, data: content.toString('base64') };
+    });
 
-    // Guardar cada archivo en Redis
-    for (const file of files) {
-      try {
-        const filePath = path.join(sessionFolder, file);
-        
-        // Verificar nuevamente que es un archivo
-        const stats = fs.statSync(filePath);
-        if (!stats.isFile()) {
-          console.log(`[REDIS] Saltando directorio: ${file}`);
-          continue;
-        }
+    const redisKey = `session:${sessionId}`;
+    await redis.set(redisKey, JSON.stringify(payload), 'EX', ttlSeconds);
 
-        // Leer el contenido del archivo
-        const content = fs.readFileSync(filePath, 'utf8');
-        
-        // Guardar en Redis con una clave única
-        const redisKey = `session_${sessionId}_file_${file}`;
-        await redis.set(redisKey, content, 'EX', 3600); // Expira en 1 hora
-        
-        console.log(`[REDIS] ✅ Archivo guardado: ${file} -> ${redisKey}`);
-        
-      } catch (fileError) {
-        console.error(`[REDIS] Error procesando archivo ${file}:`, fileError.message);
-      }
-    }
-
-    // Guardar metadatos de la sesión
-    const sessionData = {
-      sessionId: sessionId,
+    console.log(`[REDIS] ✅ Guardados ${files.length} archivos de sesión ${sessionId} en clave ${redisKey}`);
+    // Metadatos opcionales
+    await redis.set(`session:${sessionId}:meta`, JSON.stringify({
+      sessionId,
       filesCount: files.length,
       timestamp: new Date().toISOString(),
       status: 'active'
-    };
-
-    await redis.set(`session_${sessionId}_metadata`, JSON.stringify(sessionData), 'EX', 3600);
-    console.log(`[REDIS] ✅ Metadatos de sesión ${sessionId} guardados en Redis`);
-
+    }), 'EX', ttlSeconds);
   } catch (error) {
     console.error(`[REDIS] Error guardando sesión ${sessionId} en Redis:`, error.message);
   }
@@ -541,7 +544,10 @@ router.post('/iniciar/:sessionId', async (req, res) => {
       console.log(`[WEBCONNECT] QR generado para cliente ${sessionId}`);
       await guardarQR(pool, sessionId, qr, true);
     }, { allowQR: true, maxQrAttempts: 1, qrTtlMs: DEFAULT_QR_TTL_MS });
+
+    // Guardado best-effort (si aún no hay archivos, el helper no hará nada)
     await saveSessionToRedis(sessionId);
+
     console.log(`[WEBCONNECT] Sesión ${sessionId} creada y guardada en Redis`);
     res.json({ ok: true, message: 'Sesión creada y guardada en Redis' });
   } catch (err) {
