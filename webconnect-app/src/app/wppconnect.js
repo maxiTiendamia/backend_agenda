@@ -307,22 +307,11 @@ async function createSession(sessionId, onQR, options = {}) {
 catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
   // Política: no generar QR en restauraciones/reconexiones automáticas
   if (!allowQR) {
-    console.log(`[WEBCONNECT] 🚫 QR bloqueado para sesión ${sessionId} (modo automático). Saltando generación.`);
-    try {
-      if (sessions[sessionId] && typeof sessions[sessionId].close === 'function') {
-        await sessions[sessionId].close();
-      }
-    } catch (_) {}
-    if (sessions[sessionId]) {
-      sessions[sessionId]._qrFailed = true;
-    }
-    // Intentar limpiar locks para permitir futuros intentos
-    try {
-      const { limpiarSingletonLock } = require('./sessionUtils');
-      await limpiarSingletonLock(sessionId);
-    } catch (_) {}
-    delete sessions[sessionId];
-    return; // no reintentar
+  console.log(`[WEBCONNECT] 🚫 QR bloqueado para sesión ${sessionId} (modo automático). Se ignora sin cerrar sesión activa.`);
+  // No cerrar ni eliminar sesiones existentes; solo ignorar.
+  // Opcionalmente podríamos abortar esta creación lanzando un error controlado:
+  // throw new Error('QR bloqueado en modo automático');
+  return;
   }
 
   // En modo manual: solo 1 intento
