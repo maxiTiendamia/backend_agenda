@@ -287,11 +287,26 @@ class AIConversationManager:
         ]
         return any(t in msg for t in triggers)
 
-    def _first_paragraphs(self, text: str, max_paragraphs: int = 2, max_chars: int = 600) -> str:
-        """Devuelve un resumen por primeros párrafos y límite de caracteres."""
+    def _first_paragraphs(self, text: str, max_paragraphs: int = 1, max_chars: int = 320) -> str:
+        """Resumen inteligente: toma 1-2 frases iniciales y limita por caracteres.
+        Fallback: primeros párrafos con límite de caracteres.
+        """
         if not text:
             return ""
-        paras = [p.strip() for p in text.split("\n\n") if p.strip()]
+        raw = text.strip()
+        # 1) Intentar por frases (máx 2) y cortar por caracteres
+        try:
+            import re
+            sentences = [s.strip() for s in re.split(r"(?<=[\.!?])\s+", raw) if s.strip()]
+            if sentences:
+                resumen = " ".join(sentences[:2])
+                if len(resumen) > max_chars:
+                    return resumen[:max_chars - 1].rstrip() + "…"
+                return resumen
+        except Exception:
+            pass
+        # 2) Fallback: primeros párrafos
+        paras = [p.strip() for p in raw.split("\n\n") if p.strip()]
         summary_parts = []
         total = 0
         for p in paras:
@@ -302,9 +317,8 @@ class AIConversationManager:
             summary_parts.append(p)
             total += len(p) + 2
         summary = "\n\n".join(summary_parts)
-        # Si quedó vacío por formato raro, cortar por caracteres
         if not summary:
-            summary = text[:max_chars]
+            summary = raw[:max_chars - 1].rstrip() + ("…" if len(raw) > max_chars else "")
         return summary
 
     def _format_business_info(self, tenant, business_context, full: bool = False) -> str:
@@ -317,9 +331,9 @@ class AIConversationManager:
         partes = []
         partes.append(f"✨ Sobre {nombre_publico}")
         if info_local:
-            texto = info_local if full else self._first_paragraphs(info_local)
+            texto = info_local if full else self._first_paragraphs(info_local, max_paragraphs=1, max_chars=320)
             partes.append(texto)
-            if not full and len(info_local) > len(texto):
+            if not full:
                 partes.append("ℹ️ Si querés, te envío más detalles. Decime 'más info' o 'biografía completa'.")
         if telefono or direccion:
             contacto = []

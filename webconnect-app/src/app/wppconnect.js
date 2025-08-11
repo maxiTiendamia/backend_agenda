@@ -239,6 +239,14 @@ async function createSession(sessionId, onQR, options = {}) {
   const qrTtlMs = Number.isFinite(options.qrTtlMs) ? options.qrTtlMs : DEFAULT_QR_TTL_MS;
   
   try {
+    // ✅ Pre-chequeo: verificar que el cliente exista en BD antes de crear la sesión
+    const existeCliente = await verificarClienteExisteEnBD(sessionId);
+    if (!existeCliente) {
+      console.log(`[WEBCONNECT] 🚫 Cliente ${sessionId} no existe en BD - Cancelando creación de sesión`);
+      try { await eliminarSesionInexistente(sessionId); } catch (_) {}
+      return null;
+    }
+
     console.log(`[WEBCONNECT] 🚀 Creando nueva sesión ${sessionId}`);
 
     // Evitar creaciones concurrentes para la misma sesión
@@ -655,6 +663,13 @@ async function initializeExistingSessions(specificTenants = null) {
     for (const tenantId of tenantsToInit) {
       try {
         console.log(`[WEBCONNECT] 🔄 Restaurando sesión para tenant ${tenantId}...`);
+        // ✅ Chequeo previo: si no existe en BD, omitir y limpiar
+        const existe = await verificarClienteExisteEnBD(tenantId);
+        if (!existe) {
+          console.log(`[WEBCONNECT] 🚫 Cliente ${tenantId} no existe en BD - Omitiendo y limpiando`);
+          try { await eliminarSesionInexistente(tenantId); } catch (_) {}
+          continue;
+        }
         
         // Verificar que existe el directorio de la sesión
         const sessionDir = path.join(tokensDir, `session_${tenantId}`);
@@ -1001,7 +1016,14 @@ async function setupKeepAlive(sessionId) {
 // 🔥 NUEVA FUNCIÓN: Sistema de backup de sesiones autenticadas
 async function saveSessionBackup(sessionId) {
   try {
-    console.log(`[WEBCONNECT] 💾 Creando backup para sesión ${sessionId}...`);
+    // ✅ Evitar guardar backup si el cliente ya no existe
+    const existe = await verificarClienteExisteEnBD(sessionId);
+    if (!existe) {
+      console.log(`[WEBCONNECT] � Cliente ${sessionId} no existe en BD - No se guarda backup`);
+      return false;
+    }
+
+    console.log(`[WEBCONNECT] �💾 Creando backup para sesión ${sessionId}...`);
     
     const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
     const backupDir = path.join(sessionDir, 'backup');
@@ -1074,6 +1096,13 @@ async function saveSessionBackup(sessionId) {
 async function reconnectSession(sessionId) {
   try {
     console.log(`[WEBCONNECT] 🔄 Iniciando reconexión inteligente para ${sessionId}...`);
+    // ✅ Verificar existencia antes de reconectar
+    const existe = await verificarClienteExisteEnBD(sessionId);
+    if (!existe) {
+      console.log(`[WEBCONNECT] 🚫 Cliente ${sessionId} no existe en BD - Cancelando reconexión y limpiando`);
+      try { await eliminarSesionInexistente(sessionId); } catch (_) {}
+      return false;
+    }
     // Evitar reconexiones concurrentes
     if (sessions[sessionId] && sessions[sessionId]._reconnecting) {
       console.log(`[WEBCONNECT] ⏳ Reconexión ya en curso para ${sessionId} - evitando duplicado`);
@@ -1215,6 +1244,14 @@ async function reconnectSession(sessionId) {
 // 🔥 NUEVA FUNCIÓN: Restaurar desde backup
 async function restoreFromBackup(sessionId) {
   try {
+    // ✅ Evitar restaurar backup si el cliente ya no existe
+    const existe = await verificarClienteExisteEnBD(sessionId);
+    if (!existe) {
+      console.log(`[WEBCONNECT] 🚫 Cliente ${sessionId} no existe en BD - No restaurar backup`);
+      try { await eliminarSesionInexistente(sessionId); } catch (_) {}
+      return false;
+    }
+
     const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
     const backupDir = path.join(sessionDir, 'backup');
     const metadataFile = path.join(backupDir, 'backup-metadata.json');

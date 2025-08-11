@@ -118,6 +118,13 @@ router.post('/generar-qr/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   try {
     console.log(`[WEBCONNECT] Reinicio manual de QR para cliente ${sessionId}`);
+    // ✅ Validar existencia de cliente en BD antes de todo
+    const { verificarClienteExisteEnBD } = require('../app/wppconnect');
+    const existe = await verificarClienteExisteEnBD(sessionId);
+    if (!existe) {
+      console.log(`[WEBCONNECT] 🚫 Cliente ${sessionId} no existe en BD - Abortando generación de QR`);
+      return res.status(404).json({ ok: false, error: `Cliente ${sessionId} no existe en BD` });
+    }
     
     // 🔥 PASO 1: Cerrar sesión existente si está activa
     const { sessions, clearSession } = require('../app/wppconnect');
@@ -164,11 +171,14 @@ router.post('/generar-qr/:sessionId', async (req, res) => {
     // 🔥 PASO 5: Crear nueva sesión (permitiendo QR 1 sola vez y con TTL)
     console.log(`[WEBCONNECT] 🚀 Creando nueva sesión para ${sessionId}...`);
     const { DEFAULT_QR_TTL_MS } = require('../app/wppconnect');
-    await createSession(sessionId, async (qr) => {
+    const client = await createSession(sessionId, async (qr) => {
       console.log(`[WEBCONNECT] QR generado para cliente ${sessionId} (manual)`);
       await guardarQR(pool, sessionId, qr, true);
       console.log(`[WEBCONNECT] QR guardado en base de datos para cliente ${sessionId}`);
     }, { allowQR: true, maxQrAttempts: 1, qrTtlMs: DEFAULT_QR_TTL_MS });
+    if (!client) {
+      return res.status(400).json({ ok: false, error: 'No se pudo crear la sesión (cliente inexistente o error previo)' });
+    }
     
     res.json({ 
       ok: true, 
