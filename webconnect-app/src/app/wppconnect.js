@@ -8,6 +8,12 @@ const { pool } = require('./database');
 // Objeto para gestionar las instancias activas por sesión
 const sessions = {};
 
+// Añadir al inicio del archivo
+const { sendConnectionLostAlert, sendReconnectionSuccessAlert } = require('./emailAlerts');
+
+// Objeto para trackear fallos de reconexión por sesión
+const reconnectionFailures = {};
+
 // URL de tu API FastAPI en Render
 const API_URL = process.env.API_URL || 'https://backend-agenda-2.onrender.com';
 // Control de fallback automático de QR cuando una sesión restaurada queda en notLogged
@@ -300,8 +306,6 @@ async function createSession(sessionId, onQR, options = {}) {
           '--disable-features=VizDisplayCompositor',
           '--memory-pressure-off',
           '--max-old-space-size=512',
-          
-          // ✨ NUEVAS OPTIMIZACIONES PARA PERSISTENCIA
           '--disable-background-timer-throttling',
           '--disable-backgrounding-occluded-windows',
           '--disable-renderer-backgrounding',
@@ -313,13 +317,9 @@ async function createSession(sessionId, onQR, options = {}) {
       },
       
 catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
-  // Política: no generar QR en restauraciones/reconexiones automáticas
   if (!allowQR) {
-  console.log(`[WEBCONNECT] 🚫 QR bloqueado para sesión ${sessionId} (modo automático). Se ignora sin cerrar sesión activa.`);
-  // No cerrar ni eliminar sesiones existentes; solo ignorar.
-  // Opcionalmente podríamos abortar esta creación lanzando un error controlado:
-  // throw new Error('QR bloqueado en modo automático');
-  return;
+    console.log(`🚫 QR bloqueado para sesión ${sessionId} (modo automático). Abortando creación.`);
+    throw new Error('QR bloqueado en modo automático');
   }
 
   // En modo manual: solo 1 intento
@@ -1004,7 +1004,7 @@ async function setupKeepAlive(sessionId) {
         setupKeepAlive(sessionId);
       }, 60000); // Reiniciar en 1 minuto
     }
-  }, 45000); // 45 segundos
+  }, 90000); // 90 segundos
   
   // Guardar referencia del interval para limpieza posterior
   if (!client._keepAliveIntervals) client._keepAliveIntervals = [];
@@ -1096,6 +1096,7 @@ async function saveSessionBackup(sessionId) {
 async function reconnectSession(sessionId) {
   try {
     console.log(`[WEBCONNECT] 🔄 Iniciando reconexión inteligente para ${sessionId}...`);
+    
     // ✅ Verificar existencia antes de reconectar
     const existe = await verificarClienteExisteEnBD(sessionId);
     if (!existe) {
@@ -1103,6 +1104,7 @@ async function reconnectSession(sessionId) {
       try { await eliminarSesionInexistente(sessionId); } catch (_) {}
       return false;
     }
+
     // Evitar reconexiones concurrentes
     if (sessions[sessionId] && sessions[sessionId]._reconnecting) {
       console.log(`[WEBCONNECT] ⏳ Reconexión ya en curso para ${sessionId} - evitando duplicado`);
@@ -1186,40 +1188,66 @@ async function reconnectSession(sessionId) {
     console.log(`[WEBCONNECT] 🚀 Creando nueva sesión para ${sessionId}...`);
     await createSession(sessionId, null, { allowQR: false }); // Sin QR en reconexión automática
     
+    // 🔥 NUEVO: Si la reconexión es exitosa, enviar alerta de éxito
+    if (reconnectionFailures[sessionId] && reconnectionFailures[sessionId] > 0) {
+      console.log(`[WEBCONNECT] ✅ Reconexión exitosa después de ${reconnectionFailures[sessionId]} fallos para ${sessionId}`);
+      
+      // Enviar alerta de reconexión exitosa
+      setTimeout(async () => {
+        await sendReconnectionSuccessAlert(sessionId, reconnectionFailures[sessionId]);
+      }, 5000);
+      
+      // Reset contador de fallos
+      delete reconnectionFailures[sessionId];
+    }
+    
     console.log(`[WEBCONNECT] ✅ Reconexión completada exitosamente para ${sessionId}`);
     return true;
     
   } catch (error) {
     console.error(`[WEBCONNECT] ❌ Error en reconexión para ${sessionId}:`, error.message);
-    // Si el error es por ProcessSingleton / SingletonLock, intentar limpieza más agresiva
-    try {
-      const msg = String(error && error.message ? error.message : '');
-      if (msg.includes('ProcessSingleton') || msg.includes('SingletonLock') || msg.includes('Failed to launch the browser process')) {
-        const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
-        const defaultDir = path.join(sessionDir, 'Default');
-        const candidates = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
-        for (const f of candidates) {
-          const p1 = path.join(sessionDir, f);
-          const p2 = path.join(defaultDir, f);
-          try { if (fs.existsSync(p1)) fs.rmSync(p1, { force: true }); } catch (_) {}
-          try { if (fs.existsSync(p2)) fs.rmSync(p2, { force: true }); } catch (_) {}
-        }
-        console.log(`[WEBCONNECT] 🧽 Limpieza agresiva de locks aplicada para sesión ${sessionId}`);
-      }
-    } catch (_) {}
     
-    // Si falla, programar otro intento en 2 minutos
+    // 🔥 NUEVO: Trackear fallos de reconexión y enviar alertas
+    if (!reconnectionFailures[sessionId]) {
+      reconnectionFailures[sessionId] = 0;
+    }
+    reconnectionFailures[sessionId]++;
+    
+    const attempts = reconnectionFailures[sessionId];
+    console.log(`[WEBCONNECT] 📊 Fallo de reconexión #${attempts} para sesión ${sessionId}`);
+    
+    // Enviar alerta por email después del 2do fallo
+    if (attempts >= 2) {
+      console.log(`[WEBCONNECT] 📧 Enviando alerta por email para sesión ${sessionId} (${attempts} fallos)`);
+      
+      const reason = `Fallo en reconexión automática: ${error.message}`;
+      
+      setTimeout(async () => {
+        await sendConnectionLostAlert(sessionId, reason, attempts);
+      }, 1000);
+    }
+    
+    // 🔥 NUEVO: Después de 3 fallos, marcar como crítico y no reintentar automáticamente
+    if (attempts >= 3) {
+      console.log(`[WEBCONNECT] 🚨 Sesión ${sessionId} marcada como CRÍTICA - Requiere intervención manual`);
+      
+      // No programar más reintentos automáticos
+      return false;
+    }
+    
+    // Si falla, programar otro intento en 2 minutos (solo si no es crítico)
     console.log(`[WEBCONNECT] ⏰ Programando reintento de reconexión para ${sessionId} en 2 minutos...`);
     setTimeout(async () => {
       try {
         // Verificar nuevamente que el cliente existe antes del reintento
         const clienteExiste = await verificarClienteExisteEnBD(sessionId);
         if (clienteExiste) {
-          console.log(`[WEBCONNECT] 🔄 Segundo intento de reconexión para ${sessionId}...`);
+          console.log(`[WEBCONNECT] 🔄 Intento #${attempts + 1} de reconexión para ${sessionId}...`);
           await reconnectSession(sessionId);
         } else {
           console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} eliminado - Cancelando reintento`);
           await eliminarSesionInexistente(sessionId);
+          delete reconnectionFailures[sessionId];
         }
       } catch (retryError) {
         console.error(`[WEBCONNECT] ❌ Reintento de reconexión falló para ${sessionId}:`, retryError.message);
