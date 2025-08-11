@@ -26,7 +26,6 @@ async function sendConnectionLostAlert(sessionId, reason, attempts = 0, clientIn
     
     // Obtener información del cliente desde BD
     let clienteNombre = 'Cliente Desconocido';
-    let clienteEmail = 'No disponible';
     
     try {
       const { pool } = require('./database');
@@ -36,7 +35,6 @@ async function sendConnectionLostAlert(sessionId, reason, attempts = 0, clientIn
       );
       if (result.rows.length > 0) {
         clienteNombre = result.rows[0].nombre || `Cliente #${sessionId}`;
-        clienteEmail = result.rows[0].email || 'No disponible';
       }
     } catch (dbError) {
       console.error('[EMAIL-ALERT] Error obteniendo info del cliente:', dbError.message);
@@ -62,10 +60,6 @@ async function sendConnectionLostAlert(sessionId, reason, attempts = 0, clientIn
             <tr>
               <td style="padding: 8px 0; font-weight: bold;">ID Sesión:</td>
               <td style="padding: 8px 0;">#${sessionId}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0; font-weight: bold;">Email Cliente:</td>
-              <td style="padding: 8px 0;">${clienteEmail}</td>
             </tr>
             <tr>
               <td style="padding: 8px 0; font-weight: bold;">Motivo:</td>
@@ -108,7 +102,6 @@ ${severityLevel}
 
 Cliente: ${clienteNombre}
 ID Sesión: #${sessionId}
-Email Cliente: ${clienteEmail}
 Motivo: ${reason}
 Intentos Fallidos: ${attempts}/3
 Fecha/Hora: ${timestamp}
