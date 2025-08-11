@@ -10,6 +10,9 @@ const sessions = {};
 
 // URL de tu API FastAPI en Render
 const API_URL = process.env.API_URL || 'https://backend-agenda-2.onrender.com';
+// Control de fallback automático de QR cuando una sesión restaurada queda en notLogged
+const AUTO_QR_ON_NOT_LOGGED = String(process.env.AUTO_QR_ON_NOT_LOGGED || '').toLowerCase() === 'true';
+const AUTO_QR_MAX_ATTEMPTS = Number.isFinite(parseInt(process.env.AUTO_QR_MAX_ATTEMPTS || '', 10)) ? parseInt(process.env.AUTO_QR_MAX_ATTEMPTS, 10) : 1;
 
 // TTL por defecto del QR (ms) configurable por ENV
 const DEFAULT_QR_TTL_MS = (() => {
@@ -391,14 +394,36 @@ catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
           
           // Si no se permite QR, cerrar y no insistir
           if (!allowQR) {
-            try {
-              if (sessions[sessionId] && typeof sessions[sessionId].close === 'function') {
-                await sessions[sessionId].close();
-              }
-            } catch (_) {}
-            delete sessions[sessionId];
-            console.log(`[WEBCONNECT] 🚫 QR deshabilitado (auto). Sesión ${sessionId} no iniciada. Pasando a la siguiente.`);
-            return; // no intentar restauración ni QR
+            // Fallback opcional: lanzar intento de QR automático si está habilitado por ENV
+            if (AUTO_QR_ON_NOT_LOGGED && !(sessions[sessionId] && sessions[sessionId]._autoQrFallbackTriggered)) {
+              console.log(`[WEBCONNECT] ⚠️ AUTO_QR_ON_NOT_LOGGED activo. Iniciando fallback de QR para sesión ${sessionId}...`);
+              if (!sessions[sessionId]) sessions[sessionId] = {};
+              sessions[sessionId]._autoQrFallbackTriggered = true;
+              // Cerrar cliente actual y reabrir con allowQR=true y 1 intento
+              try {
+                if (sessions[sessionId] && typeof sessions[sessionId].close === 'function') {
+                  await sessions[sessionId].close();
+                }
+              } catch (_) {}
+              delete sessions[sessionId];
+              setTimeout(async () => {
+                try {
+                  await createSession(sessionId, null, { allowQR: true, maxQrAttempts: AUTO_QR_MAX_ATTEMPTS });
+                } catch (e) {
+                  console.error(`[WEBCONNECT] ❌ Error en fallback de QR para ${sessionId}:`, e.message);
+                }
+              }, 1000);
+              return;
+            } else {
+              try {
+                if (sessions[sessionId] && typeof sessions[sessionId].close === 'function') {
+                  await sessions[sessionId].close();
+                }
+              } catch (_) {}
+              delete sessions[sessionId];
+              console.log(`[WEBCONNECT] 🚫 QR deshabilitado (auto). Sesión ${sessionId} no iniciada. Pasando a la siguiente.`);
+              return; // no intentar restauración ni QR
+            }
           }
 
           // Intento automático único de restaurar desde backup si existe
