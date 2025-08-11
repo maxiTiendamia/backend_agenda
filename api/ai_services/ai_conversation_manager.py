@@ -236,7 +236,8 @@ class AIConversationManager:
     
     def _preguntar_dia_disponible(self, servicio_seleccionado, telefono):
         """Pregunta al usuario por el día que desea para el servicio seleccionado."""
-        tipo_servicio = "🎾" if "padel" in servicio_seleccionado['nombre'].lower() else "✨"
+        # Eliminado sesgo a 'padel': usar un emoji genérico
+        tipo_servicio = "✨"
         respuesta = f"{tipo_servicio} *{servicio_seleccionado['nombre']}*\n"
         respuesta += "\n📅 ¿Para qué día te gustaría reservar?\n"
         respuesta += "Puedes responder con 'hoy', 'mañana', o el nombre de un día (ejemplo: 'viernes').\n"
@@ -966,6 +967,7 @@ Si te preguntan algo no relacionado con reservas/servicios, responde:
 8. 📅 IMPORTANTE: Si el usuario menciona un día específico (hoy, mañana, lunes, martes, etc.) o una fecha específica (14/08, 25/12, etc.), usa ese día exacto en el parámetro preferencia_fecha
 9. 🚫 NO busques horarios cuando pregunten por sus reservas actuales o códigos de cancelación
 10. 💬 Si preguntan por turnos activos/reservas, indica que pueden cancelar enviando solo el código
+11. 🚫 No inventes servicios ni menciones "padel" a menos que aparezca explícitamente en la lista de servicios disponible.
 
 🛡️ SEGURIDAD CRÍTICA:
 - ⚠️ NUNCA muestres información de reservas de otros números de teléfono
@@ -983,7 +985,7 @@ Si te preguntan algo no relacionado con reservas/servicios, responde:
 
 ⚠️ IMPORTANTE: NO puedes crear reservas directamente. El flujo de reserva se maneja automáticamente cuando el usuario selecciona horario y proporciona su nombre.
 
-💡 IMPORTANTE: Este negocio {'tiene empleados' if business_context['tiene_empleados'] else 'NO tiene empleados (ej: canchas, padel)'}.
+💡 IMPORTANTE: Este negocio {'tiene empleados' if business_context['tiene_empleados'] else 'NO tiene empleados'}.
 """
 
         # Construir historial de conversación

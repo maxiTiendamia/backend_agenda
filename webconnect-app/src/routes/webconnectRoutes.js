@@ -208,8 +208,8 @@ router.post('/restore-sessions', async (req, res) => {
           const filePath = path.join(folder, file.name);
           fs.writeFileSync(filePath, Buffer.from(file.data, 'base64'));
         }
-        // Intentar reconectar sesión
-        await createSession(sessionId);
+        // Intentar reconectar sesión SIN generar QR automáticamente
+        await createSession(sessionId, undefined, { allowQR: false });
         restauradas++;
       }
     }
@@ -384,12 +384,14 @@ router.post('/restart-qr/:sessionId', async (req, res) => {
     }
 
     // 🔥 PASO 1: Cerrar sesión existente si está activa
-    const { sessions, clearSession } = require('../app/wppconnect');
+    const { sessions } = require('../app/wppconnect');
     if (sessions[sessionId]) {
       console.log(`[WEBCONNECT] 🔄 Cerrando sesión existente para ${sessionId}...`);
       try {
-        // Cerrar la sesión
-        await sessions[sessionId].close();
+        // Cerrar la sesión de forma segura
+        if (typeof sessions[sessionId].close === 'function') {
+          await sessions[sessionId].close();
+        }
         console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada correctamente`);
       } catch (closeError) {
         console.error(`[WEBCONNECT] ⚠️ Error cerrando sesión ${sessionId}:`, closeError.message);
@@ -423,13 +425,14 @@ router.post('/restart-qr/:sessionId', async (req, res) => {
       }
     }
     
-    // 🔥 PASO 5: Crear nueva sesión
+    // 🔥 PASO 5: Crear nueva sesión (permitiendo QR 1 sola vez y con TTL)
     console.log(`[WEBCONNECT] 🚀 Creando nueva sesión para ${sessionId}...`);
+    const { DEFAULT_QR_TTL_MS } = require('../app/wppconnect');
     await createSession(sessionId, async (qr) => {
       console.log(`[WEBCONNECT] QR generado para cliente ${sessionId} (manual)`);
       await guardarQR(pool, sessionId, qr, true);
       console.log(`[WEBCONNECT] QR guardado en base de datos para cliente ${sessionId}`);
-    });
+    }, { allowQR: true, maxQrAttempts: 1, qrTtlMs: DEFAULT_QR_TTL_MS });
     
     res.json({ 
       ok: true, 
@@ -523,10 +526,11 @@ router.post('/iniciar/:sessionId', async (req, res) => {
   console.log(`[WEBCONNECT] Solicitud de inicio de sesión para cliente ${sessionId}`);
   try {
     await ensureSessionFolder(sessionId);
+    const { DEFAULT_QR_TTL_MS } = require('../app/wppconnect');
     await createSession(sessionId, async (qr) => {
       console.log(`[WEBCONNECT] QR generado para cliente ${sessionId}`);
       await guardarQR(pool, sessionId, qr, true);
-    });
+    }, { allowQR: true, maxQrAttempts: 1, qrTtlMs: DEFAULT_QR_TTL_MS });
     await saveSessionToRedis(sessionId);
     console.log(`[WEBCONNECT] Sesión ${sessionId} creada y guardada en Redis`);
     res.json({ ok: true, message: 'Sesión creada y guardada en Redis' });
