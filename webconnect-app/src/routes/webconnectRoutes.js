@@ -125,7 +125,9 @@ router.post('/generar-qr/:sessionId', async (req, res) => {
       console.log(`[WEBCONNECT] 🔄 Cerrando sesión existente para ${sessionId}...`);
       try {
         // Cerrar la sesión
-        await sessions[sessionId].close();
+        if (typeof sessions[sessionId].close === 'function') {
+          await sessions[sessionId].close();
+        }
         console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada correctamente`);
       } catch (closeError) {
         console.error(`[WEBCONNECT] ⚠️ Error cerrando sesión ${sessionId}:`, closeError.message);
@@ -159,13 +161,14 @@ router.post('/generar-qr/:sessionId', async (req, res) => {
       }
     }
     
-    // 🔥 PASO 5: Crear nueva sesión
+    // 🔥 PASO 5: Crear nueva sesión (permitiendo QR 1 sola vez y con TTL)
     console.log(`[WEBCONNECT] 🚀 Creando nueva sesión para ${sessionId}...`);
+    const { DEFAULT_QR_TTL_MS } = require('../app/wppconnect');
     await createSession(sessionId, async (qr) => {
       console.log(`[WEBCONNECT] QR generado para cliente ${sessionId} (manual)`);
       await guardarQR(pool, sessionId, qr, true);
       console.log(`[WEBCONNECT] QR guardado en base de datos para cliente ${sessionId}`);
-    });
+    }, { allowQR: true, maxQrAttempts: 1, qrTtlMs: DEFAULT_QR_TTL_MS });
     
     res.json({ 
       ok: true, 
