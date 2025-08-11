@@ -278,10 +278,50 @@ class AIConversationManager:
                 return emoji
         return "✨"
     
+    def _format_business_info(self, tenant, business_context) -> str:
+        """Construye un texto informativo y nutritivo sobre el negocio usando los datos del Tenant."""
+        nombre_publico = tenant.comercio or (f"{getattr(tenant, 'nombre', '')} {getattr(tenant, 'apellido', '')}".strip() or "Nuestro espacio")
+        info_local = (business_context.get("informacion_local") or "").strip()
+        telefono = business_context.get("telefono") or ""
+        direccion = business_context.get("direccion") or ""
+
+        partes = []
+        partes.append(f"✨ Sobre {nombre_publico}")
+        if info_local:
+            # Evitar mensajes excesivamente largos en una sola entrega
+            texto = info_local
+            partes.append(texto)
+        if telefono or direccion:
+            contacto = []
+            if direccion:
+                contacto.append(f"📍 Dirección: {direccion}")
+            if telefono:
+                contacto.append(f"📞 Teléfono: {telefono}")
+            partes.append("\n".join(contacto))
+        partes.append("\n💬 ¿Te gustaría reservar o ver los servicios disponibles? Escribe 'servicios' o pedime un día (hoy/mañana).")
+        return "\n\n".join([p for p in partes if p])
+
     def _preguntar_dia_disponible(self, servicio_seleccionado, telefono):
-        """Pregunta al usuario por el día que desea para el servicio seleccionado."""
+        """Pregunta al usuario por el día que desea para el servicio seleccionado e incluye detalles del servicio si existen."""
         tipo_servicio = self._emoji_for_service(servicio_seleccionado['nombre'])
         respuesta = f"{tipo_servicio} *{servicio_seleccionado['nombre']}*\n"
+        # Agregar detalles ricos del servicio si están disponibles
+        desc = (servicio_seleccionado.get('mensaje_personalizado') or '').strip()
+        precio = servicio_seleccionado.get('precio')
+        duracion = servicio_seleccionado.get('duracion')
+        extras = []
+        if desc:
+            # No truncamos agresivo para mantenerlo nutritivo; WhatsApp soporta mensajes extensos
+            extras.append(desc)
+        info_basica = []
+        if duracion:
+            info_basica.append(f"⏱️ Duración: {duracion} min")
+        if isinstance(precio, (int, float)) and precio > 0:
+            info_basica.append(f"💲 Precio: {precio}")
+        if info_basica:
+            extras.append(" · ".join(info_basica))
+        if extras:
+            respuesta += "\n" + "\n".join(extras) + "\n"
         respuesta += "\n📅 ¿Para qué día te gustaría reservar?\n"
         respuesta += "Puedes responder con 'hoy', 'mañana', o el nombre de un día (ejemplo: 'viernes').\n"
         respuesta += "\n💬 Escribe el día que prefieres."
@@ -531,6 +571,17 @@ class AIConversationManager:
             # --- FLUJO DE CONSULTA DE SERVICIOS ---
             if mensaje_stripped in ["servicios", "ver servicios", "lista", "menu"]:
                 return self._add_help_footer(self.mostrar_servicios(business_context))
+
+            # --- FLUJO DE INFORMACIÓN DEL NEGOCIO / BIO / CONTACTO ---
+            info_keywords = [
+                "quien sos", "quién sos", "quien eres", "quién eres", "quien es diego", "quién es diego",
+                "sobre vos", "sobre ti", "sobre diego", "sobre el negocio", "info del local", "informacion del local",
+                "información del local", "informacion", "información", "contacto", "teléfono", "telefono",
+                "dirección", "direccion", "ubicación", "ubicacion", "horarios", "sobre mi", "sobre mí",
+                "bio", "biografia", "biografía"
+            ]
+            if any(k in mensaje_stripped for k in info_keywords):
+                return self._add_help_footer(self._format_business_info(tenant, business_context))
 
             # --- 🔧 DETECTAR CONFUSIÓN DEL USUARIO ---
             frases_confusion = [
@@ -944,6 +995,12 @@ class AIConversationManager:
                 else:
                     return f"ℹ️ *{servicio_seleccionado['nombre']}*\n\nEste es un servicio informativo.\n\n💬 ¿En qué más puedo ayudarte? 🤔"
             
+            # 🔧 ENRIQUECER DESCRIPCIÓN DESDE informacion_local SI FALTA
+            if not (servicio_seleccionado.get('mensaje_personalizado') or '').strip():
+                extra = self._extract_service_info_from_tenant_info(servicio_seleccionado['nombre'], business_context.get('informacion_local') or '')
+                if extra:
+                    servicio_seleccionado['mensaje_personalizado'] = extra
+            
             # 🔧 GUARDAR SERVICIO SELECCIONADO Y PREGUNTAR DÍA
             servicio_key = f"servicio_seleccionado:{telefono}"
             self.redis_client.set(servicio_key, json.dumps(servicio_seleccionado), ex=1800)  # 30 min
@@ -967,29 +1024,32 @@ class AIConversationManager:
         
         # �🔧 RESTO DEL PROCESAMIENTO CON IA
         # Construir contexto para la IA
-        system_prompt = f"""🤖 Eres la IA asistente de {tenant.comercio} EXCLUSIVAMENTE para reservas y servicios. 
+        system_prompt = f"""🤖 Eres la IA asistente de {tenant.comercio} EXCLUSIVAMENTE para reservas, servicios e información del negocio.
 
 ⚠️ RESTRICCIÓN CRÍTICA: SOLO responde sobre:
 - Reservas de turnos/citas
 - Servicios disponibles ({', '.join([s['nombre'] for s in business_context['servicios']])})
 - Cancelaciones de reservas
 - Consultas sobre horarios disponibles
-- Información sobre el negocio {tenant.comercio}
+- Información del negocio, biografía del profesional y datos de contacto/ubicación de {tenant.comercio}
 
-� NO RESPONDAS NUNCA A:
+🚫 NO RESPONDAS NUNCA A:
 - Recetas de cocina
-- Consejos de vida
+- Consejos de vida (salvo que estén explícitamente en la información del negocio)
 - Preguntas generales no relacionadas con el negocio
-- Temas ajenos a reservas y servicios
+- Temas ajenos a reservas, servicios o información del negocio
 - Consultas sobre otros temas
 
-Si te preguntan algo no relacionado con reservas/servicios, responde:
-"Lo siento, solo puedo ayudarte con reservas y servicios de {tenant.comercio}. ¿Necesitas hacer una reserva o consultar nuestros servicios?"
+Si te preguntan algo no relacionado, responde:
+"Lo siento, solo puedo ayudarte con reservas, servicios o información de {tenant.comercio}. ¿Necesitas hacer una reserva o consultar nuestros servicios?"
 
-�📊 INFORMACIÓN DEL NEGOCIO:
+📊 INFORMACIÓN DEL NEGOCIO:
 - 🏢 Nombre: {tenant.comercio}
 - ✨ Servicios disponibles: {', '.join([s['nombre'] for s in business_context['servicios']])}
 - 👥 Empleados: {', '.join([e['nombre'] for e in business_context['empleados']]) if business_context['empleados'] else 'Sin empleados (servicios directos)'}
+- 📍 Dirección: {business_context.get('direccion') or 'N/D'}
+- 📞 Teléfono: {business_context.get('telefono') or 'N/D'}
+- 📝 Info del local (resumen): {(business_context.get('informacion_local') or '')[:800]}
 
 👤 INFORMACIÓN DEL CLIENTE (📞 {telefono}):
 - 🔄 Cliente recurrente: {'🎯 Sí' if user_history['es_cliente_recurrente'] else '🆕 No (cliente nuevo)'}
@@ -998,7 +1058,7 @@ Si te preguntan algo no relacionado con reservas/servicios, responde:
 - 📊 Historial: {len(user_history['historial'])} reservas anteriores
 
 📋 INSTRUCCIONES IMPORTANTES:
-1. 😊 Sé natural, amigable y personalizada. Usa MUCHOS emojis
+1. 😊 Sé natural, amigable y personalizada. Usa emojis apropiados
 2. 🎯 Usa la información del cliente para personalizar respuestas
 3. 📋 Cuando te pidan un turno, muestra los servicios numerados (1, 2, 3...)
 4. 🔢 Si el usuario dice un número, usa la función buscar_horarios_servicio con el ID REAL
@@ -1006,10 +1066,12 @@ Si te preguntan algo no relacionado con reservas/servicios, responde:
 {self._format_servicios_with_real_ids(business_context['servicios'])}
 6. 🧠 Recuerda conversaciones anteriores
 7. ❓ SOLO responde preguntas sobre el negocio y servicios
-8. 📅 IMPORTANTE: Si el usuario menciona un día específico (hoy, mañana, lunes, martes, etc.) o una fecha específica (14/08, 25/12, etc.), usa ese día exacto en el parámetro preferencia_fecha
+8. 📅 Si el usuario menciona un día específico (hoy, mañana, lunes, martes, 14/08, etc.), usa ese día en preferencia_fecha
 9. 🚫 NO busques horarios cuando pregunten por sus reservas actuales o códigos de cancelación
 10. 💬 Si preguntan por turnos activos/reservas, indica que pueden cancelar enviando solo el código
 11. 🚫 No inventes servicios ni menciones servicios que no estén en la lista disponible.
+12. 📝 Si piden información sobre un servicio, usa mensaje_personalizado de ese servicio si existe. Si no, usa nombre, duración y precio.
+13. 🏢 Si piden información general (quién es, sobre, contacto, dirección, horarios), responde usando la información del negocio proporcionada.
 
 🛡️ SEGURIDAD CRÍTICA:
 - ⚠️ NUNCA muestres información de reservas de otros números de teléfono
@@ -1142,7 +1204,10 @@ Si te preguntan algo no relacionado con reservas/servicios, responde:
                 "precio": getattr(s, "precio", 0),
                 "duracion": getattr(s, "duracion", 60),
                 "es_informativo": getattr(s, "es_informativo", False),
-                "mensaje_personalizado": getattr(s, "mensaje_personalizado", "")
+                "mensaje_personalizado": getattr(s, "mensaje_personalizado", ""),
+                "working_hours": getattr(s, "working_hours", None),
+                "calendar_id": getattr(s, "calendar_id", None),
+                "turnos_consecutivos": getattr(s, "turnos_consecutivos", False),
             })
         
         empleados = []
@@ -1158,7 +1223,13 @@ Si te preguntan algo no relacionado con reservas/servicios, responde:
             "servicios": servicios,
             "empleados": empleados,
             "tiene_empleados": len(empleados) > 0,
-            "calendar_id_general": getattr(tenant, "calendar_id_general", None)
+            "calendar_id_general": getattr(tenant, "calendar_id_general", None),
+            # Información adicional para respuestas ricas
+            "informacion_local": getattr(tenant, "informacion_local", None),
+            "telefono": getattr(tenant, "telefono", None),
+            "direccion": getattr(tenant, "direccion", None),
+            "comercio": getattr(tenant, "comercio", None),
+            "working_hours_general": getattr(tenant, "working_hours_general", None),
         }
 
     async def cancelar_reserva(self, codigo_reserva: str, telefono: str, db: Session):
@@ -1207,12 +1278,39 @@ Si te preguntan algo no relacionado con reservas/servicios, responde:
             print(f"❌ Error cancelando reserva: {e}")
             return self._add_help_footer(f"❌ Error al cancelar la reserva: {str(e)}")
 
-def _parse_working_hours(wh):
-    if wh is None:
-        return None
-    if isinstance(wh, str):
-        try:
-            return json.loads(wh)
-        except Exception:
+    def _extract_service_info_from_tenant_info(self, nombre_servicio: str, tenant_info: str) -> str | None:
+        """Intenta extraer un fragmento relevante sobre un servicio desde la información general del negocio.
+        Busca el nombre del servicio de forma insensible a mayúsculas/acentos y devuelve un párrafo cercano.
+        """
+        if not tenant_info or not nombre_servicio:
             return None
-    return wh
+        import unicodedata, re
+        def normalize(s: str) -> str:
+            return ''.join(c for c in unicodedata.normalize('NFD', s.lower()) if unicodedata.category(c) != 'Mn')
+        info_norm = normalize(tenant_info)
+        name_norm = normalize(nombre_servicio)
+        idx = info_norm.find(name_norm)
+        if idx == -1:
+            # probar con alias simples (e.g., tre)
+            tokens = [t.strip() for t in re.split(r"[:\-\n]", name_norm) if t.strip()]
+            for tok in tokens:
+                j = info_norm.find(tok)
+                if j != -1:
+                    idx = j
+                    break
+        if idx == -1:
+            return None
+        # Tomar ventana desde inicio de sección hasta próximo doble salto de línea o 1000 chars
+        start = max(0, info_norm.rfind('\n\n', 0, idx))
+        end = info_norm.find('\n\n', idx)
+        if end == -1:
+            end = min(len(info_norm), idx + 1200)
+        # Mapear índices normalizados a originales (aproximación: usar mismos índices sobre texto original si longitudes iguales tras normalización de acentos)
+        # Como aproximación simple, tomamos misma ventana sobre texto original por posiciones cercanas
+        # Para evitar desalineación por remoción de acentos, expandimos un poco los límites
+        start_orig = max(0, start - 50)
+        end_orig = min(len(tenant_info), end + 50)
+        snippet = tenant_info[start_orig:end_orig].strip()
+        # Limpiar encabezados redundantes
+        snippet = re.sub(r"\n{3,}", "\n\n", snippet)
+        return snippet if snippet else None
