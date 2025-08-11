@@ -278,8 +278,37 @@ class AIConversationManager:
                 return emoji
         return "✨"
     
-    def _format_business_info(self, tenant, business_context) -> str:
-        """Construye un texto informativo y nutritivo sobre el negocio usando los datos del Tenant."""
+    def _wants_more_info(self, mensaje: str) -> bool:
+        """Detecta si el usuario pide explícitamente más detalles."""
+        msg = (mensaje or "").lower()
+        triggers = [
+            "más info", "mas info", "ver más", "ver mas", "detalles",
+            "info completa", "biografia completa", "biografía completa", "ver todo", "ampliar"
+        ]
+        return any(t in msg for t in triggers)
+
+    def _first_paragraphs(self, text: str, max_paragraphs: int = 2, max_chars: int = 600) -> str:
+        """Devuelve un resumen por primeros párrafos y límite de caracteres."""
+        if not text:
+            return ""
+        paras = [p.strip() for p in text.split("\n\n") if p.strip()]
+        summary_parts = []
+        total = 0
+        for p in paras:
+            if len(summary_parts) >= max_paragraphs:
+                break
+            if total + len(p) + 2 > max_chars and summary_parts:
+                break
+            summary_parts.append(p)
+            total += len(p) + 2
+        summary = "\n\n".join(summary_parts)
+        # Si quedó vacío por formato raro, cortar por caracteres
+        if not summary:
+            summary = text[:max_chars]
+        return summary
+
+    def _format_business_info(self, tenant, business_context, full: bool = False) -> str:
+        """Construye un texto informativo; por defecto resumido, o completo si full=True."""
         nombre_publico = tenant.comercio or (f"{getattr(tenant, 'nombre', '')} {getattr(tenant, 'apellido', '')}".strip() or "Nuestro espacio")
         info_local = (business_context.get("informacion_local") or "").strip()
         telefono = business_context.get("telefono") or ""
@@ -288,9 +317,10 @@ class AIConversationManager:
         partes = []
         partes.append(f"✨ Sobre {nombre_publico}")
         if info_local:
-            # Evitar mensajes excesivamente largos en una sola entrega
-            texto = info_local
+            texto = info_local if full else self._first_paragraphs(info_local)
             partes.append(texto)
+            if not full and len(info_local) > len(texto):
+                partes.append("ℹ️ Si querés, te envío más detalles. Decime 'más info' o 'biografía completa'.")
         if telefono or direccion:
             contacto = []
             if direccion:
@@ -580,8 +610,12 @@ class AIConversationManager:
                 "dirección", "direccion", "ubicación", "ubicacion", "horarios", "sobre mi", "sobre mí",
                 "bio", "biografia", "biografía"
             ]
+            # Si el usuario pide explícitamente más detalle, enviar biografía completa
+            if self._wants_more_info(mensaje_stripped):
+                return self._add_help_footer(self._format_business_info(tenant, business_context, full=True))
             if any(k in mensaje_stripped for k in info_keywords):
-                return self._add_help_footer(self._format_business_info(tenant, business_context))
+                full = self._wants_more_info(mensaje_stripped)
+                return self._add_help_footer(self._format_business_info(tenant, business_context, full=full))
 
             # --- 🔧 DETECTAR CONFUSIÓN DEL USUARIO ---
             frases_confusion = [
