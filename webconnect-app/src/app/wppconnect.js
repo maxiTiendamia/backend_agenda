@@ -6,7 +6,7 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const sessions = {};
 const { pool } = require('./database');
-const { markUnknownAndMaybeRecover } = require('./services/UnknownRecovery'); // Importa la función de recuperación
+const { markUnknownAndMaybeRecover } = require('../services/UnknownRecovery');
 const { sendConnectionLostAlert, sendReconnectionSuccessAlert } = require('./emailAlerts');
 // Objeto para trackear fallos de reconexión por sesión
 const reconnectionFailures = {};
