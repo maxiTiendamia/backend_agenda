@@ -7,7 +7,7 @@ const fs = require('fs');
 const { pool } = require('./database');
 // Objeto para gestionar las instancias activas por sesión
 const sessions = {};
-
+const { markUnknownAndMaybeRecover } = require('./unknownRecovery');
 // Añadir al inicio del archivo
 const { sendConnectionLostAlert, sendReconnectionSuccessAlert } = require('./emailAlerts');
 
@@ -949,6 +949,26 @@ async function monitorSessions() {
         const isConnected = await client.isConnected().catch(() => false);
         const state = await client.getConnectionState().catch(() => 'UNKNOWN');
         console.log(`[WEBCONNECT] 📡 Sesión ${sessionId}: conectado=${isConnected}, estado=${state}`);
+
+        // Recuperación por UNKNOWN: si supera el umbral, recrea ignorando AUTO_CLOSE
+        const recovered = await markUnknownAndMaybeRecover(
+          sessionId,
+          { connected: isConnected, state },
+          {
+            maxUnknownCycles: parseInt(process.env.MONITOR_UNKNOWN_MAX_CYCLES || '3', 10),
+            clearSession: async (id) => {
+              try { await clearSession(id, { force: true }); } catch (_) {}
+            },
+            createSession: async (id) => {
+              await createSession(id, null, { allowQR: false });
+            },
+            logger: console,
+          }
+        );
+        if (recovered) {
+          // Ya se recreó la sesión, pasar a la siguiente
+          continue;
+        }
 
         if (isConnected && String(state).toUpperCase() === 'CONNECTED') {
           // Éxito: resetear contador de fallos y notificar recuperación si aplica
