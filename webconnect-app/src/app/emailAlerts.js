@@ -30,7 +30,7 @@ async function sendConnectionLostAlert(sessionId, reason, attempts = 0, clientIn
     try {
       const { pool } = require('./database');
       const result = await pool.query(
-        'SELECT nombre, email FROM tenants WHERE id = $1', 
+        'SELECT nombre FROM tenants WHERE id = $1', 
         [sessionId]
       );
       if (result.rows.length > 0) {

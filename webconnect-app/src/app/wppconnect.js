@@ -1145,7 +1145,7 @@ async function isSessionActive(sessionId) {
 }
 
 async function getAllSessionsStatus() {
-  const ids = Object.keys(sessions);
+  const ids = Object.keys(sessions); // <- corregido
   const out = await Promise.all(ids.map(async (id) => {
     const client = sessions[id];
     let connected = false;
