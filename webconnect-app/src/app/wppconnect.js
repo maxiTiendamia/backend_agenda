@@ -4,11 +4,10 @@ const path = require('path');
 const axios = require('axios'); // Asegúrate de instalarlo: npm install axios
 const { Pool } = require('pg');
 const fs = require('fs');
-const { pool } = require('./database');
-// Objeto para gestionar las instancias activas por sesión
 const sessions = {};
-
-// Añadir al inicio del archivo
+const { pool } = require('./database');
+// FIX: ruta correcta y case-sensitive en Linux
+const { markUnknownAndMaybeRecover } = require('../services/UnknownRecovery'); // Importa la función de recuperación
 const { sendConnectionLostAlert, sendReconnectionSuccessAlert } = require('./emailAlerts');
 
 // Objeto para trackear fallos de reconexión por sesión
@@ -1119,17 +1118,21 @@ async function isSessionActive(sessionId) {
   }
 }
 
+// Reemplazar implementación de getAllSessionsStatus para devolver un mapa por sessionId
 async function getAllSessionsStatus() {
   const ids = Object.keys(sessions);
-  const out = await Promise.all(ids.map(async (id) => {
-    const client = sessions[id];
-    let connected = false;
-    let state = 'UNKNOWN';
-    try { connected = await client.isConnected(); } catch (_) {}
-    try { state = await client.getConnectionState(); } catch (_) {}
-    return { id, connected, state };
-  }));
-  return out;
+  const statusMap = {};
+  await Promise.all(
+    ids.map(async (id) => {
+      const client = sessions[id];
+      let connected = false;
+      let state = 'UNKNOWN';
+      try { connected = await client.isConnected(); } catch (_) {}
+      try { state = await client.getConnectionState(); } catch (_) {}
+      statusMap[id] = { id, connected, state, connectionState: state };
+    })
+  );
+  return statusMap;
 }
 
 module.exports = { 
@@ -1152,7 +1155,8 @@ module.exports = {
   reconnectSession,
   restoreFromBackup, // ✅ definida
   sessions,
-  DEFAULT_QR_TTL_MS
+  DEFAULT_QR_TTL_MS,
+  markUnknownAndMaybeRecover,
 };
 
 // Evita que cualquier rechazo no manejado cierre el navegador/proceso

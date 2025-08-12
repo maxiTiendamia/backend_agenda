@@ -210,7 +210,7 @@ async function sendReconnectionSuccessAlert(sessionId, previousFailures = 0) {
 async function sendDailySummary() {
   try {
     const { getAllSessionsStatus } = require('./wppconnect');
-    const sessionStatus = await getAllSessionsStatus();
+    const sessionStatus = await getAllSessionsStatus(); // ahora es { [id]: { connected, connectionState, ... } }
     
     const total = Object.keys(sessionStatus).length;
     const connected = Object.values(sessionStatus).filter(s => s.connected).length;
@@ -228,7 +228,7 @@ async function sendDailySummary() {
     let sessionTable = '';
     for (const [sessionId, status] of Object.entries(sessionStatus)) {
       const icon = status.connected ? '✅' : '❌';
-      const state = status.connectionState || 'DESCONOCIDO';
+      const state = status.connectionState || status.state || 'DESCONOCIDO';
       sessionTable += `
         <tr>
           <td style="padding: 8px; border: 1px solid #ddd;">${icon} ${sessionId}</td>
