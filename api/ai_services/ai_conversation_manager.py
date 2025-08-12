@@ -543,15 +543,31 @@ class AIConversationManager:
     async def process_message(self, telefono: str, mensaje: str, cliente_id: int, db: Session):
         """Procesar mensaje con IA más natural y contextual"""
         try:
-            # Limpiar estado si es un saludo
+            # --- 1. OBTENER TENANT Y CONTEXTO INICIAL ---
+            tenant = db.query(Tenant).filter(Tenant.id == cliente_id).first()
+            if not tenant:
+                return self._add_help_footer("❌ No encontré información del negocio.")
+
             mensaje_stripped = mensaje.strip().lower()
             saludos = ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "hey", "holi", "holaa", "saludos"]
+
+            # --- 2. FLUJO DE BIENVENIDA PERSONALIZADA (SI ES UN SALUDO) ---
             if any(mensaje_stripped.startswith(s) for s in saludos):
-                # Limpiar selección de servicio y slots
+                # Limpiar estado previo de cualquier conversación anterior
                 self.redis_client.delete(f"servicio_seleccionado:{telefono}")
                 for key in self.redis_client.scan_iter(f"slots:{telefono}:*"):
                     self.redis_client.delete(key)
                 self.redis_client.delete(f"slot_seleccionado:{telefono}")
+
+                # Verificar si hay un mensaje de bienvenida personalizado
+                if tenant.mensaje_bienvenida_personalizado:
+                    # Guardar el mensaje del usuario y la respuesta automática en el historial
+                    # para que la IA tenga contexto de la respuesta del usuario.
+                    self._save_conversation_message(telefono, "user", mensaje)
+                    self._save_conversation_message(telefono, "assistant", tenant.mensaje_bienvenida_personalizado)
+                    
+                    # Devolver el mensaje personalizado con el pie de página de ayuda
+                    return self._add_help_footer(tenant.mensaje_bienvenida_personalizado)
 
             # Verificar si está bloqueado
             if self._is_blocked_number(telefono, cliente_id, db):
@@ -570,15 +586,13 @@ class AIConversationManager:
             if any(keyword in mensaje_stripped for keyword in ['ayuda persona', 'persona real', 'hablar con persona', 'soporte humano', 'operador', 'atencion personalizada']):
                 if self._activate_human_mode(telefono):
                     return "👥 Te conecté con nuestro equipo humano. A partir de ahora no recibirás respuestas automáticas hasta que escribas 'bot' para volver al chatbot.\n\n💡 Para restaurar el bot automático, escribe 'bot'"
-            # Obtener contexto del negocio
-            tenant = db.query(Tenant).filter(Tenant.id == cliente_id).first()
-            if not tenant:
-                return self._add_help_footer("❌ No encontré información del negocio.")
-            # Obtener historial del usuario
+            
+            # Obtener historial del usuario y contexto del negocio
             user_history = self._get_user_history(telefono, db)
             business_context = self._get_business_context(tenant, db)
             conversation_history = self._get_conversation_history(telefono)
-            # Guardar mensaje del usuario
+            
+            # Guardar mensaje del usuario (si no se guardó en el flujo de bienvenida)
             self._save_conversation_message(telefono, "user", mensaje)
 
             # --- FLUJO DE CANCELACIÓN ---

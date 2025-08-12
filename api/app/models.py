@@ -18,7 +18,9 @@ class Tenant(Base):
     informacion_local = Column(Text, nullable=True) 
     calendar_id_general = Column(String, nullable=True) 
     working_hours_general = Column(Text, nullable=True) 
-    intervalo_entre_turnos = Column(Integer, default=20) 
+    intervalo_entre_turnos = Column(Integer, default=20)
+    mensaje_bienvenida_personalizado = Column(Text, nullable=True) 
+ 
 
     servicios = relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
     empleados = relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")

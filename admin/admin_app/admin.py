@@ -168,6 +168,32 @@ class InformacionLocalWidget:
 class InformacionLocalField(Field):
     widget = InformacionLocalWidget()
 
+class TextAreaFieldWidget:
+    def __call__(self, field, **kwargs):
+        value = field.data or ""
+        html = f"""
+        <div style='margin: 1rem 0;'>
+            <label for='{field.id}' style='font-weight: bold; margin-bottom: 0.5rem; display: block;'>
+                Mensaje de Bienvenida
+            </label>
+            <small style='color: #666; display: block; margin-bottom: 0.5rem;'>
+                Este texto se mostrará cuando el cliente Inicie conversación. Puedes incluir:
+                ubicación, horarios, servicios, términos y condiciones, etc.
+            </small>
+            <textarea 
+                id='{field.id}' 
+                name='{field.name}' 
+                class='form-control' 
+                rows='10'
+                style='width: 100%; resize: vertical;'
+            >{value}</textarea>
+        </div>
+        """
+        return Markup(html)
+
+
+class TextAreaField(Field):
+    widget = TextAreaFieldWidget()
 
 class TenantModelView(SecureModelView):
     # 🔥 REMOVER inline_models que está causando problemas
@@ -178,13 +204,14 @@ class TenantModelView(SecureModelView):
     # 🔍 VERIFICAR: Si working_hours_general existe, agregarlo aquí
     form_columns = (
         'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
-        'informacion_local', 'working_hours_general', 'intervalo_entre_turnos'
+        'informacion_local', 'working_hours_general', 'intervalo_entre_turnos',"mensaje_bienvenida_personalizado"
     )
 
     # 🔥 AGREGAR form_overrides completo
     form_overrides = {
         'informacion_local': InformacionLocalField,
-        'working_hours_general': WorkingHoursField,  # 🆕 AGREGAR si existe el campo
+        'working_hours_general': WorkingHoursField,
+        'mensaje_bienvenida_personalizado': TextAreaField,  # 🆕 AGREGAR si existe el campo
     }
 
     column_formatters = {

@@ -28,7 +28,8 @@ class Tenant(db.Model):
     informacion_local = db.Column(db.Text, nullable=True)
     calendar_id_general = db.Column(db.String, nullable=True)
     working_hours_general = db.Column(db.Text, nullable=True)
-    intervalo_entre_turnos = db.Column(db.Integer, default=20) 
+    intervalo_entre_turnos = db.Column(db.Integer, default=20)
+    mensaje_bienvenida_personalizado = db.Column(db.Text, nullable=True)
 
     # 🔥 CRÍTICO: Definir relaciones explícitamente
     servicios = db.relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan", lazy='dynamic')
