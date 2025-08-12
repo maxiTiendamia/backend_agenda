@@ -1127,6 +1127,36 @@ async function restoreFromBackup(sessionId, { overwrite = false } = {}) {
   }
 }
 
+/**
+ * Helpers exportados que faltaban
+ */
+function getSession(sessionId) {
+  return sessions[String(sessionId)] || null;
+}
+
+async function isSessionActive(sessionId) {
+  const client = getSession(sessionId);
+  if (!client) return false;
+  try {
+    return await client.isConnected();
+  } catch (_) {
+    return false;
+  }
+}
+
+async function getAllSessionsStatus() {
+  const ids = Object.keys(sessions);
+  const out = await Promise.all(ids.map(async (id) => {
+    const client = sessions[id];
+    let connected = false;
+    let state = 'UNKNOWN';
+    try { connected = await client.isConnected(); } catch (_) {}
+    try { state = await client.getConnectionState(); } catch (_) {}
+    return { id, connected, state };
+  }));
+  return out;
+}
+
 module.exports = { 
   createSession, 
   clearSession,
@@ -1145,7 +1175,7 @@ module.exports = {
   setupKeepAlive,
   saveSessionBackup,
   reconnectSession,
-  restoreFromBackup, // ✅ ahora definida
+  restoreFromBackup, // ✅ definida
   sessions,
   DEFAULT_QR_TTL_MS
 };
