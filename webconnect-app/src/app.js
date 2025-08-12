@@ -2,14 +2,20 @@
 require('dotenv').config();
 const express = require('express');
 const Redis = require('ioredis');
-const { pool } = require('./app/database'); // ✅ Usar el pool existente
+const { pool } = require('./app/database');
 const app = express();
 const PORT = process.env.PORT || 3000;
+const { ensureProfileDirClean } = require('./services/sessionRecovery');
+const { markUnknownAndMaybeRecover } = require('./unknownRecovery');
 
 app.use(express.json());
 
 // Configuración de Redis usando redisClient
 const redis = require('./app/redisClient');
+
+// 🔧 VARIABLES GLOBALES PARA EVITAR REDUNDANCIAS
+let isInitialized = false;
+let cleanupInterval = null;
 
 /**
  * Función para limpiar datos obsoletos en Redis y directorios de tokens
@@ -30,7 +36,7 @@ async function limpiarDatosObsoletos() {
     console.log(`[CLEANUP] 📊 Tenants en BD: ${tenantsActivos.length} encontrados`);
     console.log(`[CLEANUP] 📋 IDs encontrados: [${tenantsActivos.join(', ')}]`);
     
-    // 3. Limpiar Redis (código existente)
+    // 3. Limpiar Redis
     const redisKeys = await redis.keys('*');
     console.log(`[CLEANUP] 🔍 Claves en Redis: ${redisKeys.length} encontradas`);
     
@@ -93,13 +99,10 @@ async function limpiarDatosObsoletos() {
       }
     }
     
-    // 4. NUEVO: Limpiar directorios de tokens obsoletos
-  const fs = require('fs');
-  const path = require('path');
-  // Unificar ruta con wppconnect.js -> tokens está en webconnect-app/tokens
-  const tokensDir = path.join(__dirname, '../tokens');
-    
-    // 🔧 INICIALIZAR VARIABLE AQUÍ
+    // 4. Limpiar directorios de tokens obsoletos
+    const fs = require('fs');
+    const path = require('path');
+    const tokensDir = path.join(__dirname, '../tokens');
     let directoriosObsoletos = [];
     
     if (fs.existsSync(tokensDir)) {
@@ -109,7 +112,6 @@ async function limpiarDatosObsoletos() {
 
       console.log(`[CLEANUP] 📁 Directorios de sesión encontrados: [${sessionDirs.join(', ')}]`);
       
-      // 🔧 ASIGNAR VALOR AQUÍ
       directoriosObsoletos = sessionDirs.filter(sessionId => !tenantsActivos.includes(sessionId));
       
       if (directoriosObsoletos.length > 0) {
@@ -164,10 +166,16 @@ async function limpiarDatosObsoletos() {
  * Función para ejecutar limpieza periódica
  */
 function programarLimpiezaPeriodica() {
+  // 🔧 EVITAR DUPLICAR INTERVALOS
+  if (cleanupInterval) {
+    console.log('[CLEANUP] ⚠️ Limpieza periódica ya está programada');
+    return;
+  }
+  
   // Ejecutar limpieza cada 6 horas (6 * 60 * 60 * 1000 ms)
   const intervalo = 6 * 60 * 60 * 1000;
   
-  setInterval(async () => {
+  cleanupInterval = setInterval(async () => {
     try {
       console.log('[CLEANUP] ⏰ Ejecutando limpieza periódica programada...');
       await limpiarDatosObsoletos();
@@ -230,7 +238,22 @@ app.get('/redis-stats', async (req, res) => {
   }
 });
 
-const { createSession, testAPIConnection, initializeExistingSessions, monitorearSesiones, limpiarSesionesHuerfanas } = require('./app/wppconnect');
+const { 
+  createSession, 
+  testAPIConnection, 
+  initializeExistingSessions, 
+  monitorearSesiones, 
+  limpiarSesionesHuerfanas,
+  restoreFromBackup,
+  clearSession,
+  reconnectSession,
+  sendConnectionLostAlert,
+  sendReconnectionSuccessAlert
+} = require('./app/wppconnect');
+
+// 🔧 VARIABLES PARA MONITOREO
+const reconnectionFailures = {};
+const QR_REQUIRED_STATES = new Set(['QR_CODE', 'QR_CODE_SUCCESS', 'QR_RECEIVED', 'UNPAIRED']);
 
 /**
  * Función para verificar integridad de directorios de sesión
@@ -238,7 +261,6 @@ const { createSession, testAPIConnection, initializeExistingSessions, monitorear
 async function verificarIntegridadSesiones() {
   const fs = require('fs');
   const path = require('path');
-  // Unificar ruta con wppconnect.js -> tokens está en webconnect-app/tokens
   const tokensDir = path.join(__dirname, '../tokens');
   
   console.log('[INIT] 🔍 Verificando integridad de sesiones...');
@@ -266,14 +288,11 @@ async function verificarIntegridadSesiones() {
     
     console.log(`[INIT] 🔍 Verificando sesión ${sessionId}...`);
     
-    // Verificar si el directorio contiene archivos de sesión
     let tieneArchivosImportantes = false;
     
     try {
       const archivos = fs.readdirSync(sessionDir);
       console.log(`[INIT] 📂 Archivos en session_${sessionId}: [${archivos.join(', ')}]`);
-      
-      // 🔧 CRITERIOS MÁS FLEXIBLES para detectar sesiones válidas
       
       // 1. Verificar si Default es un directorio con contenido
       const defaultDir = path.join(sessionDir, 'Default');
@@ -304,9 +323,8 @@ async function verificarIntegridadSesiones() {
         console.log(`[INIT] ✅ Sesión ${sessionId} tiene archivos importantes: [${archivosImportantes.join(', ')}]`);
       }
       
-      // 3. 🔧 CRITERIO MÁS PERMISIVO: Si el directorio tiene contenido, conservarlo
+      // 3. Criterio permisivo: Si el directorio tiene contenido
       if (!tieneArchivosImportantes && archivos.length > 0) {
-        // Verificar que no sea solo archivos temporales
         const archivosNoTemporales = archivos.filter(archivo => 
           !archivo.startsWith('.') && 
           !archivo.includes('temp') && 
@@ -317,11 +335,10 @@ async function verificarIntegridadSesiones() {
         if (archivosNoTemporales.length > 0) {
           tieneArchivosImportantes = true;
           console.log(`[INIT] ⚠️ Sesión ${sessionId} tiene ${archivosNoTemporales.length} archivos no temporales - Considerando como válida`);
-          console.log(`[INIT] 📋 Archivos no temporales: [${archivosNoTemporales.join(', ')}]`);
         }
       }
       
-      // 4. 🔧 ÚLTIMO RECURSO: Si es reciente (menos de 1 hora), conservar
+      // 4. Último recurso: Si es reciente (menos de 1 hora), conservar
       if (!tieneArchivosImportantes) {
         const sessionStats = fs.statSync(sessionDir);
         const horaActual = new Date();
@@ -343,19 +360,12 @@ async function verificarIntegridadSesiones() {
       console.log(`[INIT] ✅ Sesión ${sessionId} marcada como válida`);
     } else {
       sesionesCorruptas.push(sessionId);
-      console.log(`[INIT] ⚠️ Sesión ${sessionId} considerada vacía/corrupta - PERO NO ELIMINANDO automáticamente`);
+      console.log(`[INIT] ⚠️ Sesión ${sessionId} considerada vacía/corrupta`);
       console.log(`[INIT] 💡 Para eliminar manualmente: rm -rf tokens/session_${sessionId}`);
-      // 🔧 NO ELIMINAR AUTOMÁTICAMENTE - Solo reportar
-      // try {
-      //   fs.rmSync(sessionDir, { recursive: true, force: true });
-      //   console.log(`[INIT] ✅ Directorio session_${sessionId} eliminado`);
-      // } catch (error) {
-      //   console.error(`[INIT] ❌ Error eliminando sesión ${sessionId}:`, error.message);
-      // }
     }
   }
   
-  console.log(`[INIT] 📊 Resumen: ${sesionesValidas.length} válidas [${sesionesValidas.join(', ')}], ${sesionesCorruptas.length} eliminadas [${sesionesCorruptas.join(', ')}]`);
+  console.log(`[INIT] 📊 Resumen: ${sesionesValidas.length} válidas [${sesionesValidas.join(', ')}], ${sesionesCorruptas.length} reportadas como problemáticas [${sesionesCorruptas.join(', ')}]`);
   return sesionesValidas;
 }
 
@@ -374,7 +384,6 @@ async function obtenerTenantsConSesionesValidas() {
     // Verificar integridad de sesiones en disco
     const sesionesValidas = await verificarIntegridadSesiones();
     
-    // 🔧 NUEVO: Intentar restaurar desde backup si no hay sesiones válidas pero hay tenants activos
     const tenantsConSesionValida = tenantsActivos.filter(tenantId => 
       sesionesValidas.includes(tenantId)
     );
@@ -388,11 +397,9 @@ async function obtenerTenantsConSesionesValidas() {
     console.log(`[INIT] 🔗 Tenants con sesión válida: [${tenantsConSesionValida.join(', ')}]`);
     console.log(`[INIT] ⚠️ Tenants sin sesión: [${tenantsSinSesion.join(', ')}]`);
     
-    // 🔧 INTENTAR RESTAURAR DESDE BACKUP para tenants sin sesión
+    // Intentar restaurar desde backup para tenants sin sesión
     if (tenantsSinSesion.length > 0) {
       console.log(`[INIT] 🔄 Intentando restaurar ${tenantsSinSesion.length} sesiones desde backup...`);
-      
-      const { restoreFromBackup } = require('./app/wppconnect');
       
       for (const tenantId of tenantsSinSesion) {
         try {
@@ -425,9 +432,103 @@ async function obtenerTenantsConSesionesValidas() {
   }
 }
 
+/**
+ * 🔧 NUEVA FUNCIÓN: Monitoreo mejorado con recuperación de UNKNOWN
+ */
+async function monitorearSesionConRecuperacion(sessionId, client) {
+  try {
+    const isConnected = await client.isConnected();
+    const state = await client.getConnectionState().catch(() => 'UNKNOWN');
+    
+    console.log(`[MONITOR] 📱 Sesión ${sessionId}: connected=${isConnected}, state=${state}`);
+    
+    // 🆕 Aplicar recuperación por UNKNOWN antes que cualquier otra lógica
+    const recovered = await markUnknownAndMaybeRecover(
+      sessionId,
+      { connected: isConnected, state },
+      {
+        maxUnknownCycles: parseInt(process.env.MONITOR_UNKNOWN_MAX_CYCLES || '3', 10),
+        clearSession: async (id) => {
+          try { 
+            await clearSession(id, { force: true }); 
+          } catch (_) {
+            console.log(`[MONITOR] ⚠️ Error en clearSession para ${id}`);
+          }
+        },
+        createSession: async (id) => {
+          await createSession(id, null, { allowQR: false });
+        },
+        logger: console,
+      }
+    );
+    
+    // Si se recuperó exitosamente, no hacer nada más
+    if (recovered) {
+      console.log(`[MONITOR] ✅ Sesión ${sessionId} recuperada exitosamente de estado UNKNOWN`);
+      // Reset del contador de fallos
+      reconnectionFailures[sessionId] = { count: 0, lost: false };
+      return;
+    }
+    
+    // Lógica normal de monitoreo si NO se recuperó
+    if (isConnected && String(state).toUpperCase() === 'CONNECTED') {
+      // Sesión funcionando correctamente
+      if (reconnectionFailures[sessionId]?.lost && typeof sendReconnectionSuccessAlert === 'function') {
+        try { 
+          await sendReconnectionSuccessAlert(sessionId); 
+        } catch(_) {
+          console.log(`[MONITOR] ⚠️ Error enviando alerta de reconexión para ${sessionId}`);
+        }
+      }
+      reconnectionFailures[sessionId] = { count: 0, lost: false };
+      console.log(`[MONITOR] ✅ Sesión ${sessionId} está funcionando correctamente`);
+      
+      // Verificación adicional
+      try {
+        await client.getConnectionState();
+        console.log(`[MONITOR] 💚 Sesión ${sessionId} responde correctamente`);
+      } catch (_) {
+        console.log(`[MONITOR] ⚠️ Sesión ${sessionId} no responde a getConnectionState`);
+      }
+    } else {
+      // Sesión con problemas
+      const entry = reconnectionFailures[sessionId] || { count: 0, lost: false };
+      entry.count += 1;
+      
+      if (!entry.lost && typeof sendConnectionLostAlert === 'function') {
+        try { 
+          await sendConnectionLostAlert(sessionId); 
+        } catch(_) {
+          console.log(`[MONITOR] ⚠️ Error enviando alerta de pérdida para ${sessionId}`);
+        }
+        entry.lost = true;
+      }
+      reconnectionFailures[sessionId] = entry;
+
+      if (QR_REQUIRED_STATES.has(String(state).toUpperCase())) {
+        console.log(`[MONITOR] ⛔ ${sessionId} requiere QR. No se cierra ni reinicia el navegador.`);
+      } else {
+        console.log(`[MONITOR] 🔄 Intentando reconectar sesión ${sessionId}... (intento ${entry.count})`);
+        await reconnectSession(sessionId, 'monitor');
+      }
+    }
+    
+  } catch (error) {
+    console.error(`[MONITOR] ❌ Error monitoreando sesión ${sessionId}:`, error.message);
+  }
+}
+
 // Función de inicialización MEJORADA
 async function inicializar() {
+  // 🔧 EVITAR MÚLTIPLES INICIALIZACIONES
+  if (isInitialized) {
+    console.log('[INIT] ⚠️ La aplicación ya está inicializada');
+    return;
+  }
+  
   try {
+    console.log('[INIT] 🚀 Iniciando aplicación WebConnect...');
+    
     // 1. Probar conexión con PostgreSQL
     console.log('[INIT] 🔌 Probando conexión con PostgreSQL...');
     const client = await pool.connect();
@@ -443,39 +544,46 @@ async function inicializar() {
     console.log('[INIT] 🧹 Ejecutando limpieza inicial...');
     await limpiarDatosObsoletos();
     
-    // 4. 🔧 NUEVO: Obtener solo tenants con sesiones válidas
+    // 4. Obtener solo tenants con sesiones válidas
     console.log('[INIT] 🔍 Verificando tenants con sesiones válidas...');
     const tenantsConSesionValida = await obtenerTenantsConSesionesValidas();
     
     if (tenantsConSesionValida.length > 0) {
-      // 5. Restaurar SOLO sesiones válidas
+      // Limpiar SingletonLock si quedó colgado
+      for (const tenantId of tenantsConSesionValida) {
+        ensureProfileDirClean(tenantId, console);
+      }
+
       console.log('[INIT] 📱 Restaurando sesiones válidas...');
       await initializeExistingSessions(tenantsConSesionValida);
     } else {
       console.log('[INIT] ℹ️ No hay sesiones válidas para restaurar');
     }
     
-    // 6. ✨ Limpiar sesiones huérfanas después de la inicialización
+    // 5. Limpiar sesiones huérfanas después de la inicialización
     console.log('[INIT] 🗑️ Limpiando sesiones huérfanas...');
     await limpiarSesionesHuerfanas();
     
-    // 7. Programar limpieza periódica
+    // 6. Programar limpieza periódica
     programarLimpiezaPeriodica();
     
-    // 8. ✨ Iniciar monitoreo de sesiones
+    // 7. Iniciar monitoreo de sesiones
     console.log('[INIT] 🔍 Iniciando monitoreo de sesiones...');
     monitorearSesiones();
     
+    // 🔧 MARCAR COMO INICIALIZADA
+    isInitialized = true;
     console.log('[INIT] ✅ Aplicación inicializada correctamente');
     
   } catch (error) {
     console.error('[INIT] ❌ Error durante la inicialización:', error);
+    isInitialized = false;
   }
 }
 
 // Iniciar servidor
 app.listen(PORT, async () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`[SERVER] 🚀 Server is running on port ${PORT}`);
   
   // Ejecutar inicialización después de que el servidor esté corriendo
   await inicializar();
@@ -483,19 +591,48 @@ app.listen(PORT, async () => {
 
 // Manejo de cierre graceful
 process.on('SIGTERM', async () => {
-  console.log('[CLEANUP] 🛑 Cerrando aplicación...');
-  await redis.disconnect();
-  await pool.end();
+  console.log('[CLEANUP] 🛑 Cerrando aplicación gracefulmente...');
+  
+  // Limpiar interval si existe
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+  }
+  
+  try {
+    await redis.disconnect();
+    await pool.end();
+  } catch (error) {
+    console.error('[CLEANUP] ❌ Error durante cierre:', error);
+  }
+  
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
-  console.log('[CLEANUP] 🛑 Cerrando aplicación...');
-  await redis.disconnect();
-  await pool.end();
+  console.log('[CLEANUP] 🛑 Cerrando aplicación gracefulmente...');
+  
+  // Limpiar interval si existe
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+  }
+  
+  try {
+    await redis.disconnect();
+    await pool.end();
+  } catch (error) {
+    console.error('[CLEANUP] ❌ Error durante cierre:', error);
+  }
+  
   process.exit(0);
 });
 
 process.on('unhandledRejection', (reason) => {
   console.error('[WEBCONNECT] ⚠️ Unhandled Rejection capturada:', reason && reason.message ? reason.message : reason);
 });
+
+// 🔧 EXPORTAR FUNCIONES PARA USO EXTERNO SI ES NECESARIO
+module.exports = {
+  limpiarDatosObsoletos,
+  obtenerTenantsConSesionesValidas,
+  monitorearSesionConRecuperacion
+};
