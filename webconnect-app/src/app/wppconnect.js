@@ -338,45 +338,45 @@ async function createSession(sessionId, onQR, opts = {}) {
       await procesarMensaje(sessionId, message, client);
     });
 
-    client.onStateChange((state) => {
+    client.onStateChange(async (state) => {
       console.log(`[WEBCONNECT] 🔄 Estado de conexión sesión ${sessionId}:`, state);
-      
-      if (state === 'CONNECTED') {
+      const upperState = String(state).toUpperCase();
+
+      if (upperState === 'CONNECTED') {
         console.log(`[WEBCONNECT] 🚀 Cliente ${sessionId} listo para enviar/recibir mensajes`);
         console.log(`[WEBCONNECT] 🌐 Conectado a API: ${API_URL}`);
-      } else if (state === 'DISCONNECTED') {
-        console.log(`[WEBCONNECT] 🔴 Cliente ${sessionId} desconectado - Verificando reconexión...`);
+        // Al conectar, reseteamos fallos y activamos keep-alive
+        reconnectionFailures[sessionId] = { count: 0, lost: false };
+        await setupKeepAlive(sessionId);
+
+      } else if (['DISCONNECTED', 'BROWSERCLOSE', 'DESCONNECTEDMOBILE'].includes(upperState)) {
+        console.log(`[WEBCONNECT] 🔴 Cliente ${sessionId} desconectado (estado: ${state}) - Programando verificación de reconexión...`);
         
+        // Esperar un momento para ver si se recupera solo, luego intentar reconectar
         setTimeout(async () => {
           try {
-            const current = sessions[sessionId];
-            if (!current) return;
+            const currentClient = sessions[sessionId];
+            if (!currentClient) {
+              console.log(`[WEBCONNECT] ℹ️ Sesión ${sessionId} ya no existe, se omite reconexión.`);
+              return;
+            }
 
-            // ⏫ Doble check: validar estado real antes de reconectar
-            const [isConn, currState] = await Promise.all([
-              current.isConnected().catch(() => false),
-              current.getConnectionState().catch(() => state)
-            ]);
-
-            if (!isConn && String(currState).toUpperCase().includes('DISCONNECTED')) {
-              console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} sigue desconectada (estado=${currState}), iniciando reconexión...`);
-              try {
-                const clienteExiste = await verificarClienteExisteEnBD(sessionId);
-                if (clienteExiste) {
-                  await reconnectSession(sessionId);
-                } else {
-                  await eliminarSesionInexistente(sessionId);
-                }
-              } catch (reconnectError) {
-                console.error(`[WEBCONNECT] ❌ Error en reconexión por desconexión para sesión ${sessionId}:`, reconnectError.message);
+            const isConn = await currentClient.isConnected().catch(() => false);
+            if (!isConn) {
+              console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} sigue desconectada. Iniciando reconexión desde onStateChange...`);
+              const clienteExiste = await verificarClienteExisteEnBD(sessionId);
+              if (clienteExiste) {
+                await reconnectSession(sessionId, `state_${state}`);
+              } else {
+                await eliminarSesionInexistente(sessionId);
               }
             } else {
-              console.log(`[WEBCONNECT] ℹ️ Sesión ${sessionId} ya no está desconectada (estado=${currState}), se omite reconexión`);
+              console.log(`[WEBCONNECT] ℹ️ Sesión ${sessionId} se recuperó sola. No se necesita reconexión.`);
             }
-          } catch (e) {
-            console.warn(`[WEBCONNECT] ⚠️ Verificación post-desconexión falló (${sessionId}): ${e.message}`);
+          } catch (reconnectError) {
+            console.error(`[WEBCONNECT] ❌ Error en reconexión por ${state} para sesión ${sessionId}:`, reconnectError.message);
           }
-        }, 120000); // 2 minutos
+        }, 30000); // 30 segundos de espera
       }
     });
 
@@ -644,39 +644,42 @@ async function reconnectSession(sessionId, reason = 'monitor') {
     if (typeof client.restartService === 'function') {
       await client.restartService();
       console.log(`[WEBCONNECT] ✅ restartService ejecutado para ${sessionId}`);
-      return { ok: true, restarted: true };
+      // Verificar si realmente conectó
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const isConn = await client.isConnected().catch(() => false);
+      if (isConn) {
+        console.log(`[WEBCONNECT] ✅ Reconexión con restartService exitosa para ${sessionId}`);
+        return { ok: true, restarted: true };
+      }
+      console.warn(`[WEBCONNECT] ⚠️ restartService no logró reconectar la sesión ${sessionId}, se intentará recreación.`);
     }
   } catch (e) {
-    console.warn(`[WEBCONNECT] ⚠️ restartService falló para ${sessionId}: ${e.message}`);
+    console.warn(`[WEBCONNECT] ⚠️ restartService falló para ${sessionId}: ${e.message}. Se intentará recreación.`);
   }
 
-  // ⏫ Doble check previo al fallback
-  try {
-    const [isConn2, state2] = await Promise.all([
-      client.isConnected().catch(() => false),
-      client.getConnectionState().catch(() => 'UNKNOWN')
-    ]);
-    if (isConn2 || String(state2).toUpperCase() === 'CONNECTED') {
-      console.log(`[WEBCONNECT] ℹ️ Sesión ${sessionId} ya conectada tras revalidación (estado=${state2})`);
-      return { ok: true, skipped: true, reason: 'ALREADY_CONNECTED' };
-    }
-  } catch (_) {}
-
-  // Fallback: recrear sesión SOLO si está permitido cerrar automáticamente
-  if (!ALLOW_AUTO_CLOSE) {
-    console.log(`[WEBCONNECT] 🔒 AUTO_CLOSE deshabilitado. Omitiendo cierre/recreación para ${sessionId}`);
-    return { ok: false, skipped: true, reason: 'AUTO_CLOSE_DISABLED' };
-  }
-
+  // Fallback: recrear la sesión completa. Esto es más agresivo pero efectivo si el navegador murió.
+  // Ya que ALLOW_AUTO_CLOSE es false, esta lógica se activa en fallos críticos.
+  console.log(`[WEBCONNECT] Fallback: Recreando sesión completa para ${sessionId}`);
   try {
     console.log(`[WEBCONNECT] 🧹 Limpiando sesión anterior para ${sessionId}`);
-    await safeCloseClient(sessionId);
-    console.log(`[WEBCONNECT] 🚀 Creando nueva sesión ${sessionId}`);
-    await createSession(sessionId, undefined, { allowQR: false });
-    console.log(`[WEBCONNECT] ✅ Reconexión completada para ${sessionId}`);
+    // Usamos safeCloseClient que respeta ALLOW_AUTO_CLOSE, pero aquí necesitamos cerrar.
+    // Por eso, primero cerramos y luego creamos.
+    if (client && typeof client.close === 'function') {
+        try {
+            await client.close();
+            console.log(`[WEBCONNECT] 🔐 Cliente ${sessionId} cerrado forzosamente para recreación.`);
+        } catch (closeErr) {
+            console.warn(`[WEBCONNECT] ⚠️ Error al forzar cierre de ${sessionId}: ${closeErr.message}`);
+        }
+    }
+    delete sessions[String(sessionId)]; // Eliminar de la memoria
+
+    console.log(`[WEBCONNECT] 🚀 Creando nueva instancia de sesión ${sessionId}`);
+    await createSession(sessionId, undefined, { allowQR: false }); // Recrear sin generar QR
+    console.log(`[WEBCONNECT] ✅ Reconexión por recreación completada para ${sessionId}`);
     return { ok: true, recreated: true };
   } catch (e) {
-    console.error(`[WEBCONNECT] ❌ Error al reconectar ${sessionId}: ${e.message}`);
+    console.error(`[WEBCONNECT] ❌ Error crítico al recrear la sesión ${sessionId}: ${e.message}`);
     return { ok: false, error: e.message };
   }
 }
@@ -871,41 +874,47 @@ async function reconnectSession(sessionId, reason = 'monitor') {
 
   console.log(`[WEBCONNECT] 🔄 Reconexión segura para ${sessionId} (estado=${state}, motivo=${reason})...`);
 
+  // Intento “soft” sin cerrar el browser
   try {
     if (typeof client.restartService === 'function') {
       await client.restartService();
       console.log(`[WEBCONNECT] ✅ restartService ejecutado para ${sessionId}`);
-      return { ok: true, restarted: true };
+      // Verificar si realmente conectó
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const isConn = await client.isConnected().catch(() => false);
+      if (isConn) {
+        console.log(`[WEBCONNECT] ✅ Reconexión con restartService exitosa para ${sessionId}`);
+        return { ok: true, restarted: true };
+      }
+      console.warn(`[WEBCONNECT] ⚠️ restartService no logró reconectar la sesión ${sessionId}, se intentará recreación.`);
     }
   } catch (e) {
-    console.warn(`[WEBCONNECT] ⚠️ restartService falló para ${sessionId}: ${e.message}`);
+    console.warn(`[WEBCONNECT] ⚠️ restartService falló para ${sessionId}: ${e.message}. Se intentará recreación.`);
   }
 
-  try {
-    const [isConn2, state2] = await Promise.all([
-      client.isConnected().catch(() => false),
-      client.getConnectionState().catch(() => 'UNKNOWN')
-    ]);
-    if (isConn2 || String(state2).toUpperCase() === 'CONNECTED') {
-      console.log(`[WEBCONNECT] ℹ️ Sesión ${sessionId} ya conectada tras revalidación (estado=${state2})`);
-      return { ok: true, skipped: true, reason: 'ALREADY_CONNECTED' };
-    }
-  } catch (_) {}
-
-  if (!ALLOW_AUTO_CLOSE) {
-    console.log(`[WEBCONNECT] 🔒 AUTO_CLOSE deshabilitado. Omitiendo cierre/recreación para ${sessionId}`);
-    return { ok: false, skipped: true, reason: 'AUTO_CLOSE_DISABLED' };
-  }
-
+  // Fallback: recrear la sesión completa. Esto es más agresivo pero efectivo si el navegador murió.
+  // Ya que ALLOW_AUTO_CLOSE es false, esta lógica se activa en fallos críticos.
+  console.log(`[WEBCONNECT] Fallback: Recreando sesión completa para ${sessionId}`);
   try {
     console.log(`[WEBCONNECT] 🧹 Limpiando sesión anterior para ${sessionId}`);
-    await safeCloseClient(sessionId);
-    console.log(`[WEBCONNECT] 🚀 Creando nueva sesión ${sessionId}`);
-    await createSession(sessionId, undefined, { allowQR: false });
-    console.log(`[WEBCONNECT] ✅ Reconexión completada para ${sessionId}`);
+    // Usamos safeCloseClient que respeta ALLOW_AUTO_CLOSE, pero aquí necesitamos cerrar.
+    // Por eso, primero cerramos y luego creamos.
+    if (client && typeof client.close === 'function') {
+        try {
+            await client.close();
+            console.log(`[WEBCONNECT] 🔐 Cliente ${sessionId} cerrado forzosamente para recreación.`);
+        } catch (closeErr) {
+            console.warn(`[WEBCONNECT] ⚠️ Error al forzar cierre de ${sessionId}: ${closeErr.message}`);
+        }
+    }
+    delete sessions[String(sessionId)]; // Eliminar de la memoria
+
+    console.log(`[WEBCONNECT] 🚀 Creando nueva instancia de sesión ${sessionId}`);
+    await createSession(sessionId, undefined, { allowQR: false }); // Recrear sin generar QR
+    console.log(`[WEBCONNECT] ✅ Reconexión por recreación completada para ${sessionId}`);
     return { ok: true, recreated: true };
   } catch (e) {
-    console.error(`[WEBCONNECT] ❌ Error al reconectar ${sessionId}: ${e.message}`);
+    console.error(`[WEBCONNECT] ❌ Error crítico al recrear la sesión ${sessionId}: ${e.message}`);
     return { ok: false, error: e.message };
   }
 }
