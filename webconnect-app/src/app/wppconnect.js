@@ -7,7 +7,7 @@ const fs = require('fs');
 const { pool } = require('./database');
 // Objeto para gestionar las instancias activas por sesión
 const sessions = {};
-const { markUnknownAndMaybeRecover } = require('../unknownRecovery');
+const { markUnknownAndMaybeRecover } = require('./services/unknownRecovery');
 // Añadir al inicio del archivo
 const { sendConnectionLostAlert, sendReconnectionSuccessAlert } = require('./emailAlerts');
 
