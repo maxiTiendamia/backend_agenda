@@ -5,7 +5,11 @@ const axios = require('axios'); // Asegúrate de instalarlo: npm install axios
 const { Pool } = require('pg');
 const fs = require('fs');
 const sessions = {};
+const { pool } = require('./database');
 const { markUnknownAndMaybeRecover } = require('.unknownRecovery'); // Importa la función de recuperación
+const { sendConnectionLostAlert, sendReconnectionSuccessAlert } = require('./emailAlerts');
+// Objeto para trackear fallos de reconexión por sesión
+const reconnectionFailures = {};
 
 // URL de tu API FastAPI en Render
 const API_URL = process.env.API_URL || 'https://backend-agenda-2.onrender.com';
