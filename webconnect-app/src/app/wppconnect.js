@@ -105,15 +105,11 @@ async function eliminarSesionInexistente(sessionId) {
   try {
     console.log(`[WEBCONNECT] 🗑️ Cliente ${sessionId} no existe en BD - Eliminando sesión completa...`);
     
-    // 1. Cerrar y eliminar de memoria
+    // 1. Cerrar y eliminar de memoria (respetando ALLOW_AUTO_CLOSE)
     if (sessions[sessionId]) {
       try {
-        if (typeof sessions[sessionId].close === 'function') {
-          await sessions[sessionId].close();
-          console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
-        } else {
-          console.warn(`[WEBCONNECT] ⚠️ No se puede cerrar sesión ${sessionId}: método close no disponible`);
-        }
+        await safeCloseClient(sessionId);
+        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada (respetando AUTO_CLOSE)`);
       } catch (e) {
         console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, e.message);
       }
@@ -951,11 +947,84 @@ async function ejecutarMonitoreo() {
   }
 }
 
+// 🔥 NUEVA FUNCIÓN: ciclo de monitoreo (lo que antes faltaba)
+async function monitorSessions() {
+  try {
+    const sessionIds = Object.keys(sessions);
+    console.log(`[WEBCONNECT] 📊 Monitoreando ${sessionIds.length} sesiones: [${sessionIds.join(', ')}]`);
+    if (sessionIds.length === 0) {
+      console.log('[WEBCONNECT] ℹ️ No hay sesiones para monitorear');
+      return;
+    }
+
+    for (const sessionId of sessionIds) {
+      try {
+        // Validar que el cliente exista en BD
+        const existe = await verificarClienteExisteEnBD(sessionId);
+        if (!existe) {
+          console.log(`[WEBCONNECT] 🚫 Cliente ${sessionId} NO existe en BD - limpiando sesión`);
+          await eliminarSesionInexistente(sessionId);
+          continue;
+        }
+
+        const client = sessions[sessionId];
+        if (!client) continue;
+
+        console.log(`[WEBCONNECT] 🔍 Cliente ${sessionId} EXISTE en BD`);
+        const isConnected = await client.isConnected().catch(() => false);
+        const state = await client.getConnectionState().catch(() => 'UNKNOWN');
+        console.log(`[WEBCONNECT] 📡 Sesión ${sessionId}: conectado=${isConnected}, estado=${state}`);
+
+        if (isConnected && String(state).toUpperCase() === 'CONNECTED') {
+          // Éxito: resetear contador de fallos y notificar recuperación si aplica
+          if (reconnectionFailures[sessionId]?.lost && typeof sendReconnectionSuccessAlert === 'function') {
+            try { await sendReconnectionSuccessAlert(sessionId); } catch(_) {}
+          }
+          reconnectionFailures[sessionId] = { count: 0, lost: false };
+          console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} está funcionando correctamente`);
+          try {
+            await client.getConnectionState();
+            console.log(`[WEBCONNECT] 💚 Sesión ${sessionId} responde correctamente`);
+          } catch (_) {}
+        } else {
+          // Desconectado: contar fallos, alertar una sola vez, reconectar sin cerrar navegador
+          const entry = reconnectionFailures[sessionId] || { count: 0, lost: false };
+          entry.count += 1;
+          if (!entry.lost && typeof sendConnectionLostAlert === 'function') {
+            try { await sendConnectionLostAlert(sessionId); } catch(_) {}
+            entry.lost = true;
+          }
+          reconnectionFailures[sessionId] = entry;
+
+          // Evitar acciones si requiere QR
+          if (QR_REQUIRED_STATES.has(String(state).toUpperCase())) {
+            console.log(`[WEBCONNECT] ⛔ ${sessionId} requiere QR. No se cierra ni reinicia el navegador.`);
+          } else {
+            console.log(`[WEBCONNECT] 🔄 Intentando reconectar sesión ${sessionId}...`);
+            await reconnectSession(sessionId, 'monitor');
+          }
+        }
+      } catch (perSessionErr) {
+        console.error(`[WEBCONNECT] ❌ Error monitoreando sesión ${sessionId}:`, perSessionErr.message);
+      }
+
+      // Pequeño delay entre sesiones
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    console.log(`[WEBCONNECT] ✅ Monitoreo completado para ${sessionIds.length} sesiones`);
+  } catch (err) {
+    console.error('[WEBCONNECT] ❌ Error general en monitorSessions:', err?.message || err);
+  }
+}
+
 /**
  * Limpia la sesión específica y la elimina del pool de sesiones.
  * @param {string|number} sessionId
+ * @param {{ force?: boolean }} opts - force:true permite cerrar aunque AUTO_CLOSE esté deshabilitado
  */
-async function clearSession(sessionId) {
+async function clearSession(sessionId, opts = {}) {
+  const { force = false } = opts;
   const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
   
   try {
@@ -969,42 +1038,27 @@ async function clearSession(sessionId) {
       console.log(`[WEBCONNECT] 🛑 Keep-alive intervals limpiados para ${sessionId}`);
     }
     
-    // Cerrar cliente si existe
+    // Cerrar cliente si existe (respetando AUTO_CLOSE a menos que force=true)
     if (sessions[sessionId]) {
-      try {
-        if (typeof sessions[sessionId].close === 'function') {
-          await sessions[sessionId].close();
-          console.log(`[WEBCONNECT] ✅ Cliente ${sessionId} cerrado`);
-        } else {
-          console.warn(`[WEBCONNECT] ⚠️ No se puede cerrar cliente ${sessionId}: método close no disponible`);
-        }
-      } catch (closeError) {
-        console.error(`[WEBCONNECT] Error cerrando cliente ${sessionId}:`, closeError);
+      if (ALLOW_AUTO_CLOSE || force) {
+        await safeCloseClient(sessionId);
+      } else {
+        console.log(`[WEBCONNECT] 🔒 AUTO_CLOSE deshabilitado. No se cierra cliente ${sessionId} (use force:true para forzar).`);
       }
     }
 
     // Eliminar del pool en memoria
     delete sessions[sessionId];
 
-    // Limpiar archivos de sesión
+    // Limpiar archivos de locks conocidos
     try {
       const candidates = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
       const defaultDir = path.join(sessionDir, 'Default');
       for (const f of candidates) {
         const p1 = path.join(sessionDir, f);
         const p2 = path.join(defaultDir, f);
-        try {
-          if (fs.existsSync(p1)) {
-            fs.rmSync(p1, { force: true });
-            console.log(`[WEBCONNECT] 🗑️ ${f} eliminado para sesión ${sessionId}`);
-          }
-        } catch (_) {}
-        try {
-          if (fs.existsSync(p2)) {
-            fs.rmSync(p2, { force: true });
-            console.log(`[WEBCONNECT] 🗑️ ${f} eliminado en Default para sesión ${sessionId}`);
-          }
-        } catch (_) {}
+        try { if (fs.existsSync(p1)) fs.rmSync(p1, { force: true }); } catch (_) {}
+        try { if (fs.existsSync(p2)) fs.rmSync(p2, { force: true }); } catch (_) {}
       }
     } catch (err) {
       console.error(`[WEBCONNECT] Error eliminando locks:`, err);
@@ -1019,100 +1073,71 @@ async function clearSession(sessionId) {
 }
 
 /**
- * Obtiene una sesión existente del pool de sesiones
- * @param {string|number} sessionId - ID de la sesión
- * @returns {object|null} - Cliente de wppconnect o null si no existe
+ * 🔄 NUEVA FUNCIÓN: Restaurar sesión desde backup (evita ReferenceError)
  */
-function getSession(sessionId) {
+async function restoreFromBackup(sessionId, { overwrite = false } = {}) {
   try {
-    const client = sessions[sessionId];
-    if (client) {
-      console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} encontrada en memoria`);
-      return client;
-    } else {
-      console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} no encontrada en memoria`);
-      return null;
-    }
-  } catch (error) {
-    console.error(`[WEBCONNECT] ❌ Error obteniendo sesión ${sessionId}:`, error);
-    return null;
-  }
-}
+    const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
+    const backupDir = path.join(sessionDir, 'backup');
 
-/**
- * Verifica si una sesión está activa y conectada
- * @param {string|number} sessionId - ID de la sesión
- * @returns {Promise<boolean>} - true si está conectada, false si no
- */
-async function isSessionActive(sessionId) {
-  try {
-    const client = getSession(sessionId);
-    if (!client) {
+    if (!fs.existsSync(backupDir)) {
+      console.log(`[WEBCONNECT] ⚠️ No hay backup para sesión ${sessionId}`);
       return false;
     }
-    
-    const isConnected = await client.isConnected();
-    console.log(`[WEBCONNECT] 📡 Sesión ${sessionId} conectada: ${isConnected}`);
-    return isConnected;
-  } catch (error) {
-    console.error(`[WEBCONNECT] ❌ Error verificando estado de sesión ${sessionId}:`, error);
+
+    // Crear carpeta destino si no existe
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
+    const items = ['Default', 'session.json'];
+    let restored = 0;
+
+    for (const it of items) {
+      const src = path.join(backupDir, it);
+      const dst = path.join(sessionDir, it);
+
+      if (!fs.existsSync(src)) continue;
+      if (!overwrite && fs.existsSync(dst)) {
+        console.log(`[WEBCONNECT] ⏩ Saltando ${it} (existe y overwrite=false)`);
+        continue;
+      }
+
+      try {
+        if (fs.statSync(src).isDirectory()) {
+          fs.cpSync(src, dst, { recursive: true, force: true });
+        } else {
+          // Asegurar dir padre
+          const parent = path.dirname(dst);
+          if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+          fs.copyFileSync(src, dst);
+        }
+        restored++;
+        console.log(`[WEBCONNECT] ♻️ Restaurado ${it} para sesión ${sessionId}`);
+      } catch (e) {
+        console.warn(`[WEBCONNECT] ⚠️ No se pudo restaurar ${it}: ${e.message}`);
+      }
+    }
+
+    console.log(`[WEBCONNECT] ✅ RestoreFromBackup completado (${restored} item(s)) para sesión ${sessionId}`);
+    return restored > 0;
+  } catch (err) {
+    console.error(`[WEBCONNECT] ❌ Error en restoreFromBackup(${sessionId}):`, err.message);
     return false;
   }
-}
-
-/**
- * Obtiene el estado de todas las sesiones activas
- * @returns {object} - Objeto con el estado de todas las sesiones
- */
-async function getAllSessionsStatus() {
-  const status = {};
-  const sessionIds = Object.keys(sessions);
-  
-  console.log(`[WEBCONNECT] 📊 Obteniendo estado de ${sessionIds.length} sesiones`);
-  
-  for (const sessionId of sessionIds) {
-    try {
-      const isActive = await isSessionActive(sessionId);
-      const client = sessions[sessionId];
-      
-      status[sessionId] = {
-        active: isActive,
-        hasClient: !!client,
-        connected: isActive
-      };
-      
-      if (client && isActive) {
-        try {
-          const connectionState = await client.getConnectionState();
-          status[sessionId].connectionState = connectionState;
-        } catch (stateError) {
-          status[sessionId].connectionState = 'ERROR';
-        }
-      }
-    } catch (error) {
-      status[sessionId] = {
-        active: false,
-        hasClient: false,
-        connected: false,
-        error: error.message
-      };
-    }
-  }
-  
-  return status;
 }
 
 module.exports = { 
   createSession, 
   clearSession,
-  getSession,  // ✅ Ahora está implementada
-  isSessionActive, // ✅ Nueva función auxiliar
-  getAllSessionsStatus, // ✅ Nueva función para debug
+  getSession,
+  isSessionActive,
+  getAllSessionsStatus,
   sendMessage, 
   testAPIConnection,
   initializeExistingSessions,
   monitorearSesiones,
-  ejecutarMonitoreo, // ✅ Nueva función auxiliar
+  ejecutarMonitoreo,
   verificarNumeroBloqueado,
   verificarClienteExisteEnBD,
   eliminarSesionInexistente,
@@ -1120,7 +1145,7 @@ module.exports = {
   setupKeepAlive,
   saveSessionBackup,
   reconnectSession,
-  restoreFromBackup,
+  restoreFromBackup, // ✅ ahora definida
   sessions,
   DEFAULT_QR_TTL_MS
 };
