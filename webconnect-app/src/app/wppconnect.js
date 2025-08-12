@@ -238,12 +238,40 @@ async function verificarNumeroBloqueado(telefono, clienteId) {
  * reemplazando la función createSession existente
  */
 
-async function createSession(sessionId, onQR, options = {}) {
+async function createSession(sessionId, onQR, opts = {}) {
   const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
-  const allowQR = options.allowQR !== false; // por defecto true solo en manual
-  const maxQrAttempts = Number.isFinite(options.maxQrAttempts) ? options.maxQrAttempts : (allowQR ? 1 : 0);
-  const qrTtlMs = Number.isFinite(options.qrTtlMs) ? options.qrTtlMs : DEFAULT_QR_TTL_MS;
-  
+  const allowQR = opts.allowQR !== false;
+  const wppOpts = {
+    // Mantener navegador vivo siempre
+    autoClose: 0,
+    waitForLogin: false,
+    logQR: false,
+    headless: true,
+    disableSpins: true,
+    browserArgs: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+
+    // Reemplaza el antiguo catchQR que lanzaba excepción
+    catchQR: async (base64Qr, asciiQR, attempts) => {
+      try {
+        if (!allowQR) {
+          console.log(`[WEBCONNECT] 🚫 QR bloqueado (auto) para sesión ${sessionId}. No se cerrará el navegador ni se lanzará excepción. Intento ${attempts}`);
+          // Importante: NO lanzar error aquí
+          return;
+        }
+        if (typeof onQR === 'function') {
+          await onQR(base64Qr);
+        }
+      } catch (err) {
+        console.error(`[WEBCONNECT] Error en catchQR (${sessionId}):`, err.message);
+      }
+    },
+
+    statusFind: (status) => {
+      console.log(`[WEBCONNECT] Estado WA-JS sesión ${sessionId}: ${status}`);
+      // Nunca cerrar en UNPAIRED/NOT_LOGGED
+    }
+  };
+
   try {
     // ✅ Pre-chequeo: verificar que el cliente exista en BD antes de crear la sesión
     const existeCliente = await verificarClienteExisteEnBD(sessionId);
@@ -278,261 +306,27 @@ async function createSession(sessionId, onQR, options = {}) {
       console.warn(`[WEBCONNECT] ⚠️ Error en preflight de locks para ${sessionId}: ${preErr.message}`);
     }
     
-    const client = await wppconnect.create({
-      session: `session_${sessionId}`,
-      folderNameToken: sessionDir,
-      mkdirFolderToken: true,
-      headless: true,
-      devtools: false,
-      useChrome: false,
-      
-      // 🔥 CONFIGURACIÓN OPTIMIZADA CRÍTICA
-      autoClose: 0, // ¡CRÍTICO! Evita que se cierre automáticamente
-      logQR: false,
-      
-  puppeteerOptions: {
-        userDataDir: sessionDir,
-        timeout: 120000, // 2 minutos para inicialización
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--single-process',
-          '--disable-gpu',
-          '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
-          '--memory-pressure-off',
-          '--max-old-space-size=512',
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding',
-          '--disable-background-networking',
-          '--aggressive-cache-discard',
-          '--disable-ipc-flooding-protection',
-          `--user-data-dir=${sessionDir}`
-        ]
-      },
-      
-catchQR: async (qrCode, asciiQR, attempts, urlCode) => {
-  if (!allowQR) {
-    console.log(`🚫 QR bloqueado para sesión ${sessionId} (modo automático). Abortando creación.`);
-    throw new Error('QR bloqueado en modo automático');
-  }
+    const client = await wppconnect.create({ session: String(sessionId), ...wppOpts });
 
-  // En modo manual: solo 1 intento
-  if (attempts > maxQrAttempts) {
-    console.log(`[WEBCONNECT] ❌ Límite de intentos de QR alcanzado para ${sessionId} (max=${maxQrAttempts}). No se reintenta.`);
-    return;
-  }
-
-  // Evitar duplicados si ya se guardó un QR
-  if (sessions[sessionId] && sessions[sessionId]._qrSaved) {
-    console.log(`[WEBCONNECT] ℹ️ QR ya generado/guardado para ${sessionId}. Ignorando intento ${attempts}.`);
-    return;
-  }
-
-  console.log(`[WEBCONNECT] 📱 QR generado para sesión ${sessionId}, intento ${attempts}/${maxQrAttempts}`);
-  
-  // Enviar a callback (rutas manuales guardan en BD)
-  if (onQR) {
-    await onQR(qrCode);
-  }
-  // Marcar y programar expiración
-  if (!sessions[sessionId]) sessions[sessionId] = {};
-  sessions[sessionId]._qrSaved = true;
-  scheduleQrExpiry(sessionId, qrTtlMs);
-},
-
-  statusFind: async (statusSession, session) => {
-        console.log(`[WEBCONNECT] 🔄 Estado de sesión ${sessionId}: ${statusSession}`);
-        
-        // 🔥 NUEVA VERIFICACIÓN: Si la sesión fue marcada como fallida, no continuar
-        if (sessions[sessionId] && sessions[sessionId]._qrFailed) {
-          console.log(`[WEBCONNECT] ⚠️ Sesión ${sessionId} marcada como fallida por QR - Ignorando statusFind`);
-          return;
+    // Listeners que antes podían cerrar el browser: ahora solo registran
+    try {
+      client.onStateChange((state) => {
+        console.log(`[WEBCONNECT] onStateChange ${sessionId}: ${state}`);
+        const S = String(state).toUpperCase();
+        if (S.includes('UNPAIRED') || S.includes('NOT_LOGGED')) {
+          console.warn(`[WEBCONNECT] ⚠️ Sesión ${sessionId} sin login. Manteniendo navegador abierto.`);
         }
-        
-        if (statusSession === 'qrReadSuccess') {
-          console.log(`[WEBCONNECT] ✅ QR escaneado exitosamente para sesión ${sessionId}`);
-          cancelQrExpiry(sessionId, { clearDb: true });
-          
-          // 🔧 MARCAR SESIÓN COMO CONECTADA EXITOSAMENTE
-          if (sessions[sessionId]) {
-            delete sessions[sessionId]._qrFailed;
-            sessions[sessionId]._qrConnected = true; // Flag para indicar QR exitoso
-            sessions[sessionId]._qrFailCount = 0; // Reset contador de fallos
-          }
-          
-          // 🔥 GUARDAR BACKUP INMEDIATAMENTE
-          setTimeout(async () => {
-            await saveSessionBackup(sessionId);
-          }, 5000);
-          
-        } else if (statusSession === 'isLogged') {
-          console.log(`[WEBCONNECT] 📱 Sesión ${sessionId} ya está logueada - Restaurando...`);
-          cancelQrExpiry(sessionId, { clearDb: true });
-          
-          // 🔧 MARCAR COMO CONECTADA
-          if (sessions[sessionId]) {
-            sessions[sessionId]._qrConnected = true;
-          }
-          
-        } else if (statusSession === 'connectSuccess') {
-          console.log(`[WEBCONNECT] 🚀 Cliente ${sessionId} conectado y listo`);
-          cancelQrExpiry(sessionId, { clearDb: true });
-          
-          // 🔧 MARCAR COMO COMPLETAMENTE CONECTADA
-          if (sessions[sessionId]) {
-            delete sessions[sessionId]._qrFailed;
-            sessions[sessionId]._qrConnected = true;
-            sessions[sessionId]._fullyConnected = true; // Flag para conexión completa
-          }
-          
-          // ✨ INICIAR KEEP-ALIVE INMEDIATAMENTE
-          await setupKeepAlive(sessionId);
-          
-        } else if (statusSession === 'browserClose') {
-          console.log(`[WEBCONNECT] 🔴 Browser cerrado para sesión ${sessionId}`);
-          // Limpiar posibles locks del perfil para próximos intentos
-          try {
-            const { limpiarSingletonLock } = require('./sessionUtils');
-            await limpiarSingletonLock(sessionId);
-          } catch (_) {}
-          
-          // 🔥 RECONEXIÓN INTELIGENTE solo si no falló por QR
-          if (!sessions[sessionId] || !sessions[sessionId]._qrFailed) {
-            setTimeout(async () => {
-              try {
-                const clienteExiste = await verificarClienteExisteEnBD(sessionId);
-                if (clienteExiste) {
-                  console.log(`[WEBCONNECT] 🔄 Iniciando reconexión automática para sesión ${sessionId}...`);
-                  await reconnectSession(sessionId);
-                } else {
-                  console.log(`[WEBCONNECT] ❌ Cliente ${sessionId} ya no existe - Eliminando sesión`);
-                  await eliminarSesionInexistente(sessionId);
-                }
-              } catch (error) {
-                console.error(`[WEBCONNECT] Error en reconexión automática para ${sessionId}:`, error.message);
-              }
-            }, 3000);
-          } else {
-            console.log(`[WEBCONNECT] 🚫 No reconectando sesión ${sessionId} - Falló por exceso de intentos QR`);
-          }
-          
-        } else if (statusSession === 'qrReadError') {
-          console.log(`[WEBCONNECT] ❌ Error de lectura de QR para sesión ${sessionId}`);
-          if (sessions[sessionId]) {
-            sessions[sessionId]._qrFailCount = (sessions[sessionId]._qrFailCount || 0) + 1;
-            if (sessions[sessionId]._qrFailCount >= 2) {
-              sessions[sessionId]._qrFailed = true;
-            }
-          }
-          try {
-            const { limpiarSingletonLock } = require('./sessionUtils');
-            await limpiarSingletonLock(sessionId);
-          } catch (_) {}
-          
-        } else if (statusSession === 'autocloseCalled') {
-          console.log(`[WEBCONNECT] 🔄 autocloseCalled para sesión ${sessionId} - limpiando locks`);
-          try {
-            const { limpiarSingletonLock } = require('./sessionUtils');
-            await limpiarSingletonLock(sessionId);
-          } catch (_) {}
-          
-        } else if (statusSession === 'notLogged') {
-          console.log(`[WEBCONNECT] 🔒 Sesión ${sessionId} no está logueada`);
-          
-          // Si no se permite QR, cerrar y no insistir
-          if (!allowQR) {
-            // Fallback opcional: lanzar intento de QR automático si está habilitado por ENV
-            if (AUTO_QR_ON_NOT_LOGGED && !(sessions[sessionId] && sessions[sessionId]._autoQrFallbackTriggered)) {
-              console.log(`[WEBCONNECT] ⚠️ AUTO_QR_ON_NOT_LOGGED activo. Iniciando fallback de QR para sesión ${sessionId}...`);
-              if (!sessions[sessionId]) sessions[sessionId] = {};
-              sessions[sessionId]._autoQrFallbackTriggered = true;
-              // Cerrar cliente actual y reabrir con allowQR=true y 1 intento
-              try {
-                if (sessions[sessionId] && typeof sessions[sessionId].close === 'function') {
-                  await sessions[sessionId].close();
-                }
-              } catch (_) {}
-              delete sessions[sessionId];
-              setTimeout(async () => {
-                try {
-                  await createSession(sessionId, null, { allowQR: true, maxQrAttempts: AUTO_QR_MAX_ATTEMPTS });
-                } catch (e) {
-                  console.error(`[WEBCONNECT] ❌ Error en fallback de QR para ${sessionId}:`, e.message);
-                }
-              }, 1000);
-              return;
-            } else {
-              try {
-                if (sessions[sessionId] && typeof sessions[sessionId].close === 'function') {
-                  await sessions[sessionId].close();
-                }
-              } catch (_) {}
-              delete sessions[sessionId];
-              console.log(`[WEBCONNECT] 🚫 QR deshabilitado (auto). Sesión ${sessionId} no iniciada. Pasando a la siguiente.`);
-              return; // no intentar restauración ni QR
-            }
-          }
+      });
 
-          // Intento automático único de restaurar desde backup si existe
-          try {
-            if (sessions[sessionId] && !sessions[sessionId]._attemptedRestoreOnNotLogged) {
-              sessions[sessionId]._attemptedRestoreOnNotLogged = true;
-              console.log(`[WEBCONNECT] ♻️ Intentando restaurar desde backup para ${sessionId} (notLogged)`);
-              const restored = await restoreFromBackup(sessionId);
-              if (restored) {
-                console.log(`[WEBCONNECT] 🔁 Backup restaurado. Reiniciando sesión ${sessionId} sin QR...`);
-                setTimeout(async () => {
-                  try {
-                    await reconnectSession(sessionId);
-                  } catch (reErr) {
-                    console.error(`[WEBCONNECT] Error reiniciando ${sessionId} tras notLogged:`, reErr.message);
-                  }
-                }, 1000);
-              } else {
-                console.log(`[WEBCONNECT] ℹ️ No hay backup utilizable para ${sessionId}. Se mantendrá el flujo de QR manual`);
-              }
-            }
-          } catch (e) {
-            console.log(`[WEBCONNECT] ⚠️ Error en intento de restauración automática notLogged: ${e.message}`);
-          }
-          
-        } else if (statusSession === 'qrReadFail') {
-          console.log(`[WEBCONNECT] ❌ Fallo al leer QR para sesión ${sessionId}`);
-          
-          // 🔥 NUEVA LÓGICA: Incrementar contador de fallos
-          if (!sessions[sessionId]) return;
-          
-          if (!sessions[sessionId]._qrFailCount) {
-            sessions[sessionId]._qrFailCount = 0;
-          }
-          sessions[sessionId]._qrFailCount++;
-          
-          console.log(`[WEBCONNECT] 📊 Fallos QR para sesión ${sessionId}: ${sessions[sessionId]._qrFailCount}`);
-          
-          // Si hay muchos fallos consecutivos, cerrar sesión
-          if (sessions[sessionId]._qrFailCount >= 3) {
-            console.log(`[WEBCONNECT] ❌ Demasiados fallos QR para sesión ${sessionId} - Cerrando sesión`);
-            sessions[sessionId]._qrFailed = true;
-            
-            try {
-              if (typeof sessions[sessionId].close === 'function') {
-                await sessions[sessionId].close();
-              }
-              delete sessions[sessionId];
-              console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada por fallos QR consecutivos`);
-            } catch (closeError) {
-              console.error(`[WEBCONNECT] Error cerrando sesión por fallos QR:`, closeError.message);
-            }
-          }
-        }
+      // Si puppeteer se desconecta, registrarlo (no auto-cerrar)
+      if (client?.pupPage?.browser) {
+        client.pupPage.browser().on('disconnected', () => {
+          console.warn(`[WEBCONNECT] ⚠️ browserClose/disconnected en sesión ${sessionId}. No se forzará cierre aquí.`);
+        });
       }
-    });
+    } catch (hookErr) {
+      console.warn('[WEBCONNECT] Listeners opcionales no disponibles:', hookErr.message);
+    }
 
     // Guardar la instancia en sessions
     sessions[sessionId] = client;
@@ -1529,3 +1323,8 @@ module.exports = {
   sessions,
   DEFAULT_QR_TTL_MS
 };
+
+// Evita que cualquier rechazo no manejado cierre el navegador/proceso
+process.on('unhandledRejection', (reason) => {
+  console.warn('[WEBCONNECT] ⚠️ Unhandled Rejection capturada (suprimida):', reason?.message || reason);
+});

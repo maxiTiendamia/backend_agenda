@@ -230,6 +230,13 @@ router.post('/restore-sessions', async (req, res) => {
 
         // Intentar reconectar sesión SIN generar QR automáticamente
         try {
+          // Antes de createSession(..., { allowQR: false })
+          const folder = getSessionFolder(sessionId);
+          const hasTokens = fs.existsSync(folder) && fs.readdirSync(folder).length > 0;
+          if (!hasTokens) {
+            console.log(`[RESTORE] ℹ️ Sesión ${sessionId} sin tokens válidos y QR bloqueado. No se abre navegador.`);
+            continue; // o responde indicando que requiere /restart-qr/:id
+          }
           await createSession(sessionId, undefined, { allowQR: false });
           restauradas++;
           console.log(`[RESTORE] ✅ Sesión ${sessionId} restaurada sin QR`);
