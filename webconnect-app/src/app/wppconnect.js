@@ -238,18 +238,16 @@ async function verificarNumeroBloqueado(telefono, clienteId) {
  */
 
 async function createSession(sessionId, onQR, opts = {}) {
-  const sessionDir = path.join(__dirname, '../../tokens', `session_${sessionId}`);
+  const sessionName = `session_${sessionId}`;
+  const sessionDir = path.join(__dirname, '../../tokens', sessionName);
   const allowQR = opts.allowQR !== false;
   const wppOpts = {
-    // Mantener navegador vivo siempre
     autoClose: 0,
     waitForLogin: false,
     logQR: false,
     headless: true,
     disableSpins: true,
     browserArgs: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-
-    // Reemplaza el antiguo catchQR que lanzaba excepción
     catchQR: async (base64Qr, asciiQR, attempts) => {
       try {
         if (!allowQR) {
@@ -305,7 +303,14 @@ async function createSession(sessionId, onQR, opts = {}) {
       console.warn(`[WEBCONNECT] ⚠️ Error en preflight de locks para ${sessionId}: ${preErr.message}`);
     }
     
-    const client = await wppconnect.create({ session: String(sessionId), ...wppOpts });
+    // ⬅️ Asegurar misma carpeta de tokens que el resto del sistema
+    const client = await wppconnect.create({
+      session: sessionName,           // ahora 'session_82'
+      folderNameToken: 'tokens',
+      ...wppOpts
+    });
+
+    sessions[String(sessionId)] = client;
 
     // Listeners que antes podían cerrar el browser: ahora solo registran
     try {
@@ -447,7 +452,22 @@ async function initializeExistingSessions(specificTenants = null) {
   const fs = require('fs');
   const { Pool } = require('pg');
   const tokensDir = path.join(__dirname, '../../tokens');
-  
+
+  // ♻️ Migración de carpetas antiguas (p.ej., '82' -> 'session_82')
+  try {
+    const entries = fs.readdirSync(tokensDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.isDirectory() && /^\d+$/.test(e.name)) {
+        const oldPath = path.join(tokensDir, e.name);
+        const newPath = path.join(tokensDir, `session_${e.name}`);
+        if (!fs.existsSync(newPath)) {
+          fs.renameSync(oldPath, newPath);
+          console.log(`[WEBCONNECT] ♻️ Migrado tokens/${e.name} -> tokens/session_${e.name}`);
+        }
+      }
+    }
+  } catch (_) {}
+
   try {
     console.log('[WEBCONNECT] 🚀 Iniciando restauración de sesiones...');
     
@@ -742,58 +762,13 @@ async function limpiarSesionesHuerfanas() {
 
 // 🔥 NUEVA FUNCIÓN: Keep-Alive avanzado para mantener sesiones vivas
 async function setupKeepAlive(sessionId) {
-  const client = sessions[sessionId];
+  const client = sessions[String(sessionId)];
   if (!client) return;
-  
-  console.log(`[WEBCONNECT] 💓 Configurando keep-alive para sesión ${sessionId}`);
-  
-  // Ping cada 45 segundos (menos frecuente para no sobrecargar)
+
   const keepAliveInterval = setInterval(async () => {
-    try {
-      // Verificar si la sesión aún existe en memoria
-      if (!sessions[sessionId]) {
-        console.log(`[WEBCONNECT] 🛑 Keep-alive detenido para sesión ${sessionId} (no existe en memoria)`);
-        clearInterval(keepAliveInterval);
-        return;
-      }
-      
-      const isConnected = await client.isConnected();
-      
-      if (!isConnected) {
-        console.log(`[WEBCONNECT] ⚠️ Keep-alive detectó desconexión en sesión ${sessionId}`);
-        clearInterval(keepAliveInterval);
-        
-        // Validar cliente en BD antes de reconectar
-        const clienteExiste = await verificarClienteExisteEnBD(sessionId);
-        if (clienteExiste) {
-          console.log(`[WEBCONNECT] 🔄 Keep-alive iniciando reconexión para ${sessionId}`);
-          await reconnectSession(sessionId);
-        } else {
-          console.log(`[WEBCONNECT] ❌ Keep-alive: Cliente ${sessionId} no existe en BD`);
-          await eliminarSesionInexistente(sessionId);
-        }
-      } else {
-        // Operación ligera para mantener conexión activa
-        try {
-          await client.getConnectionState();
-          console.log(`[WEBCONNECT] 💓 Keep-alive OK para sesión ${sessionId}`);
-        } catch (pingError) {
-          console.log(`[WEBCONNECT] ⚠️ Keep-alive ping falló para ${sessionId}:`, pingError.message);
-        }
-      }
-      
-    } catch (error) {
-      console.error(`[WEBCONNECT] ❌ Error en keep-alive para ${sessionId}:`, error.message);
-      
-      // Si hay error persistente, reiniciar keep-alive
-      clearInterval(keepAliveInterval);
-      setTimeout(() => {
-        setupKeepAlive(sessionId);
-      }, 60000); // Reiniciar en 1 minuto
-    }
+    try { await client.getConnectionState(); } catch (_) {}
   }, 90000); // 90 segundos
   
-  // Guardar referencia del interval para limpieza posterior
   if (!client._keepAliveIntervals) client._keepAliveIntervals = [];
   client._keepAliveIntervals.push(keepAliveInterval);
   
@@ -1145,7 +1120,7 @@ async function isSessionActive(sessionId) {
 }
 
 async function getAllSessionsStatus() {
-  const ids = Object.keys(sessions); // <- corregido
+  const ids = Object.keys(sessions);
   const out = await Promise.all(ids.map(async (id) => {
     const client = sessions[id];
     let connected = false;

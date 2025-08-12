@@ -1213,7 +1213,7 @@ Si te preguntan algo no relacionado, responde:
 {self._format_servicios_with_real_ids(business_context['servicios'])}
 6. 🧠 Recuerda conversaciones anteriores
 7. ❓ SOLO responde preguntas sobre el negocio y servicios
-8. 📅 Si el usuario menciona un día específico (hoy, mañana, lunes, martes, 14/08, etc.), usa ese día en preferencia_fecha
+8. 📅 Si el usuario menciona un día específico (hoy, mañana, lunes, martes, miércoles, jueves, viernes, sábado, domingo, fecha específica (DD/MM)), usa ese día en preferencia_fecha
 9. 🚫 NO busques horarios cuando pregunten por sus reservas actuales o códigos de cancelación
 10. 💬 Si preguntan por turnos activos/reservas, indica que pueden cancelar enviando solo el código
 11. 🚫 No inventes servicios ni menciones servicios que no estén en la lista disponible.
