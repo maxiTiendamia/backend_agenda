@@ -6,10 +6,8 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const sessions = {};
 const { pool } = require('./database');
-// FIX: ruta correcta y case-sensitive en Linux
-const { markUnknownAndMaybeRecover } = require('../services/UnknownRecovery'); // Importa la función de recuperación
+const { markUnknownAndMaybeRecover } = require('./services/UnknownRecovery'); // Importa la función de recuperación
 const { sendConnectionLostAlert, sendReconnectionSuccessAlert } = require('./emailAlerts');
-
 // Objeto para trackear fallos de reconexión por sesión
 const reconnectionFailures = {};
 
@@ -948,6 +946,26 @@ async function monitorSessions() {
         const isConnected = await client.isConnected().catch(() => false);
         const state = await client.getConnectionState().catch(() => 'UNKNOWN');
         console.log(`[WEBCONNECT] 📡 Sesión ${sessionId}: conectado=${isConnected}, estado=${state}`);
+
+        // Recuperación por UNKNOWN: si supera el umbral, recrea ignorando AUTO_CLOSE
+        const recovered = await markUnknownAndMaybeRecover(
+          sessionId,
+          { connected: isConnected, state },
+          {
+            maxUnknownCycles: parseInt(process.env.MONITOR_UNKNOWN_MAX_CYCLES || '3', 10),
+            clearSession: async (id) => {
+              try { await clearSession(id, { force: true }); } catch (_) {}
+            },
+            createSession: async (id) => {
+              await createSession(id, null, { allowQR: false });
+            },
+            logger: console,
+          }
+        );
+        if (recovered) {
+          // Ya se recreó la sesión, pasar a la siguiente
+          continue;
+        }
 
         if (isConnected && String(state).toUpperCase() === 'CONNECTED') {
           // Éxito: resetear contador de fallos y notificar recuperación si aplica

@@ -1,10 +1,10 @@
 // Archivo principal de arranque para WebConnect
 require('dotenv').config();
 const express = require('express');
-const Redis = require('ioredis');
 const { pool } = require('./app/database'); // ✅ Usar el pool existente
 const app = express();
 const PORT = process.env.PORT || 3000;
+const { ensureProfileDirClean } = require('./services/sessionRecovery');
 
 app.use(express.json());
 
@@ -94,10 +94,10 @@ async function limpiarDatosObsoletos() {
     }
     
     // 4. NUEVO: Limpiar directorios de tokens obsoletos
-  const fs = require('fs');
-  const path = require('path');
-  // Unificar ruta con wppconnect.js -> tokens está en webconnect-app/tokens
-  const tokensDir = path.join(__dirname, '../tokens');
+    const fs = require('fs');
+    const path = require('path');
+    // Unificar ruta con wppconnect.js -> tokens está en webconnect-app/tokens
+    const tokensDir = path.join(__dirname, '../tokens');
     
     // 🔧 INICIALIZAR VARIABLE AQUÍ
     let directoriosObsoletos = [];
@@ -448,7 +448,11 @@ async function inicializar() {
     const tenantsConSesionValida = await obtenerTenantsConSesionesValidas();
     
     if (tenantsConSesionValida.length > 0) {
-      // 5. Restaurar SOLO sesiones válidas
+      // NUEVO: limpiar SingletonLock si quedó colgado en alguno de los perfiles
+      for (const tenantId of tenantsConSesionValida) {
+        ensureProfileDirClean(tenantId, console);
+      }
+
       console.log('[INIT] 📱 Restaurando sesiones válidas...');
       await initializeExistingSessions(tenantsConSesionValida);
     } else {
@@ -476,7 +480,6 @@ async function inicializar() {
 // Iniciar servidor
 app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
-  
   // Ejecutar inicialización después de que el servidor esté corriendo
   await inicializar();
 });
