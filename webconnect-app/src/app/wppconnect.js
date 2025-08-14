@@ -527,8 +527,9 @@ async function initializeExistingSessions(specificTenants = null) {
         // Verificar que existe el directorio de la sesión
         const sessionDir = path.join(tokensDir, `session_${tenantId}`);
         if (!fs.existsSync(sessionDir)) {
-          console.log(`[WEBCONNECT] ❌ No existe directorio para sesión ${tenantId} - Omitiendo`);
-          continue;
+          console.log(`[WEBCONNECT] ⚠️ No se encontró directorio para sesión ${tenantId}. Puede haberse limpiado solo locks previamente. Intentando continuar sin recrear.`);
+          // No abortamos; se permitirá que createSession maneje la situación y genere QR si corresponde (bloqueado por allowQR)
+          // Si no hay tokens, createSession no conectará, pero evitamos conclusiones erróneas.
         }
         
         // 🔧 VALIDAR INTEGRIDAD DEL DIRECTORIO DE SESIÓN

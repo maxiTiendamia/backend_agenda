@@ -448,7 +448,7 @@ async function inicializar() {
     const tenantsConSesionValida = await obtenerTenantsConSesionesValidas();
     
     if (tenantsConSesionValida.length > 0) {
-      // NUEVO: limpiar SingletonLock si quedó colgado en alguno de los perfiles
+  // NUEVO: limpiar locks si quedaron colgados en alguno de los perfiles (no borra el perfil)
       for (const tenantId of tenantsConSesionValida) {
         ensureProfileDirClean(tenantId, console);
       }

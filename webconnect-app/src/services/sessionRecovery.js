@@ -7,32 +7,42 @@ function getProfileDir(sessionId) {
 }
 
 /**
- * Si hay un SingletonLock (u otros locks) en el perfil, elimina todo el directorio
- * para permitir que Chromium/Puppeteer se inicie limpio.
+ * Limpia archivos de lock del perfil sin borrar el directorio completo.
+ * Evita pérdidas de sesión por falsos positivos.
  */
 function ensureProfileDirClean(sessionId, logger = console) {
   const dir = getProfileDir(sessionId);
   if (!fs.existsSync(dir)) return;
 
-  const candidates = [
-    path.join(dir, 'SingletonLock'),
-    path.join(dir, 'SingletonSocket'),
-    path.join(dir, 'SingletonCookie'),
-    path.join(dir, 'Default', 'SingletonLock'),
-    path.join(dir, 'Default', 'SingletonSocket'),
-    path.join(dir, 'Default', 'SingletonCookie'),
-  ];
-
-  const hasAnyLock = candidates.some((p) => {
-    try { return fs.existsSync(p); } catch (_) { return false; }
-  });
-
-  if (hasAnyLock) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-      logger.info?.(`[INIT] 🗑️ Removido perfil con locks para tenant ${sessionId} (${dir})`);
-    } catch (e) {
-      logger.error?.(`[INIT] ❌ Error removiendo perfil ${dir}: ${e.message}`);
+  try {
+    // Preferir utilidades centralizadas
+    const { limpiarSingletonLock } = require('../app/sessionUtils');
+    limpiarSingletonLock(sessionId)
+      .then(() => logger.info?.(`[INIT] 🧹 Locks limpiados para tenant ${sessionId} (${dir})`))
+      .catch((e) => logger.warn?.(`[INIT] ⚠️ Error limpiando locks para ${sessionId}: ${e.message}`));
+  } catch (_) {
+    // Fallback: eliminar archivos de lock conocidos sin borrar el perfil
+    const candidates = [
+      path.join(dir, 'SingletonLock'),
+      path.join(dir, 'SingletonSocket'),
+      path.join(dir, 'SingletonCookie'),
+      path.join(dir, 'Default', 'SingletonLock'),
+      path.join(dir, 'Default', 'SingletonSocket'),
+      path.join(dir, 'Default', 'SingletonCookie'),
+    ];
+    let removed = 0;
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) {
+          fs.rmSync(p, { force: true });
+          removed++;
+        }
+      } catch (e) {
+        logger.warn?.(`[INIT] ⚠️ No se pudo eliminar ${p}: ${e.message}`);
+      }
+    }
+    if (removed > 0) {
+      logger.info?.(`[INIT] 🧹 Eliminados ${removed} lock(s) para tenant ${sessionId} (${dir})`);
     }
   }
 }
