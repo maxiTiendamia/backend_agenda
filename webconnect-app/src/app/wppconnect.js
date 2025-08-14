@@ -186,9 +186,21 @@ async function procesarMensaje(sessionId, mensaje, client) {
 
     // Verificar si hay respuesta de la API
     if (response.data && response.data.mensaje && response.data.mensaje.trim() !== '') {
-      // Enviar la respuesta de vuelta al cliente
-      await client.sendText(from, response.data.mensaje);
-      console.log(`[WEBCONNECT] ✅ Respuesta enviada a ${telefono}: ${response.data.mensaje}`);
+      // Enviar la respuesta de vuelta al cliente (genérico). Si contiene URL, intentar preview.
+      const text = String(response.data.mensaje).trim();
+      const urlMatch = text.match(/https?:\/\/\S+/i);
+      if (urlMatch) {
+        try {
+          await client.sendLinkPreview(from, urlMatch[0], text);
+          console.log(`[WEBCONNECT] ✅ Respuesta (con preview) enviada a ${telefono}: ${text}`);
+        } catch (e) {
+          await client.sendText(from, text);
+          console.log(`[WEBCONNECT] ✅ Respuesta enviada (fallback sin preview) a ${telefono}: ${text}`);
+        }
+      } else {
+        await client.sendText(from, text);
+        console.log(`[WEBCONNECT] ✅ Respuesta enviada a ${telefono}: ${text}`);
+      }
     } else {
       console.log(`[WEBCONNECT] ⚠️ Sin respuesta para enviar a ${telefono}`);
     }
