@@ -22,187 +22,170 @@ class AIConversationManager:
         from api.utils import calendar_utils
         name = function_call["name"]
         args = function_call["args"]
+
         if name == "buscar_horarios_servicio":
             # Buscar horarios disponibles usando calendar_utils
             servicio_id = args["servicio_id"]
             preferencia_fecha = args.get("preferencia_fecha", "cualquiera")
-            
+
             servicio = db.query(Servicio).filter(Servicio.id == servicio_id).first()
-            if not servicio:
+            if not servicio and not business_context.get("modo_directo"):
                 return "❌ Servicio no encontrado."
-            
-            # Si el usuario especificó un día específico, aumentar límite de turnos para asegurar que llegue a ese día
+
+            # Si el usuario especificó un día específico, ajustar límites
             max_turnos = 20 if preferencia_fecha != "cualquiera" else 10
-            max_days = 7  # Por defecto 7 días
-            
-            # 🔧 NUEVO: Para fechas específicas, calcular días hasta la fecha y ajustar límites
+            max_days = 7
             if preferencia_fecha and "/" in preferencia_fecha:
                 try:
                     dia_str, mes_str = preferencia_fecha.split("/")
                     dia_num = int(dia_str)
                     mes_num = int(mes_str)
-                    
                     now = datetime.now(self.tz)
                     año_actual = now.year
-                    if mes_num < now.month or (mes_num == now.month and dia_num < now.day):
-                        año_objetivo = año_actual + 1
-                    else:
-                        año_objetivo = año_actual
-                    
+                    año_objetivo = año_actual + 1 if (mes_num < now.month or (mes_num == now.month and dia_num < now.day)) else año_actual
                     fecha_objetivo = datetime(año_objetivo, mes_num, dia_num).date()
                     dias_hasta_fecha = (fecha_objetivo - now.date()).days
-                    
-                    # Ajustar límites para fechas más lejanas
                     if dias_hasta_fecha > 7:
-                        max_days = min(dias_hasta_fecha + 1, 30)  # Máximo 30 días
-                        max_turnos = 50  # Más turnos para fechas lejanas
-                        print(f"🔧 DEBUG: Fecha {preferencia_fecha} está a {dias_hasta_fecha} días. max_days={max_days}, max_turnos={max_turnos}")
-                except:
+                        max_days = min(dias_hasta_fecha + 1, 30)
+                        max_turnos = 50
+                except Exception:
                     pass
-            
-            slots = calendar_utils.get_available_slots_for_service(
-                servicio,
-                intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
-                max_days=max_days,
-                max_turnos=max_turnos,
-                credentials_json=self.google_credentials
-            )
-            
-            # Filtrar slots por día específico si se especificó
+
+            if servicio and servicio.calendar_id:
+                slots = calendar_utils.get_available_slots_for_service(
+                    servicio,
+                    intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
+                    max_days=max_days,
+                    max_turnos=max_turnos,
+                    credentials_json=self.google_credentials
+                )
+            else:
+                # Fallback directo por Tenant
+                slots = calendar_utils.get_available_slots(
+                    calendar_id=business_context.get("calendar_id_directo") or business_context.get("calendar_id_general"),
+                    credentials_json=self.google_credentials,
+                    working_hours_json=business_context.get("working_hours_directo") or business_context.get("working_hours_general"),
+                    service_duration=business_context.get("duracion_turno_directo") or 60,
+                    intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
+                    max_days=max_days,
+                    max_turnos=max_turnos,
+                    cantidad=1,
+                    solo_horas_exactas=bool(business_context.get("solo_horas_exactas_directo"))
+                )
+
+            # Filtrar slots por día específico
             if preferencia_fecha and preferencia_fecha != "cualquiera":
-                slots_filtrados = []
                 hoy = datetime.now(self.tz).date()
-                
+                fecha_objetivo = None
                 if preferencia_fecha == "hoy":
                     fecha_objetivo = hoy
                 elif preferencia_fecha == "mañana":
                     fecha_objetivo = hoy + timedelta(days=1)
-                elif "/" in preferencia_fecha:  # 🔧 NUEVO: Manejar fechas específicas DD/MM
+                elif "/" in preferencia_fecha:
                     try:
                         dia_str, mes_str = preferencia_fecha.split("/")
                         dia_num = int(dia_str)
                         mes_num = int(mes_str)
-                        
-                        # Determinar el año (si el mes es menor al actual, asumir próximo año)
                         now = datetime.now(self.tz)
                         año_actual = now.year
-                        if mes_num < now.month or (mes_num == now.month and dia_num < now.day):
-                            año_objetivo = año_actual + 1
-                        else:
-                            año_objetivo = año_actual
-                        
+                        año_objetivo = año_actual + 1 if (mes_num < now.month or (mes_num == now.month and dia_num < now.day)) else año_actual
                         fecha_objetivo = datetime(año_objetivo, mes_num, dia_num).date()
-                        print(f"🔧 DEBUG IA: Fecha específica {preferencia_fecha} -> {fecha_objetivo.strftime('%A %d/%m/%Y')}")
-                    except ValueError:
+                    except Exception:
                         fecha_objetivo = None
                 elif preferencia_fecha in ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]:
-                    # Encontrar el próximo día de la semana especificado
-                    dias_semana = {
-                        "lunes": 0, "martes": 1, "miércoles": 2, "jueves": 3,
-                        "viernes": 4, "sábado": 5, "domingo": 6
-                    }
+                    dias_semana = {"lunes": 0, "martes": 1, "miércoles": 2, "jueves": 3, "viernes": 4, "sábado": 5, "domingo": 6}
                     dia_objetivo = dias_semana[preferencia_fecha]
                     dias_hasta_objetivo = (dia_objetivo - hoy.weekday()) % 7
-                    if dias_hasta_objetivo == 0:  # Si es hoy, tomar el próximo
-                        dias_hasta_objetivo = 7
+                    dias_hasta_objetivo = 7 if dias_hasta_objetivo == 0 else dias_hasta_objetivo
                     fecha_objetivo = hoy + timedelta(days=dias_hasta_objetivo)
-                else:
-                    fecha_objetivo = None
-                
                 if fecha_objetivo:
-                    slots_filtrados = [slot for slot in slots if slot.date() == fecha_objetivo]
-                    slots = slots_filtrados
-                    
+                    slots = [slot for slot in slots if slot.date() == fecha_objetivo]
+
             if not slots:
                 dia_texto = preferencia_fecha if preferencia_fecha != "cualquiera" else "esta semana"
-                return f"😔 No hay horarios disponibles para *{servicio.nombre}* {dia_texto}.\n¿Quieres elegir otro día?"
-                
-            # Guardar servicio y slots en Redis para habilitar selección por número
+                nombre_item = servicio.nombre if servicio else (business_context.get("titulo_turno_directo") or "Turno")
+                return f"😔 No hay horarios disponibles para *{nombre_item}* {dia_texto}.\n¿Quieres elegir otro día?"
+
+            # Guardar selección y slots en Redis
             try:
-                self.redis_client.set(
-                    f"servicio_seleccionado:{telefono}",
-                    json.dumps({"id": servicio.id, "nombre": servicio.nombre}),
-                    ex=1800
-                )
-                slots_key = f"slots:{telefono}:{servicio.id}"
-                slots_data = [
-                    {
-                        "numero": i,
-                        "fecha_hora": slot.isoformat(),
-                        "empleado_id": None,
-                        "empleado_nombre": "Sistema"
-                    }
-                    for i, slot in enumerate(slots[:8], 1)
-                ]
+                srv_id = servicio.id if servicio else 0
+                srv_nombre = servicio.nombre if servicio else (business_context.get("titulo_turno_directo") or "Turno")
+                self.redis_client.set(f"servicio_seleccionado:{telefono}", json.dumps({"id": srv_id, "nombre": srv_nombre}), ex=1800)
+                slots_key = f"slots:{telefono}:{srv_id}"
+                slots_data = [{"numero": i, "fecha_hora": slot.isoformat(), "empleado_id": None, "empleado_nombre": "Sistema"} for i, slot in enumerate(slots[:8], 1)]
                 self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
             except Exception as e:
                 print(f"❌ Error guardando slots en Redis: {e}")
-            
-            emoji_srv = self._emoji_for_service(servicio.nombre)
-            respuesta = f"{emoji_srv} Horarios disponibles para *{servicio.nombre}*"
+
+            nombre_item = servicio.nombre if servicio else (business_context.get("titulo_turno_directo") or "Turno")
+            emoji_srv = self._emoji_for_service(nombre_item)
+            respuesta = f"{emoji_srv} Horarios disponibles para *{nombre_item}*"
             if preferencia_fecha and preferencia_fecha != "cualquiera":
                 respuesta += f" el {preferencia_fecha}"
             respuesta += ":\n\n"
-            
             for i, slot in enumerate(slots[:8], 1):
                 dia_nombre = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][slot.weekday()]
-                hora_str = slot.strftime('%d/%m %H:%M')
-                respuesta += f"{i}. {dia_nombre.title()} {hora_str}\n"
+                respuesta += f"{i}. {dia_nombre.title()} {slot.strftime('%d/%m %H:%M')}\n"
             respuesta += "\n💬 Escribe el número que prefieres para confirmar."
             return respuesta
+
         elif name == "crear_reserva":
             servicio_id = args["servicio_id"]
             servicio = db.query(Servicio).filter(Servicio.id == servicio_id).first()
-            if not servicio:
+            if not servicio and not business_context.get("modo_directo"):
                 return "❌ Servicio no encontrado."
             fecha_hora = args["fecha_hora"]
             nombre_cliente = args["nombre_cliente"]
             slot_dt = datetime.fromisoformat(fecha_hora)
             try:
-                event_id = calendar_utils.create_event_for_service(
-                    servicio,
-                    slot_dt,
-                    telefono,
-                    self.google_credentials,
-                    nombre_cliente
-                )
-                
-                # Crear reserva en la base de datos
+                if servicio and servicio.calendar_id:
+                    event_id = calendar_utils.create_event_for_service(servicio, slot_dt, telefono, self.google_credentials, nombre_cliente)
+                    empleado_nombre = "Sistema"
+                    empleado_calendar_id = servicio.calendar_id
+                    servicio_nombre = servicio.nombre
+                else:
+                    event_id = calendar_utils.create_event_for_tenant_directo(
+                        calendar_id=business_context.get("calendar_id_directo") or business_context.get("calendar_id_general"),
+                        duracion_minutos=business_context.get("duracion_turno_directo") or 60,
+                        fecha_hora=slot_dt,
+                        telefono=telefono,
+                        credentials_json=self.google_credentials,
+                        nombre_cliente=nombre_cliente,
+                        titulo_evento=business_context.get("titulo_turno_directo") or "Turno"
+                    )
+                    empleado_nombre = "Sistema"
+                    empleado_calendar_id = business_context.get("calendar_id_directo") or business_context.get("calendar_id_general")
+                    servicio_nombre = business_context.get("titulo_turno_directo") or "Turno"
+
                 nueva_reserva = Reserva(
                     fake_id=generar_fake_id(),
                     event_id=event_id,
-                    empresa=servicio.tenant.comercio,
+                    empresa=tenant.comercio,
                     empleado_id=None,
-                    empleado_nombre="Sistema",
-                    empleado_calendar_id=servicio.calendar_id,
+                    empleado_nombre=empleado_nombre,
+                    empleado_calendar_id=empleado_calendar_id,
                     cliente_nombre=nombre_cliente,
                     cliente_telefono=telefono,
                     fecha_reserva=slot_dt,
-                    servicio=servicio.nombre,
+                    servicio=servicio_nombre,
                     estado="activo",
                     cantidad=args.get("cantidad", 1)
                 )
                 db.add(nueva_reserva)
                 db.commit()
-                
-                return f"✅ Reserva confirmada para {servicio.nombre} el {slot_dt.strftime('%d/%m %H:%M')} a nombre de {nombre_cliente}.\n🔖 Código: {nueva_reserva.fake_id}"
+                return f"✅ Reserva confirmada para {servicio_nombre} el {slot_dt.strftime('%d/%m %H:%M')} a nombre de {nombre_cliente}.\n🔖 Código: {nueva_reserva.fake_id}"
             except Exception as e:
                 return f"❌ Error al crear la reserva: {e}"
+
         elif name == "cancelar_reserva":
             codigo_reserva = args["codigo_reserva"]
-            calendar_id = business_context.get("calendar_id_general", "primary")
+            calendar_id = business_context.get("calendar_id_directo") or business_context.get("calendar_id_general") or "primary"
             try:
-                ok = calendar_utils.cancelar_evento_google(
-                    calendar_id,
-                    codigo_reserva,
-                    self.google_credentials
-                )
-                if ok:
-                    return "✅ Reserva cancelada correctamente."
-                else:
-                    return "❌ No se pudo cancelar la reserva."
+                ok = calendar_utils.cancelar_evento_google(calendar_id, codigo_reserva, self.google_credentials)
+                return "✅ Reserva cancelada correctamente." if ok else "❌ No se pudo cancelar la reserva."
             except Exception as e:
                 return f"❌ Error al cancelar la reserva: {e}"
+
         return "Función no implementada."
 
     def _generar_respuesta_fallback(self, mensaje, user_history, business_context):
@@ -964,38 +947,57 @@ class AIConversationManager:
                         nombre_cliente = self._extraer_nombre(mensaje.strip())
                         # Llamar a la función de calendar_utils para crear la reserva
                         from api.utils import calendar_utils
-                        # Obtener el objeto modelo Servicio desde la base de datos
-                        servicio_modelo = db.query(Servicio).filter(Servicio.id == servicio_guardado['id']).first()
-                        if not servicio_modelo:
-                            return "❌ Servicio no disponible. Intenta de nuevo."
                         slot_dt = datetime.fromisoformat(slot_seleccionado['fecha_hora'])
                         try:
-                            event_id = calendar_utils.create_event_for_service(
-                                servicio_modelo,
-                                slot_dt,
-                                telefono,
-                                self.google_credentials,
-                                nombre_cliente
-                            )
-                            
+                            if servicio_guardado['id'] == 0:
+                                # Reserva directa por Tenant
+                                calendar_id = business_context.get("calendar_id_directo") or business_context.get("calendar_id_general")
+                                titulo_evento = business_context.get("titulo_turno_directo") or "Turno"
+                                duracion = business_context.get("duracion_turno_directo") or 60
+                                event_id = calendar_utils.create_event_for_tenant_directo(
+                                    calendar_id=calendar_id,
+                                    duracion_minutos=duracion,
+                                    fecha_hora=slot_dt,
+                                    telefono=telefono,
+                                    credentials_json=self.google_credentials,
+                                    nombre_cliente=nombre_cliente,
+                                    titulo_evento=titulo_evento
+                                )
+                                servicio_nombre = titulo_evento
+                                empleado_calendar_id = calendar_id
+                            else:
+                                # Reserva por Servicio
+                                servicio_modelo = db.query(Servicio).filter(Servicio.id == servicio_guardado['id']).first()
+                                if not servicio_modelo:
+                                    return "❌ Servicio no disponible. Intenta de nuevo."
+                                event_id = calendar_utils.create_event_for_service(
+                                    servicio_modelo,
+                                    slot_dt,
+                                    telefono,
+                                    self.google_credentials,
+                                    nombre_cliente
+                                )
+                                servicio_nombre = servicio_modelo.nombre
+                                empleado_calendar_id = servicio_modelo.calendar_id
+
                             # Crear reserva en la base de datos
                             nueva_reserva = Reserva(
                                 fake_id=generar_fake_id(),
                                 event_id=event_id,
-                                empresa=servicio_modelo.tenant.comercio,
+                                empresa=tenant.comercio,
                                 empleado_id=None,
                                 empleado_nombre="Sistema",
-                                empleado_calendar_id=servicio_modelo.calendar_id,
+                                empleado_calendar_id=empleado_calendar_id,
                                 cliente_nombre=nombre_cliente,
                                 cliente_telefono=telefono,
                                 fecha_reserva=slot_dt,
-                                servicio=servicio_modelo.nombre,
+                                servicio=servicio_nombre,
                                 estado="activo",
                                 cantidad=1
                             )
                             db.add(nueva_reserva)
                             db.commit()
-                            
+
                             # Limpiar selección en Redis
                             self.redis_client.delete(f"servicio_seleccionado:{telefono}")
                             self.redis_client.delete(f"slots:{telefono}:{servicio_guardado['id']}")
@@ -1019,20 +1021,35 @@ class AIConversationManager:
                 from api.utils import calendar_utils
                 # Obtener contexto actualizado del negocio (servicios y empleados)
                 business_context = self._get_business_context(tenant, db)
-                servicio_guardado_dict = next((s for s in business_context["servicios"] if s["id"] == servicio_guardado["id"]), None)
-                if not servicio_guardado_dict:
-                    return "❌ Servicio no disponible. Intenta de nuevo."
-                # Buscar el modelo Servicio por ID y pasar el modelo, no un dict
-                servicio_modelo = db.query(Servicio).filter(Servicio.id == servicio_guardado["id"]).first()
-                if not servicio_modelo:
-                    return "❌ Servicio no disponible. Intenta de nuevo."
-                slots = calendar_utils.get_available_slots_for_service(
-                    servicio_modelo,
-                    intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
-                    max_days=7,
-                    max_turnos=25,  # 🔧 AUMENTAR para asegurar que llegue al día específico
-                    credentials_json=self.google_credentials
-                )
+                if servicio_guardado["id"] == 0:
+                    # Modo directo por Tenant
+                    slots = calendar_utils.get_available_slots(
+                        calendar_id=business_context.get("calendar_id_directo") or business_context.get("calendar_id_general"),
+                        credentials_json=self.google_credentials,
+                        working_hours_json=business_context.get("working_hours_directo") or business_context.get("working_hours_general"),
+                        service_duration=business_context.get("duracion_turno_directo") or 60,
+                        intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
+                        max_days=7,
+                        max_turnos=25,
+                        cantidad=1,
+                        solo_horas_exactas=bool(business_context.get("solo_horas_exactas_directo"))
+                    )
+                    servicio_guardado_dict = {"id": 0, "nombre": business_context.get("titulo_turno_directo") or "Turno"}
+                else:
+                    servicio_guardado_dict = next((s for s in business_context["servicios"] if s["id"] == servicio_guardado["id"]), None)
+                    if not servicio_guardado_dict:
+                        return "❌ Servicio no disponible. Intenta de nuevo."
+                    # Buscar el modelo Servicio por ID y pasar el modelo, no un dict
+                    servicio_modelo = db.query(Servicio).filter(Servicio.id == servicio_guardado["id"]).first()
+                    if not servicio_modelo:
+                        return "❌ Servicio no disponible. Intenta de nuevo."
+                    slots = calendar_utils.get_available_slots_for_service(
+                        servicio_modelo,
+                        intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
+                        max_days=7,
+                        max_turnos=25,  # 🔧 AUMENTAR para asegurar que llegue al día específico
+                        credentials_json=self.google_credentials
+                    )
                 # Filtrar slots por día
                 tz = pytz.timezone("America/Montevideo")
                 now = datetime.now(tz)
@@ -1089,6 +1106,73 @@ class AIConversationManager:
                 ]
                 self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
                 return (f"{self._emoji_for_service(servicio_guardado_dict['nombre'])} *Horarios para {servicio_guardado_dict['nombre']}* el {dia_detectado}:\n"
+                        + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
+                        + "\n\n💬 Escribe el número o la hora que prefieres.")
+
+        # MODO DIRECTO SIN SERVICIO SELECCIONADO: detectar día y listar horarios
+        if business_context.get("modo_directo") and not servicio_guardado_str:
+            dia_detectado = self._detectar_dia_mensaje(mensaje_stripped)
+            if dia_detectado:
+                from api.utils import calendar_utils
+                slots = calendar_utils.get_available_slots(
+                    calendar_id=business_context.get("calendar_id_directo") or business_context.get("calendar_id_general"),
+                    credentials_json=self.google_credentials,
+                    working_hours_json=business_context.get("working_hours_directo") or business_context.get("working_hours_general"),
+                    service_duration=business_context.get("duracion_turno_directo") or 60,
+                    intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
+                    max_days=7,
+                    max_turnos=25,
+                    cantidad=1,
+                    solo_horas_exactas=bool(business_context.get("solo_horas_exactas_directo"))
+                )
+                # Filtrar por día
+                tz = pytz.timezone("America/Montevideo")
+                now = datetime.now(tz)
+                if dia_detectado == "hoy":
+                    dia_objetivo = now.date()
+                elif dia_detectado == "mañana":
+                    dia_objetivo = (now + timedelta(days=1)).date()
+                elif "/" in dia_detectado:
+                    try:
+                        dia_str, mes_str = dia_detectado.split("/")
+                        dia_num = int(dia_str)
+                        mes_num = int(mes_str)
+                        año_actual = now.year
+                        año_objetivo = año_actual + 1 if (mes_num < now.month or (mes_num == now.month and dia_num < now.day)) else año_actual
+                        dia_objetivo = datetime(año_objetivo, mes_num, dia_num).date()
+                    except ValueError:
+                        return f"❌ No reconozco la fecha '{dia_detectado}'. Usa formato DD/MM o nombres de días."
+                else:
+                    dias_semana = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+                    dia_normalizado = dia_detectado.replace("é", "e").replace("á", "a")
+                    try:
+                        idx = dias_semana.index(dia_normalizado)
+                        hoy_idx = now.weekday()
+                        dias_hasta = (idx - hoy_idx) % 7
+                        if dias_hasta == 0:
+                            dias_hasta = 7
+                        dia_objetivo = (now + timedelta(days=dias_hasta)).date()
+                    except ValueError:
+                        return f"❌ No reconozco el día '{dia_detectado}'. Usa: hoy, mañana, lunes, martes, etc."
+
+                slots_dia = [s for s in slots if s.date() == dia_objetivo]
+                if not slots_dia:
+                    return f"😔 No hay horarios disponibles el {dia_detectado}. ¿Querés elegir otro día?"
+                # Guardar selección genérica y slots
+                titulo = business_context.get("titulo_turno_directo") or "Turno"
+                self.redis_client.set(f"servicio_seleccionado:{telefono}", json.dumps({"id": 0, "nombre": titulo}), ex=1800)
+                slots_key = f"slots:{telefono}:0"
+                slots_data = [
+                    {
+                        "numero": i,
+                        "fecha_hora": slot.isoformat(),
+                        "empleado_id": None,
+                        "empleado_nombre": "Sistema"
+                    }
+                    for i, slot in enumerate(slots_dia[:8], 1)
+                ]
+                self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
+                return (f"{self._emoji_for_service(titulo)} *Horarios para {titulo}* el {dia_detectado}:\n"
                         + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
                         + "\n\n💬 Escribe el número o la hora que prefieres.")
         
@@ -1168,7 +1252,7 @@ class AIConversationManager:
             pregunta = self._preguntar_dia_disponible(servicio_seleccionado, telefono)
             return f"{tarjeta}\n\n{pregunta}"
         
-        # � FILTRO PREVIO: Detectar consultas claramente ajenas al negocio
+    # � FILTRO PREVIO: Detectar consultas claramente ajenas al negocio
         palabras_ajenas = [
             'receta', 'cocina', 'comida', 'guiso', 'ingredientes', 'cocinar',
             'amor', 'vida', 'consejo', 'salud', 'medicina', 'doctor',
@@ -1263,11 +1347,11 @@ Si te preguntan algo no relacionado, responde:
                 "role": msg["role"],
                 "content": msg["content"]
             })
-        
+
         # Agregar mensaje actual
         messages.append({"role": "user", "content": mensaje})
-        
-        # Definir funciones disponibles - SOLO buscar horarios, NO crear reservas
+
+    # Definir funciones disponibles - SOLO buscar horarios, NO crear reservas
         functions = [
             {
                 "name": "buscar_horarios_servicio",
@@ -1295,7 +1379,7 @@ Si te preguntan algo no relacionado, responde:
                 }
             }
         ]
-        
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -1305,25 +1389,25 @@ Si te preguntan algo no relacionado, responde:
                 temperature=0.3,
                 max_tokens=800
             )
-            
+
             message = response.choices[0].message
-            
+
             # Si la IA quiere ejecutar una función
             if message.function_call:
                 function_name = message.function_call.name
                 function_args = json.loads(message.function_call.arguments)
-                
+
                 # Ejecutar la función
                 function_result = await self._execute_ai_function(
                     {"name": function_name, "args": function_args},
                     telefono, business_context, tenant, db
                 )
-                
+
                 return function_result
-            
+
             # Respuesta directa de la IA
             return message.content
-            
+
         except Exception as e:
             print(f"❌ Error en OpenAI: {e}")
             return self._generar_respuesta_fallback(mensaje, user_history, business_context)
@@ -1343,6 +1427,11 @@ Si te preguntan algo no relacionado, responde:
         """Devuelve la lista de servicios disponibles para mostrar al cliente (siempre actualizada)."""
         servicios = business_context["servicios"]
         if not servicios:
+            if business_context.get("modo_directo"):
+                return (
+                    "✨ Reservas directas disponibles.\n\n"
+                    "Decime ‘hoy’, ‘mañana’ o un día (lunes, martes, …) y te muestro horarios."
+                )
             return "No hay servicios disponibles en este momento."
         # Mostrar servicios numerados y por nombre, sin duplicados ni nombres erróneos
         lines = []
@@ -1380,6 +1469,9 @@ Si te preguntan algo no relacionado, responde:
                 "telefono": getattr(e, "telefono", "")
             })
         
+        # Determinar si no hay empleados ni servicios para activar modo directo
+        modo_directo = (len(servicios) == 0 and len(empleados) == 0)
+
         return {
             "servicios": servicios,
             "empleados": empleados,
@@ -1391,6 +1483,15 @@ Si te preguntan algo no relacionado, responde:
             "direccion": getattr(tenant, "direccion", None),
             "comercio": getattr(tenant, "comercio", None),
             "working_hours_general": getattr(tenant, "working_hours_general", None),
+            # Campos de reservas directas
+            "modo_directo": modo_directo,
+            "calendar_id_directo": getattr(tenant, "calendar_id_directo", None),
+            "duracion_turno_directo": getattr(tenant, "duracion_turno_directo", None),
+            "precio_turno_directo": getattr(tenant, "precio_turno_directo", None),
+            "solo_horas_exactas_directo": getattr(tenant, "solo_horas_exactas_directo", False),
+            "turnos_consecutivos_directo": getattr(tenant, "turnos_consecutivos_directo", False),
+            "working_hours_directo": getattr(tenant, "working_hours_general", None),
+            "titulo_turno_directo": (tenant.comercio or "Turno"),
         }
 
     async def cancelar_reserva(self, codigo_reserva: str, telefono: str, db: Session):

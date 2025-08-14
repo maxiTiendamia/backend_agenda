@@ -461,3 +461,49 @@ def cancelar_evento_google(calendar_id, event_id, credentials_json):
     except Exception as e:
         print(f"❌ Error cancelando evento {event_id}: {e}")
         return False
+
+def create_event_for_tenant_directo(calendar_id, duracion_minutos, fecha_hora, telefono, credentials_json, nombre_cliente, titulo_evento: str = "Turno"):
+    """
+    Crear un evento en Google Calendar usando la configuración directa del Tenant
+    (sin necesidad de un objeto Servicio).
+
+    Args:
+        calendar_id: ID del calendario de Google
+        duracion_minutos: duración del turno
+        fecha_hora: datetime aware (America/Montevideo/UTC) del inicio
+        telefono: teléfono del cliente
+        credentials_json: credenciales del service account (dict o JSON string)
+        nombre_cliente: nombre del cliente para el título/descripcion
+        titulo_evento: Nombre a mostrar del turno
+
+    Returns:
+        event_id creado
+    """
+    if not calendar_id:
+        raise Exception("Tenant no tiene calendar_id_directo configurado")
+
+    service = build_service(credentials_json)
+
+    start_time = fecha_hora
+    end_time = start_time + datetime.timedelta(minutes=int(duracion_minutos or 60))
+
+    event = {
+        'summary': f'{titulo_evento} - {nombre_cliente}',
+        'description': f'Reserva directa para {nombre_cliente}\nTeléfono: {telefono}',
+        'start': {
+            'dateTime': start_time.isoformat(),
+            'timeZone': 'America/Montevideo',
+        },
+        'end': {
+            'dateTime': end_time.isoformat(),
+            'timeZone': 'America/Montevideo',
+        }
+    }
+
+    try:
+        event_result = service.events().insert(calendarId=calendar_id, body=event).execute()
+        print(f"✅ Evento directo creado: {event_result.get('id')}")
+        return event_result.get('id')
+    except Exception as e:
+        print(f"❌ Error creando evento directo: {e}")
+        raise e
