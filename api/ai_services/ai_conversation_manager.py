@@ -33,8 +33,11 @@ class AIConversationManager:
                 return "❌ Servicio no encontrado."
 
             # Si el usuario especificó un día específico, ajustar límites
-            max_turnos = 20 if preferencia_fecha != "cualquiera" else 10
+            max_turnos = 50 if preferencia_fecha != "cualquiera" else 10
             max_days = 7
+            # Si es un día de la semana, aumentar para asegurar llegar a ese día (ej. sábado)
+            if preferencia_fecha in ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]:
+                max_turnos = 50
             if preferencia_fecha and "/" in preferencia_fecha:
                 try:
                     dia_str, mes_str = preferencia_fecha.split("/")
@@ -384,7 +387,7 @@ class AIConversationManager:
         respuesta = f"{tipo_servicio} *{servicio_seleccionado['nombre']}*\n"
         # Agregar detalles ricos del servicio si están disponibles
         desc = (servicio_seleccionado.get('mensaje_personalizado') or '').strip()
-        precio = servicio_seleccionado.get('precio')
+    # ⚠️ Política: No mencionar precio en la respuesta
         duracion = servicio_seleccionado.get('duracion')
         extras = []
         if desc:
@@ -393,8 +396,7 @@ class AIConversationManager:
         info_basica = []
         if duracion:
             info_basica.append(f"⏱️ Duración: {duracion} min")
-        if isinstance(precio, (int, float)) and precio > 0:
-            info_basica.append(f"💲 Precio: {precio}")
+    # ⚠️ Política: No mencionar precio en la respuesta
         if info_basica:
             extras.append(" · ".join(info_basica))
         if extras:
@@ -890,6 +892,79 @@ class AIConversationManager:
         """🔧 CORREGIDO: Procesamiento de IA más natural y contextual"""
         
         mensaje_stripped = mensaje.strip().lower()
+
+        # -------------------
+        # 0) ATAJOS DETERMINISTAS ANTES DE LA IA
+        # -------------------
+        # 0.1) Pedido de VIDEO: responder con link inmediatamente (extraído del contexto del negocio o servicios)
+        def _extraer_primer_url(texto: str | None) -> str | None:
+            if not texto:
+                return None
+            try:
+                import re
+                m = re.search(r"https?://\S+", texto)
+                return m.group(0) if m else None
+            except Exception:
+                return None
+
+        if any(k in mensaje_stripped for k in ["video", "enlace del video", "link del video", "compartime el video", "mandame el video", "ver video"]):
+            # Buscar URL primero en informacion_local
+            url = _extraer_primer_url(business_context.get("informacion_local") or "")
+            # Si no, buscar en servicios informativos
+            if not url:
+                for s in business_context.get("servicios", []) or []:
+                    url = _extraer_primer_url((s.get("mensaje_personalizado") or ""))
+                    if url:
+                        break
+            if url:
+                return self._add_help_footer(f"🎬 Aquí tenés el video: {url}")
+            else:
+                # No se encontró URL concreta: responder claro sin repetir
+                return self._add_help_footer("No encuentro el enlace del video en este momento. ¿Querés que te lo envíe por acá cuando esté disponible?")
+
+        # 0.2) "Mostrame/mandame de vuelta/otra vez los horarios" -> repetir lista de horarios (evitar info del negocio)
+        if ("horarios" in mensaje_stripped) and any(p in mensaje_stripped for p in ["de vuelta", "devuelta", "otra vez", "de nuevo", "mostrar otra vez", "mostrame otra vez", "mostrame de nuevo", "ver otra vez", "ver de nuevo"]):
+            # Intentar reutilizar la última selección y slots de Redis
+            try:
+                servicio_guardado_str = self.redis_client.get(f"servicio_seleccionado:{telefono}")
+                if servicio_guardado_str:
+                    servicio_guardado = json.loads(servicio_guardado_str)
+                    srv_id = servicio_guardado.get("id", 0)
+                    all_key = f"slots_all:{telefono}:{srv_id}"
+                    page_key = f"slots_page:{telefono}:{srv_id}"
+                    size_key = f"slots_page_size:{telefono}:{srv_id}"
+                    all_raw = self.redis_client.get(all_key)
+                    if all_raw:
+                        from datetime import datetime as _dt
+                        all_slots = [_dt.fromisoformat(x) for x in json.loads(all_raw)]
+                        size = int(json.loads(self.redis_client.get(size_key) or "10"))
+                        # Mostrar primera página nuevamente
+                        page_slots = all_slots[:size]
+                        # Regrabar página actual como 0
+                        self.redis_client.set(page_key, json.dumps(0), ex=600)
+                        # Regrabar lista actual visible en slots_key
+                        slots_key = f"slots:{telefono}:{srv_id}"
+                        slots_data = [{
+                            "numero": i + 1,
+                            "fecha_hora": s.isoformat(),
+                            "empleado_id": None,
+                            "empleado_nombre": "Sistema"
+                        } for i, s in enumerate(page_slots)]
+                        self.redis_client.set(slots_key, json.dumps(slots_data), ex=600)
+                        # Responder
+                        respuesta = f"{self._emoji_for_service(servicio_guardado.get('nombre') or 'Turno')} Horarios disponibles nuevamente:\n\n"
+                        for i, s in enumerate(page_slots, 1):
+                            dia_nombre = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][s.weekday()]
+                            respuesta += f"{i}. {dia_nombre.title()} {s.strftime('%d/%m %H:%M')}\n"
+                        if len(all_slots) > len(page_slots):
+                            respuesta += "\n📝 Escribe 'más' para ver más horarios."
+                        respuesta += "\n💬 Escribe el número que prefieres para confirmar."
+                        return self._add_help_footer(respuesta)
+            except Exception as _:
+                pass
+            # Si no hay historial en Redis, intentamos detectar día y volver a listar
+            dia_detectado_tmp = self._detectar_dia_mensaje(mensaje_stripped) or "cualquiera"
+            # Reutilizamos el flujo normal más abajo (buscará y listará)
         
         # 🔧 VERIFICAR PRIMERO SI TIENE SERVICIO SELECCIONADO Y HORARIOS DISPONIBLES
         servicio_key = f"servicio_seleccionado:{telefono}"
@@ -1123,7 +1198,7 @@ class AIConversationManager:
                         service_duration=business_context.get("duracion_turno_directo") or 60,
                         intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                         max_days=7,
-                        max_turnos=25,
+                        max_turnos=50,
                         cantidad=1,
                         solo_horas_exactas=bool(business_context.get("solo_horas_exactas_directo"))
                     )
@@ -1140,7 +1215,7 @@ class AIConversationManager:
                         servicio_modelo,
                         intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                         max_days=7,
-                        max_turnos=25,  # 🔧 AUMENTAR para asegurar que llegue al día específico
+                        max_turnos=50,  # Aumentar para asegurar que llegue al día específico
                         credentials_json=self.google_credentials
                     )
                 # Filtrar slots por día
@@ -1186,21 +1261,31 @@ class AIConversationManager:
                 slots_dia = [s for s in slots if s.date() == dia_objetivo]
                 if not slots_dia:
                     return f"😔 No hay horarios disponibles para *{servicio_guardado_dict['nombre']}* el {dia_detectado}.\n¿Quieres elegir otro día?"
-                # Guardar slots en Redis
-                slots_key = f"slots:{telefono}:{servicio_guardado_dict['id']}"
-                slots_data = [
-                    {
-                        "numero": i,
-                        "fecha_hora": slot.isoformat(),
-                        "empleado_id": None,
-                        "empleado_nombre": "Sistema"
-                    }
-                    for i, slot in enumerate(slots_dia[:8], 1)
-                ]
+                # Guardar slots en Redis con paginación (20 por página cuando el día es específico)
+                srv_id = servicio_guardado_dict['id']
+                all_key = f"slots_all:{telefono}:{srv_id}"
+                page_key = f"slots_page:{telefono}:{srv_id}"
+                size_key = f"slots_page_size:{telefono}:{srv_id}"
+                page_size = 20
+                self.redis_client.set(all_key, json.dumps([s.isoformat() for s in slots_dia]), ex=1800)
+                self.redis_client.set(page_key, json.dumps(0), ex=1800)
+                self.redis_client.set(size_key, json.dumps(page_size), ex=1800)
+                # Primera página
+                first_page = slots_dia[:page_size]
+                slots_key = f"slots:{telefono}:{srv_id}"
+                slots_data = [{
+                    "numero": i,
+                    "fecha_hora": slot.isoformat(),
+                    "empleado_id": None,
+                    "empleado_nombre": "Sistema"
+                } for i, slot in enumerate(first_page, 1)]
                 self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
-                return (f"{self._emoji_for_service(servicio_guardado_dict['nombre'])} *Horarios para {servicio_guardado_dict['nombre']}* el {dia_detectado}:\n"
-                        + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
-                        + "\n\n💬 Escribe el número o la hora que prefieres.")
+                respuesta = f"{self._emoji_for_service(servicio_guardado_dict['nombre'])} *Horarios para {servicio_guardado_dict['nombre']}* el {dia_detectado}:\n\n"
+                respuesta += "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
+                if len(slots_dia) > len(first_page):
+                    respuesta += "\n\n📝 Escribe 'más' para ver más horarios."
+                respuesta += "\n\n💬 Escribe el número o la hora que prefieres."
+                return respuesta
 
         # MODO DIRECTO SIN SERVICIO SELECCIONADO: detectar día y listar horarios
         if business_context.get("modo_directo") and not servicio_guardado_str:
@@ -1214,7 +1299,7 @@ class AIConversationManager:
                     service_duration=business_context.get("duracion_turno_directo") or 60,
                     intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                     max_days=7,
-                    max_turnos=25,
+                    max_turnos=50,
                     cantidad=1,
                     solo_horas_exactas=bool(business_context.get("solo_horas_exactas_directo"))
                 )
@@ -1251,23 +1336,31 @@ class AIConversationManager:
                 slots_dia = [s for s in slots if s.date() == dia_objetivo]
                 if not slots_dia:
                     return f"😔 No hay horarios disponibles el {dia_detectado}. ¿Querés elegir otro día?"
-                # Guardar selección genérica y slots
+                # Guardar selección genérica y slots con paginación (20 por página)
                 titulo = business_context.get("titulo_turno_directo") or "Turno"
                 self.redis_client.set(f"servicio_seleccionado:{telefono}", json.dumps({"id": 0, "nombre": titulo}), ex=1800)
+                all_key = f"slots_all:{telefono}:0"
+                page_key = f"slots_page:{telefono}:0"
+                size_key = f"slots_page_size:{telefono}:0"
+                page_size = 20
+                self.redis_client.set(all_key, json.dumps([s.isoformat() for s in slots_dia]), ex=1800)
+                self.redis_client.set(page_key, json.dumps(0), ex=1800)
+                self.redis_client.set(size_key, json.dumps(page_size), ex=1800)
+                first_page = slots_dia[:page_size]
                 slots_key = f"slots:{telefono}:0"
-                slots_data = [
-                    {
-                        "numero": i,
-                        "fecha_hora": slot.isoformat(),
-                        "empleado_id": None,
-                        "empleado_nombre": "Sistema"
-                    }
-                    for i, slot in enumerate(slots_dia[:8], 1)
-                ]
+                slots_data = [{
+                    "numero": i,
+                    "fecha_hora": slot.isoformat(),
+                    "empleado_id": None,
+                    "empleado_nombre": "Sistema"
+                } for i, slot in enumerate(first_page, 1)]
                 self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
-                return (f"{self._emoji_for_service(titulo)} *Horarios para {titulo}* el {dia_detectado}:\n"
-                        + "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
-                        + "\n\n💬 Escribe el número o la hora que prefieres.")
+                respuesta = f"{self._emoji_for_service(titulo)} *Horarios para {titulo}* el {dia_detectado}:\n\n"
+                respuesta += "\n".join([f"{i}. {datetime.fromisoformat(s['fecha_hora']).strftime('%H:%M')}" for i, s in enumerate(slots_data, 1)])
+                if len(slots_dia) > len(first_page):
+                    respuesta += "\n\n📝 Escribe 'más' para ver más horarios."
+                respuesta += "\n\n💬 Escribe el número o la hora que prefieres."
+                return respuesta
         
         # 🔧 DETECCIÓN DE SELECCIÓN DE SERVICIO (solo si NO tiene servicio guardado)
         servicio_seleccionado = None
@@ -1498,12 +1591,57 @@ Si te preguntan algo no relacionado, responde:
 
                 return function_result
 
-            # Respuesta directa de la IA
-            return message.content
+            # Respuesta directa de la IA (sanitizada: no inventar links de video)
+            return self._sanitize_ai_response(message.content or "", business_context)
 
         except Exception as e:
             print(f"❌ Error en OpenAI: {e}")
             return self._generar_respuesta_fallback(mensaje, user_history, business_context)
+
+    def _get_canonical_video_url(self, business_context: dict) -> str | None:
+        """Obtiene la URL del video desde informacion_local o servicios (primer URL encontrado)."""
+        import re
+        def first_url(text: str | None) -> str | None:
+            if not text:
+                return None
+            m = re.search(r"https?://\S+", text)
+            return m.group(0) if m else None
+
+        url = first_url(business_context.get("informacion_local") or "")
+        if url:
+            return url
+        for s in business_context.get("servicios", []) or []:
+            url = first_url((s.get("mensaje_personalizado") or ""))
+            if url:
+                return url
+        return None
+
+    def _sanitize_ai_response(self, text: str, business_context: dict) -> str:
+        """Evita links inventados para 'video': siempre usa el link canónico si existe."""
+        try:
+            tlow = (text or "").lower()
+            # Disparadores relacionados a video
+            triggers = ["video", "video explicativo", "enlace del video", "link del video", "ver video"]
+            if any(k in tlow for k in triggers):
+                canonical = self._get_canonical_video_url(business_context)
+                import re
+                # Si el modelo inventó un markdown link o una URL, lo removemos/reemplazamos
+                # 1) Quitar/normalizar cualquier formato [texto](url)
+                text = re.sub(r"\[[^\]]+\]\(https?://[^\)]+\)", "", text)
+                # 2) Remover URLs sueltas si vamos a poner la canónica
+                if canonical:
+                    text = re.sub(r"https?://\S+", "", text)
+                    # Agregar la línea correcta con el video canónico
+                    suffix = ("\n\n" if not text.endswith("\n") else "") + f"🎬 Aquí tenés el video: {canonical}"
+                    text = (text.strip() + suffix).strip()
+                else:
+                    # No hay canónica: evitar inventos, dejar el texto sin URLs
+                    text = re.sub(r"https?://\S+", "", text).strip()
+                    if not text:
+                        text = "No encuentro el enlace del video en este momento."
+            return text
+        except Exception:
+            return text
     
     def _format_servicios_with_real_ids(self, servicios: list) -> str:
         """
