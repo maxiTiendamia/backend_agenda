@@ -106,14 +106,25 @@ class AIConversationManager:
                 nombre_item = servicio.nombre if servicio else (business_context.get("titulo_turno_directo") or "Turno")
                 return f"😔 No hay horarios disponibles para *{nombre_item}* {dia_texto}.\n¿Quieres elegir otro día?"
 
-            # Guardar selección y slots en Redis
+            # Determinar cuántos slots mostrar (más si pidieron un día específico)
+            max_to_show = 20 if preferencia_fecha != "cualquiera" else 10
+            to_show = slots[:max_to_show]
+
+            # Guardar selección y slots en Redis (mostrar más de 8 slots)
             try:
                 srv_id = servicio.id if servicio else 0
                 srv_nombre = servicio.nombre if servicio else (business_context.get("titulo_turno_directo") or "Turno")
                 self.redis_client.set(f"servicio_seleccionado:{telefono}", json.dumps({"id": srv_id, "nombre": srv_nombre}), ex=1800)
                 slots_key = f"slots:{telefono}:{srv_id}"
-                slots_data = [{"numero": i, "fecha_hora": slot.isoformat(), "empleado_id": None, "empleado_nombre": "Sistema"} for i, slot in enumerate(slots[:8], 1)]
+                slots_data = [{"numero": i, "fecha_hora": slot.isoformat(), "empleado_id": None, "empleado_nombre": "Sistema"} for i, slot in enumerate(to_show, 1)]
                 self.redis_client.set(slots_key, json.dumps(slots_data), ex=1800)
+                # 🆕 Paginación: guardar todos los slots y controles de página
+                all_key = f"slots_all:{telefono}:{srv_id}"
+                page_key = f"slots_page:{telefono}:{srv_id}"
+                size_key = f"slots_page_size:{telefono}:{srv_id}"
+                self.redis_client.set(all_key, json.dumps([s.isoformat() for s in slots]), ex=1800)
+                self.redis_client.set(page_key, json.dumps(0), ex=1800)
+                self.redis_client.set(size_key, json.dumps(max_to_show), ex=1800)
             except Exception as e:
                 print(f"❌ Error guardando slots en Redis: {e}")
 
@@ -123,9 +134,12 @@ class AIConversationManager:
             if preferencia_fecha and preferencia_fecha != "cualquiera":
                 respuesta += f" el {preferencia_fecha}"
             respuesta += ":\n\n"
-            for i, slot in enumerate(slots[:8], 1):
+            for i, slot in enumerate(to_show, 1):
                 dia_nombre = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][slot.weekday()]
                 respuesta += f"{i}. {dia_nombre.title()} {slot.strftime('%d/%m %H:%M')}\n"
+            # Sugerir 'más' si hay más páginas
+            if len(slots) > len(to_show):
+                respuesta += "\n📝 Escribe 'más' para ver más horarios."
             respuesta += "\n💬 Escribe el número que prefieres para confirmar."
             return respuesta
 
@@ -887,6 +901,85 @@ class AIConversationManager:
             slots_data_str = self.redis_client.get(slots_key)
             if slots_data_str:
                 slots_data = json.loads(slots_data_str)
+                # 🆕 Paginación: comandos 'más', 'siguiente', 'anterior'
+                if mensaje_stripped in ["más", "mas", "siguiente", "ver más", "ver mas", "+"]:
+                    all_key = f"slots_all:{telefono}:{servicio_guardado['id']}"
+                    page_key = f"slots_page:{telefono}:{servicio_guardado['id']}"
+                    size_key = f"slots_page_size:{telefono}:{servicio_guardado['id']}"
+                    try:
+                        all_slots_raw = self.redis_client.get(all_key)
+                        if not all_slots_raw:
+                            return "❌ No hay más horarios para mostrar."
+                        all_slots = [datetime.fromisoformat(x) for x in json.loads(all_slots_raw)]
+                        page = int(json.loads(self.redis_client.get(page_key) or "0"))
+                        size = int(json.loads(self.redis_client.get(size_key) or "10"))
+                        next_page = page + 1
+                        start = next_page * size
+                        end = start + size
+                        if start >= len(all_slots):
+                            return "😊 Ya estás viendo los últimos horarios disponibles."
+                        page_slots = all_slots[start:end]
+                        # reconstruir slots_data de la página
+                        slots_data = [{
+                            "numero": i + 1,
+                            "fecha_hora": s.isoformat(),
+                            "empleado_id": None,
+                            "empleado_nombre": "Sistema"
+                        } for i, s in enumerate(page_slots)]
+                        self.redis_client.set(slots_key, json.dumps(slots_data), ex=600)
+                        self.redis_client.set(page_key, json.dumps(next_page), ex=600)
+                        # Responder con la nueva página
+                        respuesta = f"{self._emoji_for_service(servicio_guardado['nombre'])} Horarios disponibles (página {next_page + 1}):\n\n"
+                        for i, s in enumerate(page_slots, 1):
+                            dia_nombre = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][s.weekday()]
+                            respuesta += f"{i}. {dia_nombre.title()} {s.strftime('%d/%m %H:%M')}\n"
+                        if end < len(all_slots):
+                            respuesta += "\n📝 Escribe 'más' para ver más horarios."
+                        if page > 0:
+                            respuesta += "\n↩️ Escribe 'anterior' para ver los anteriores."
+                        respuesta += "\n💬 Escribe el número que prefieres para confirmar."
+                        return self._add_help_footer(respuesta)
+                    except Exception as e:
+                        print(f"❌ Error en paginación de slots: {e}")
+                        return "❌ No pude cargar más horarios ahora. Intenta nuevamente."
+                if mensaje_stripped in ["anterior", "previo", "volver", "<"]:
+                    all_key = f"slots_all:{telefono}:{servicio_guardado['id']}"
+                    page_key = f"slots_page:{telefono}:{servicio_guardado['id']}"
+                    size_key = f"slots_page_size:{telefono}:{servicio_guardado['id']}"
+                    try:
+                        all_slots_raw = self.redis_client.get(all_key)
+                        if not all_slots_raw:
+                            return "❌ No hay horarios previos para mostrar."
+                        all_slots = [datetime.fromisoformat(x) for x in json.loads(all_slots_raw)]
+                        page = int(json.loads(self.redis_client.get(page_key) or "0"))
+                        size = int(json.loads(self.redis_client.get(size_key) or "10"))
+                        prev_page = max(0, page - 1)
+                        if page == 0:
+                            return "😊 Ya estás en la primera lista de horarios."
+                        start = prev_page * size
+                        end = start + size
+                        page_slots = all_slots[start:end]
+                        slots_data = [{
+                            "numero": i + 1,
+                            "fecha_hora": s.isoformat(),
+                            "empleado_id": None,
+                            "empleado_nombre": "Sistema"
+                        } for i, s in enumerate(page_slots)]
+                        self.redis_client.set(slots_key, json.dumps(slots_data), ex=600)
+                        self.redis_client.set(page_key, json.dumps(prev_page), ex=600)
+                        respuesta = f"{self._emoji_for_service(servicio_guardado['nombre'])} Horarios disponibles (página {prev_page + 1}):\n\n"
+                        for i, s in enumerate(page_slots, 1):
+                            dia_nombre = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][s.weekday()]
+                            respuesta += f"{i}. {dia_nombre.title()} {s.strftime('%d/%m %H:%M')}\n"
+                        if end < len(all_slots):
+                            respuesta += "\n📝 Escribe 'más' para ver más horarios."
+                        if prev_page > 0:
+                            respuesta += "\n↩️ Escribe 'anterior' para ver los anteriores."
+                        respuesta += "\n💬 Escribe el número que prefieres para confirmar."
+                        return self._add_help_footer(respuesta)
+                    except Exception as e:
+                        print(f"❌ Error en paginación de slots (anterior): {e}")
+                        return "❌ No pude cargar horarios anteriores ahora. Intenta nuevamente."
                 # 1. Selección de horario por número
                 if mensaje_stripped.isdigit():
                     try:

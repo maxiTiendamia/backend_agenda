@@ -77,21 +77,29 @@ const verificationPool = new Pool({
 });
 
 /**
- * 🔍 NUEVA FUNCIÓN: Verificar si un cliente existe en la base de datos
+ * 🔍 Verificar si un cliente existe en la base de datos con reintentos.
+ * Nota: Ante error transitorio de BD, devolvemos true (fail-safe) para NO eliminar sesiones por falsos negativos.
  */
 async function verificarClienteExisteEnBD(sessionId) {
-  let client = null;
-  try {
-    client = await verificationPool.connect();
-    const result = await client.query('SELECT id FROM tenants WHERE id = $1', [sessionId]);
-    const existe = result.rows.length > 0;
-    console.log(`[WEBCONNECT] 🔍 Cliente ${sessionId} ${existe ? 'EXISTE' : 'NO EXISTE'} en BD`);
-    return existe;
-  } catch (error) {
-    console.error(`[WEBCONNECT] ❌ Error verificando cliente ${sessionId} en BD:`, error);
-    return false;
-  } finally {
-    if (client) client.release();
+  const maxRetries = 3;
+  const delayMs = 300;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Usar el pool principal ya configurado en la app
+      const result = await pool.query('SELECT id FROM tenants WHERE id = $1', [sessionId]);
+      const existe = result.rows.length > 0;
+      console.log(`[WEBCONNECT] 🔍 Cliente ${sessionId} ${existe ? 'EXISTE' : 'NO EXISTE'} en BD (intento ${attempt}/${maxRetries})`);
+      return existe;
+    } catch (error) {
+      console.error(`[WEBCONNECT] ❌ Error verificando cliente ${sessionId} en BD (intento ${attempt}/${maxRetries}):`, error?.message || error);
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, delayMs));
+        continue;
+      }
+      // Fail-safe: ante error definitivo en BD, NO considerar que "no existe"
+      console.warn(`[WEBCONNECT] ⚠️ Fallo de BD persistente al verificar cliente ${sessionId}. Asumiendo que EXISTE para evitar bajas erróneas.`);
+      return true;
+    }
   }
 }
 
@@ -100,13 +108,26 @@ async function verificarClienteExisteEnBD(sessionId) {
  */
 async function eliminarSesionInexistente(sessionId) {
   try {
+    // Confirmación final antes de eliminar (evita falsos negativos por fallos de BD)
+    try {
+      const stillExists = await verificarClienteExisteEnBD(sessionId);
+      if (stillExists) {
+        console.log(`[WEBCONNECT] ⚠️ Cancelando eliminación: Cliente ${sessionId} SÍ existe en BD (rechequeo)`);
+        return false;
+      }
+    } catch (_) {}
+
     console.log(`[WEBCONNECT] 🗑️ Cliente ${sessionId} no existe en BD - Eliminando sesión completa...`);
     
     // 1. Cerrar y eliminar de memoria (respetando ALLOW_AUTO_CLOSE)
     if (sessions[sessionId]) {
       try {
         await safeCloseClient(sessionId);
-        console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada (respetando AUTO_CLOSE)`);
+        if (ALLOW_AUTO_CLOSE) {
+          console.log(`[WEBCONNECT] ✅ Sesión ${sessionId} cerrada`);
+        } else {
+          console.log(`[WEBCONNECT] 🔒 AUTO_CLOSE deshabilitado. Sesión ${sessionId} no se cerró (solo limpieza de locks)`);
+        }
       } catch (e) {
         console.error(`[WEBCONNECT] Error cerrando sesión ${sessionId}:`, e.message);
       }
@@ -490,10 +511,17 @@ async function initializeExistingSessions(specificTenants = null) {
         console.log(`[WEBCONNECT] 🔄 Restaurando sesión para tenant ${tenantId}...`);
         // ✅ Chequeo previo: si no existe en BD, omitir y limpiar
         const existe = await verificarClienteExisteEnBD(tenantId);
-        if (!existe) {
-          console.log(`[WEBCONNECT] 🚫 Cliente ${tenantId} no existe en BD - Omitiendo y limpiando`);
-          try { await eliminarSesionInexistente(tenantId); } catch (_) {}
-          continue;
+        if (existe === false) {
+          // Segundo chequeo para evitar falsos negativos por BD
+          await new Promise(r => setTimeout(r, 500));
+          const existe2 = await verificarClienteExisteEnBD(tenantId);
+          if (existe2 === false) {
+            console.log(`[WEBCONNECT] 🚫 Cliente ${tenantId} no existe en BD (doble verificación) - Omitiendo y limpiando`);
+            try { await eliminarSesionInexistente(tenantId); } catch (_) {}
+            continue;
+          } else {
+            console.log(`[WEBCONNECT] ⚠️ Falsa alarma: Cliente ${tenantId} sí existe en BD tras reintento`);
+          }
         }
         
         // Verificar que existe el directorio de la sesión
@@ -942,10 +970,17 @@ async function monitorSessions() {
       try {
         // Validar que el cliente exista en BD
         const existe = await verificarClienteExisteEnBD(sessionId);
-        if (!existe) {
-          console.log(`[WEBCONNECT] 🚫 Cliente ${sessionId} NO existe en BD - limpiando sesión`);
-          await eliminarSesionInexistente(sessionId);
-          continue;
+        if (existe === false) {
+          // Doble verificación para evitar bajas por falsos negativos
+          await new Promise(r => setTimeout(r, 500));
+          const existe2 = await verificarClienteExisteEnBD(sessionId);
+          if (existe2 === false) {
+            console.log(`[WEBCONNECT] 🚫 Cliente ${sessionId} NO existe en BD (verificado 2 veces) - limpiando sesión`);
+            await eliminarSesionInexistente(sessionId);
+            continue;
+          } else {
+            console.log(`[WEBCONNECT] ⚠️ Falsa alarma de NO existencia para ${sessionId}. Manteniendo sesión.`);
+          }
         }
 
         const client = sessions[sessionId];
