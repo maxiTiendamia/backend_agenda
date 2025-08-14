@@ -33,8 +33,11 @@ class AIConversationManager:
                 return "❌ Servicio no encontrado."
 
             # Si el usuario especificó un día específico, ajustar límites
-            max_turnos = 20 if preferencia_fecha != "cualquiera" else 10
+            max_turnos = 50 if preferencia_fecha != "cualquiera" else 10
             max_days = 7
+            # Si es un día de la semana, aumentar para asegurar llegar a ese día (ej. sábado)
+            if preferencia_fecha in ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]:
+                max_turnos = 50
             if preferencia_fecha and "/" in preferencia_fecha:
                 try:
                     dia_str, mes_str = preferencia_fecha.split("/")
@@ -384,7 +387,7 @@ class AIConversationManager:
         respuesta = f"{tipo_servicio} *{servicio_seleccionado['nombre']}*\n"
         # Agregar detalles ricos del servicio si están disponibles
         desc = (servicio_seleccionado.get('mensaje_personalizado') or '').strip()
-        precio = servicio_seleccionado.get('precio')
+    # ⚠️ Política: No mencionar precio en la respuesta
         duracion = servicio_seleccionado.get('duracion')
         extras = []
         if desc:
@@ -393,8 +396,7 @@ class AIConversationManager:
         info_basica = []
         if duracion:
             info_basica.append(f"⏱️ Duración: {duracion} min")
-        if isinstance(precio, (int, float)) and precio > 0:
-            info_basica.append(f"💲 Precio: {precio}")
+    # ⚠️ Política: No mencionar precio en la respuesta
         if info_basica:
             extras.append(" · ".join(info_basica))
         if extras:
@@ -1196,7 +1198,7 @@ class AIConversationManager:
                         service_duration=business_context.get("duracion_turno_directo") or 60,
                         intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                         max_days=7,
-                        max_turnos=25,
+                        max_turnos=50,
                         cantidad=1,
                         solo_horas_exactas=bool(business_context.get("solo_horas_exactas_directo"))
                     )
@@ -1213,7 +1215,7 @@ class AIConversationManager:
                         servicio_modelo,
                         intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                         max_days=7,
-                        max_turnos=25,  # 🔧 AUMENTAR para asegurar que llegue al día específico
+                        max_turnos=50,  # Aumentar para asegurar que llegue al día específico
                         credentials_json=self.google_credentials
                     )
                 # Filtrar slots por día
@@ -1297,7 +1299,7 @@ class AIConversationManager:
                     service_duration=business_context.get("duracion_turno_directo") or 60,
                     intervalo_entre_turnos=getattr(tenant, "intervalo_entre_turnos", 15),
                     max_days=7,
-                    max_turnos=25,
+                    max_turnos=50,
                     cantidad=1,
                     solo_horas_exactas=bool(business_context.get("solo_horas_exactas_directo"))
                 )
