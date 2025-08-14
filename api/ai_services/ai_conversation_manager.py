@@ -1591,12 +1591,57 @@ Si te preguntan algo no relacionado, responde:
 
                 return function_result
 
-            # Respuesta directa de la IA
-            return message.content
+            # Respuesta directa de la IA (sanitizada: no inventar links de video)
+            return self._sanitize_ai_response(message.content or "", business_context)
 
         except Exception as e:
             print(f"❌ Error en OpenAI: {e}")
             return self._generar_respuesta_fallback(mensaje, user_history, business_context)
+
+    def _get_canonical_video_url(self, business_context: dict) -> str | None:
+        """Obtiene la URL del video desde informacion_local o servicios (primer URL encontrado)."""
+        import re
+        def first_url(text: str | None) -> str | None:
+            if not text:
+                return None
+            m = re.search(r"https?://\S+", text)
+            return m.group(0) if m else None
+
+        url = first_url(business_context.get("informacion_local") or "")
+        if url:
+            return url
+        for s in business_context.get("servicios", []) or []:
+            url = first_url((s.get("mensaje_personalizado") or ""))
+            if url:
+                return url
+        return None
+
+    def _sanitize_ai_response(self, text: str, business_context: dict) -> str:
+        """Evita links inventados para 'video': siempre usa el link canónico si existe."""
+        try:
+            tlow = (text or "").lower()
+            # Disparadores relacionados a video
+            triggers = ["video", "video explicativo", "enlace del video", "link del video", "ver video"]
+            if any(k in tlow for k in triggers):
+                canonical = self._get_canonical_video_url(business_context)
+                import re
+                # Si el modelo inventó un markdown link o una URL, lo removemos/reemplazamos
+                # 1) Quitar/normalizar cualquier formato [texto](url)
+                text = re.sub(r"\[[^\]]+\]\(https?://[^\)]+\)", "", text)
+                # 2) Remover URLs sueltas si vamos a poner la canónica
+                if canonical:
+                    text = re.sub(r"https?://\S+", "", text)
+                    # Agregar la línea correcta con el video canónico
+                    suffix = ("\n\n" if not text.endswith("\n") else "") + f"🎬 Aquí tenés el video: {canonical}"
+                    text = (text.strip() + suffix).strip()
+                else:
+                    # No hay canónica: evitar inventos, dejar el texto sin URLs
+                    text = re.sub(r"https?://\S+", "", text).strip()
+                    if not text:
+                        text = "No encuentro el enlace del video en este momento."
+            return text
+        except Exception:
+            return text
     
     def _format_servicios_with_real_ids(self, servicios: list) -> str:
         """
