@@ -147,18 +147,24 @@ class InformacionLocalWidget:
             <small style='color: #666; display: block; margin-bottom: 0.5rem;'>
                 Este texto se mostrará cuando el cliente solicite información. Puedes incluir:
                 ubicación, horarios, servicios, términos y condiciones, etc.
+                <br><strong>También puedes agregar instrucciones para la IA aquí.</strong>
             </small>
             <textarea 
                 id='{field.id}' 
                 name='{field.name}' 
                 class='form-control' 
-                rows='10'
+                rows='15'
                 style='width: 100%; resize: vertical;'
                 placeholder='Ejemplo:
 📍 UBICACIÓN: Av. Principal 123, Centro
-⏰ HORARIOS: Lun-Vie 9:00-18:00, Sab 9:00-14:00
-🎯 SERVICIOS: Corte, Peinado, Coloración
-📋 TÉRMINOS: Cancelaciones hasta 2hs antes'
+⏰ HORARIOS: Lun-Vie 9:00-18:00
+
+=== INSTRUCCIONES PARA IA ===
+NUNCA RESPONDER EL PRECIO DEL SERVICIO
+SIEMPRE DIRIGIR A AGENDAR UNA CONSULTA GRATUITA
+MANTENER TONO CÁLIDO Y EMPÁTICO
+USAR EMOJIS MODERADAMENTE
+=== FIN INSTRUCCIONES ==='
             >{value}</textarea>
         </div>
         """
@@ -201,17 +207,56 @@ class TenantModelView(SecureModelView):
 
     column_list = ('id', 'nombre', 'comercio', 'telefono', 'direccion', 'fecha_creada', 'qr_code', 'estado_wa')
     
-    # 🔍 VERIFICAR: Si working_hours_general existe, agregarlo aquí
+    # 🆕 AGREGAR nuevos campos para reservas directas del cliente
     form_columns = (
         'nombre', 'apellido', 'comercio', 'telefono', 'direccion',
-        'informacion_local', 'working_hours_general', 'intervalo_entre_turnos',"mensaje_bienvenida_personalizado"
+        'informacion_local', 'working_hours_general', 'intervalo_entre_turnos', 'mensaje_bienvenida_personalizado',
+        # 🆕 NUEVOS CAMPOS PARA RESERVAS DIRECTAS
+        'calendar_id_directo', 'duracion_turno_directo', 'precio_turno_directo', 
+        'solo_horas_exactas_directo', 'turnos_consecutivos_directo'
     )
 
     # 🔥 AGREGAR form_overrides completo
     form_overrides = {
         'informacion_local': InformacionLocalField,
         'working_hours_general': WorkingHoursField,
-        'mensaje_bienvenida_personalizado': TextAreaField,  # 🆕 AGREGAR si existe el campo
+        'mensaje_bienvenida_personalizado': TextAreaField,
+    }
+
+    # 🆕 AGREGAR labels para los nuevos campos
+    column_labels = {
+        'calendar_id_directo': 'Calendar ID (Reservas Directas)',
+        'duracion_turno_directo': 'Duración Turno (min)',
+        'precio_turno_directo': 'Precio Turno',
+        'solo_horas_exactas_directo': 'Solo Horas Exactas',
+        'turnos_consecutivos_directo': 'Turnos Consecutivos',
+        'working_hours_general': 'Horarios de Trabajo',
+        'intervalo_entre_turnos': 'Intervalo Entre Turnos (min)'
+    }
+
+    # 🆕 AGREGAR descripciones para los nuevos campos
+    form_args = {
+        'calendar_id_directo': {
+            'description': 'ID del calendario de Google para reservas directas. Solo se usa si no tienes servicios ni empleados configurados.'
+        },
+        'duracion_turno_directo': {
+            'description': 'Duración en minutos de cada turno cuando se usan reservas directas.'
+        },
+        'precio_turno_directo': {
+            'description': 'Precio del turno para reservas directas. Puede quedar vacío si no cobras.'
+        },
+        'solo_horas_exactas_directo': {
+            'description': 'Si está marcado, solo ofrecerá turnos en horas exactas y medias horas (8:00, 8:30, 9:00, etc.). No compatible con turnos consecutivos.'
+        },
+        'turnos_consecutivos_directo': {
+            'description': 'Si está marcado, ofrecerá turnos consecutivos sin solapamiento usando la duración completa. No compatible con solo horas exactas.'
+        },
+        'working_hours_general': {
+            'description': 'Horarios de trabajo del cliente. Se usarán para reservas directas si no hay servicios ni empleados.'
+        },
+        'intervalo_entre_turnos': {
+            'description': 'Minutos entre turnos. Se usará para reservas directas si no hay servicios ni empleados.'
+        }
     }
 
     column_formatters = {
@@ -225,6 +270,23 @@ class TenantModelView(SecureModelView):
 
     def on_model_change(self, form, model, is_created):
         try:
+            # 🆕 VALIDACIÓN: solo_horas_exactas y turnos_consecutivos son mutuamente excluyentes
+            solo_horas_exactas = getattr(model, 'solo_horas_exactas_directo', False)
+            turnos_consecutivos = getattr(model, 'turnos_consecutivos_directo', False)
+            
+            if solo_horas_exactas and turnos_consecutivos:
+                raise ValueError("Un cliente no puede tener 'Solo Horas Exactas' y 'Turnos Consecutivos' activados al mismo tiempo para reservas directas. Elige una opción.")
+            
+            # 🆕 VALIDACIÓN: Si tiene configuración directa, debe tener duración
+            calendar_directo = getattr(model, 'calendar_id_directo', None)
+            duracion_directa = getattr(model, 'duracion_turno_directo', None)
+            
+            if calendar_directo and not duracion_directa:
+                raise ValueError("Si configuras Calendar ID directo, debes especificar la duración del turno.")
+            
+            if duracion_directa and not calendar_directo:
+                raise ValueError("Si configuras duración de turno directo, debes especificar el Calendar ID.")
+
             super().on_model_change(form, model, is_created)
 
             if is_created and not model.qr_code:
@@ -238,6 +300,10 @@ class TenantModelView(SecureModelView):
                 flash('⚠️ Ya existe un cliente con ese número de teléfono.', 'error')
             else:
                 flash(f'⚠️ Error inesperado: {e}', 'error')
+            raise
+        except ValueError as e:
+            db.session.rollback()
+            flash(f'⚠️ {str(e)}', 'error')
             raise
 
 

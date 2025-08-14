@@ -35,6 +35,13 @@ class Tenant(db.Model):
     servicios = db.relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan", lazy='dynamic')
     empleados = db.relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan", lazy='dynamic')
 
+    # 🆕 NUEVOS CAMPOS para reservas directas
+    calendar_id_directo = db.Column(db.String(255), nullable=True)
+    duracion_turno_directo = db.Column(db.Integer, nullable=True)  # en minutos
+    precio_turno_directo = db.Column(db.Numeric(10, 2), nullable=True)  # puede ser NULL
+    solo_horas_exactas_directo = db.Column(db.Boolean, default=False)
+    turnos_consecutivos_directo = db.Column(db.Boolean, default=False)
+    
     def __repr__(self):
         return f"<Tenant {self.nombre}>"
     

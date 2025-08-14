@@ -7,6 +7,7 @@ Base = declarative_base()
 
 class Tenant(Base):
     __tablename__ = "tenants"
+
     id = Column(Integer, primary_key=True)
     nombre = Column(String(50), nullable=False)
     apellido = Column(String(50), nullable=True)
@@ -14,17 +15,27 @@ class Tenant(Base):
     telefono = Column(String(20), nullable=True)
     fecha_creada = Column(DateTime, default=datetime.now(timezone.utc))
     direccion = Column(String(200), nullable=True)
-    qr_code = Column(Text, nullable=True)  # 🔧 CORREGIDO: era "Colum"
-    informacion_local = Column(Text, nullable=True) 
-    calendar_id_general = Column(String, nullable=True) 
-    working_hours_general = Column(Text, nullable=True) 
+    qr_code = Column(Text)
+    informacion_local = Column(Text, nullable=True)
+    calendar_id_general = Column(String, nullable=True)
+    working_hours_general = Column(Text, nullable=True)
     intervalo_entre_turnos = Column(Integer, default=20)
-    mensaje_bienvenida_personalizado = Column(Text, nullable=True) 
- 
+    mensaje_bienvenida_personalizado = Column(Text, nullable=True)
 
-    servicios = relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan")
-    empleados = relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan")
-    
+    # 🆕 NUEVOS CAMPOS para reservas directas
+    calendar_id_directo = Column(String(255), nullable=True)
+    duracion_turno_directo = Column(Integer, nullable=True)  # en minutos
+    precio_turno_directo = Column(Float, nullable=True)  # puede ser NULL
+    solo_horas_exactas_directo = Column(Boolean, default=False)
+    turnos_consecutivos_directo = Column(Boolean, default=False)
+
+    # Relaciones con otros modelos
+    servicios = relationship('Servicio', back_populates='tenant', cascade="all, delete-orphan", lazy='dynamic')
+    empleados = relationship('Empleado', back_populates='tenant', cascade="all, delete-orphan", lazy='dynamic')
+
+    def __repr__(self):
+        return f"<Tenant {self.comercio or self.nombre}>"
+
 class Reserva(Base):
     __tablename__ = "reservas"
     id = Column(Integer, primary_key=True)  
